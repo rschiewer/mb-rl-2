@@ -9,9 +9,9 @@ from training.collector import Collector
 
 class GymEpisodeCollector(Collector):
 
-    def __init__(self, env: gym.Env, collection_policy: Callable, batch_size: int,
+    def __init__(self, env: gym.Env, collection_policy: Callable, num_episodes: int,
                  observation_postprocessing: Callable = None):
-        super(GymEpisodeCollector, self).__init__(batch_size)
+        super(GymEpisodeCollector, self).__init__(num_episodes)
 
         self.env = env
         self.policy = collection_policy
@@ -23,9 +23,9 @@ class GymEpisodeCollector(Collector):
             self._process_obs = observation_postprocessing
             self._process_step = lambda x: (self._process_obs(x[0]), x[1], x[2], x[3])  # o, r, term, info
 
-    def get_batch(self) -> Any:
-        mem_batch = []
-        for i_ep in range(self.batch_size):
+    def collect(self) -> Any:
+        mem = []
+        for i_ep in range(self.num_collect):
             traj_s, traj_a, traj_r, traj_terminal = [], [], [], []
             s = self._process_obs(self.env.reset())
 
@@ -42,8 +42,8 @@ class GymEpisodeCollector(Collector):
                 s = s_
             traj_s.append(s)  # final observation
 
-            mem_batch.append({'s': np.array(traj_s), 'a': np.array(traj_a), 'r': np.array(traj_r),
+            mem.append({'s': np.array(traj_s), 'a': np.array(traj_a), 'r': np.array(traj_r),
                               'terminal': np.array(traj_terminal)})
 
-        return mem_batch
+        return mem
 

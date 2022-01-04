@@ -50,7 +50,7 @@ class GymEpisodeCollectorTest(unittest.TestCase):
 
                 trajectories = []
                 for _ in range(self.num_batches):
-                    trajectories.extend(collector.get_batch())
+                    trajectories.extend(collector.collect())
                 self.assertEqual(len(trajectories), batch_size * self.num_batches)
 
                 # now reproduce samples with real environment (only test deterministic envs)
