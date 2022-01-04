@@ -4,9 +4,10 @@ from typing import Iterable
 import gym
 import numpy as np
 
-from training.gym_collector import GymEpisodeCollector
+from training.gym_driver import GymEpisodeDriver
 
-class GymEpisodeCollectorTest(unittest.TestCase):
+
+class GymEpisodeDriverTest(unittest.TestCase):
 
     @staticmethod
     def _run_env(env: gym.Env, actions: Iterable = None):
@@ -46,11 +47,11 @@ class GymEpisodeCollectorTest(unittest.TestCase):
             for env in self.envs:
                 env.seed(self.rand_seed + batch_size)
                 np.random.seed(self.rand_seed + batch_size)
-                collector = GymEpisodeCollector(env, lambda s: env.action_space.sample(), batch_size)
+                collector = GymEpisodeDriver(env, lambda s: env.action_space.sample())
 
                 trajectories = []
                 for _ in range(self.num_batches):
-                    trajectories.extend(collector.collect())
+                    trajectories.extend(collector.interact(batch_size))
                 self.assertEqual(len(trajectories), batch_size * self.num_batches)
 
                 # now reproduce samples with real environment (only test deterministic envs)
