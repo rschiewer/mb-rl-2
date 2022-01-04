@@ -11,26 +11,27 @@ class GymEpisodeDriverTest(unittest.TestCase):
 
     @staticmethod
     def _run_env(env: gym.Env, actions: Iterable = None):
-        trajectory = {'s': [], 'a':[], 'r': [], 'terminal': []}
+        trajectory = {'s': [], 'a': [], 'r': [], 'terminal': []}
 
         observation = env.reset()
         trajectory['s'].append(observation)
 
         if actions is None:
-            get_act = lambda: env.action_space.sample()
+            def get_act():
+                return env.action_space.sample()
         else:
             a_iter = iter(actions)
-            get_act = lambda: next(a_iter)
+
+            def get_act():
+                return next(a_iter)
 
         while True:
             action = get_act()
             observation, reward, done, info = env.step(action)
-
             trajectory['s'].append(observation)
             trajectory['a'].append(action)
             trajectory['r'].append(reward)
             trajectory['terminal'].append(done)
-
             if done:
                 break
 
