@@ -1,7 +1,6 @@
 from collections import deque
 from typing import Dict
 
-import torch
 from torch.utils.data import Dataset
 from torch.utils.data.dataset import T_co
 import numpy as np

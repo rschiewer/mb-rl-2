@@ -1,7 +1,6 @@
 from typing import Any, Callable
 
 import gym
-import torch
 import numpy as np
 
 from training.driver import Driver
@@ -42,7 +41,7 @@ class GymEpisodeDriver(Driver):
             traj_s.append(s)  # final observation
 
             mem.append({'s': np.array(traj_s), 'a': np.array(traj_a), 'r': np.array(traj_r),
-                              'terminal': np.array(traj_terminal)})
+                        'terminal': np.array(traj_terminal)})
 
         return mem
 
