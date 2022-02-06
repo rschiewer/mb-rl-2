@@ -1,0 +1,21 @@
+grid_h: 8
+grid_w: 8
+time_limit: 100
+reward: 1.0
+step_reward: 0.00
+discount: 0.99
+map_data:
+X......r
+........
+........
+.X......
+........
+........
+.AX.....
+.......x
+
+
+
+
+
+
