@@ -44,7 +44,7 @@ class GaussianBlock(torch.nn.Module):
             lws = [lws]
 
         self.d_inputs = d_inputs
-        self.lws = (sum(d_inputs), *lws, 2)
+        self.lws = (sum(d_inputs), *lws, lws[-1] * 2)  # double last layer width to have parameters for loc and scale
         self.layers = [torch.nn.Linear(lw_in, lw_out) for lw_in, lw_out in zip(self.lws, self.lws[1:])]
 
     def forward(self,
@@ -53,7 +53,7 @@ class GaussianBlock(torch.nn.Module):
         for l in self.layers:
             x = l(x)
             x = torch.nn.functional.relu(x)
-        x_dist = torch.distributions.Normal(x[..., 0], x[..., 1])
+        x_dist = torch.distributions.Normal(x[..., :self.lws[-1] // 2], x[..., self.lws[-1] // 2:] + 1e-5)
 
         return x_dist
 
