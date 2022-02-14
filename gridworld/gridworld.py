@@ -32,6 +32,10 @@ class Gridworld(gym.Env):
                  step_reward: float,
                  discount: float):
         super(Gridworld, self).__init__()
+
+        if time_limit <= 0:
+            raise ValueError('Time limit must be larger than zero')
+
         self._grid = np.zeros((grid_h, grid_w), dtype=np.int8)
         self._init_grid = np.zeros((grid_h, grid_w), dtype=np.int8)
         self._grid.flags.writeable = False
@@ -41,6 +45,7 @@ class Gridworld(gym.Env):
         self.reward = reward
         self.step_reward = step_reward
         self.discount = discount
+        self._current_ep_time = 0
 
         self.action_space = gym.spaces.Discrete(n=4)
         self.observation_space = gym.spaces.Box(low=0, high=255, shape=(2,), dtype=np.int8)
@@ -121,12 +126,17 @@ class Gridworld(gym.Env):
 
         self._grid.flags.writeable = False
 
+        self._current_ep_time += 1
+        if self._current_ep_time == self.time_limit:
+            done = True
+
         return self._grid, reward, done, info
 
     def reset(self):
         self._grid.flags.writeable = True
         self._grid[:] = self._init_grid[:]
         self._grid.flags.writeable = False
+        self._current_ep_time = 0
         return self._grid
 
     def render(self, mode="human"):
