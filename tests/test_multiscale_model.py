@@ -40,7 +40,8 @@ class MyTestCase(unittest.TestCase):
         predictions = self.mdl(start_states, actions)
         s_mem, s_dist_mem, r_mem, r_dist_mem = predictions[:4]
         macro_s_prior_mem, macro_s_posterior_mem = predictions[4:6]
-        macro_r_prior_mem, macro_r_posterior_mem = predictions[6:]
+        macro_r_mem = predictions[6]
+        macro_r_prior_mem, macro_r_posterior_mem = predictions[7:]
 
         for x in [s_mem, s_dist_mem, r_mem, r_dist_mem]:
             self.assertEqual(len(x), d_time)
@@ -66,35 +67,34 @@ class MyTestCase(unittest.TestCase):
         lr = 0.0001
         momentum = 0.9
 
-        def reconstr_loss(s_pred, r_pred, s_true, r_true):
-            l = torch.mean((s_pred - s_true) ** 2) + torch.mean((r_pred - r_true) ** 2)
-            return l
-
-        def kl_loss(s_priors, s_posteriors, r_priors, r_posteriors):
-            l = 0
-            for s_prior, s_posterior, r_prior, r_posterior in zip(s_priors, s_posteriors, r_priors, r_posteriors):
-                l += torch.distributions.kl.kl_divergence(s_prior, s_posterior)
-                l += torch.distributions.kl.kl_divergence(r_prior, r_posterior)
-            return torch.mean(l)
+        reconstr_loss = MultiscaleDynamicsModel.reconstruction_loss
+        kl_loss = MultiscaleDynamicsModel.kl_loss
+        macro_r_loss = MultiscaleDynamicsModel.macro_reward_loss
 
         s_ground_truth = torch.ones(d_batch, d_time, self.d_state)
-        r_ground_truth = torch.ones(d_batch, d_time, self.d_state)
+        r_ground_truth = torch.ones(d_batch, d_time, self.d_reward)
         start_states = s_ground_truth[:, :n_start_states, :]
         actions = torch.ones(d_batch, d_time, self.d_action)
         optimizer = torch.optim.SGD(self.mdl.parameters(), lr=lr, momentum=momentum)
 
+        # target macro reward can be pre-computed from the single step rewards
+        macro_r_target = MultiscaleDynamicsModel.average_kstep_reward(r_ground_truth, self.n_abstract_steps)
+
         # one train step
-        optimizer.zero_grad(True)
+        optimizer.zero_grad(set_to_none=True)
         predictions = self.mdl(start_states, actions)
         s_mem, s_dist_mem, r_mem, r_dist_mem = predictions[:4]
         macro_s_prior_mem, macro_s_posterior_mem = predictions[4:6]
-        macro_r_prior_mem, macro_r_posterior_mem = predictions[6:]
+        macro_r_mem = predictions[6]
+        macro_r_prior_mem, macro_r_posterior_mem = predictions[7:]
 
         rec = reconstr_loss(torch.stack(s_mem, dim=1), torch.stack(r_mem, dim=1), s_ground_truth, r_ground_truth)
         kl = kl_loss(macro_s_prior_mem, macro_s_posterior_mem, macro_r_prior_mem, macro_r_posterior_mem)
-        loss = rec + kl
+        mr = macro_r_loss(torch.stack(macro_r_mem, dim=1), macro_r_target)
+        loss = rec + kl + mr
         print(rec)
         print(kl)
+        print(mr)
         loss.backward()
         optimizer.step()
 

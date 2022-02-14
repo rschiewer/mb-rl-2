@@ -1,5 +1,6 @@
 from typing import Tuple, List
 from collections import deque
+from math import floor, ceil
 
 import torch
 import torch.nn.functional as F
@@ -90,10 +91,26 @@ class MacroActionModel(torch.nn.Module):
 
     def forward(self, actions: torch.Tensor):
         # actions.shape = (d_batch, n_abstract_steps, d_action)
-        actions = self.flatten_layer(actions)
-        actions = self.det_mdl(actions)
-        actions = F.gumbel_softmax(actions, hard=True)
-        return actions
+        macro_action = self.flatten_layer(actions)
+        macro_action = self.det_mdl(macro_action)
+        macro_action = F.gumbel_softmax(macro_action, hard=True)
+        return macro_action
+
+
+class MacroRewardModel(torch.nn.Module):
+
+    def __init__(self,
+                 d_reward: int,
+                 n_abstract_steps: int,
+                 d_macro_reward: int):
+        super(MacroRewardModel, self).__init__()
+
+        if d_reward != d_macro_reward:
+            raise NotImplementedError('Reward and macro reward must not differ in dimension')
+
+    def forward(self, rewards: torch.Tensor):
+        macro_reward = torch.mean(rewards, dim=1)  # mean over time dimension, keep batch and data dimensions
+        return macro_reward
 
 
 class SingleStepModel(torch.nn.Module):
@@ -192,19 +209,40 @@ class MultiscaleDynamicsModel(torch.nn.Module):
         self.d_macro_action = d_macro_action
         self.d_macro_reward = d_macro_reward
 
-        def reconstruction_loss(s_pred, r_pred, s_true, r_true):
-            l = torch.mean((s_pred - s_true) ** 2) + torch.mean((r_pred - r_true) ** 2)
-            return l
+    @staticmethod
+    def reconstruction_loss(s_pred, r_pred, s_true, r_true):
+        l = torch.mean((s_pred - s_true) ** 2) + torch.mean((r_pred - r_true) ** 2)
+        return l
 
-        def kl_loss(s_priors, s_posteriors, r_priors, r_posteriors):
-            l = torch.tensor(0, dtype=torch.float32)
-            for s_prior, s_posterior, r_prior, r_posterior in zip(s_priors, s_posteriors, r_priors, r_posteriors):
-                l += torch.distributions.kl.kl_divergence(s_prior, s_posterior)
-                l += torch.distributions.kl.kl_divergence(r_prior, r_posterior)
-            return torch.mean(l)
+    @staticmethod
+    def kl_loss(s_priors, s_posteriors, r_priors, r_posteriors):
+        l = 0
+        for s_prior, s_posterior, r_prior, r_posterior in zip(s_priors, s_posteriors, r_priors, r_posteriors):
+            l += torch.distributions.kl.kl_divergence(s_prior, s_posterior)
+            l += torch.distributions.kl.kl_divergence(r_prior, r_posterior)
+        return torch.mean(l)
 
-        self.rec_loss = reconstruction_loss
-        self.kl_loss = kl_loss
+    @staticmethod
+    def macro_reward_loss(macro_r_pred, macro_r_true):
+        l = torch.mean((macro_r_pred - macro_r_true) ** 2)
+        return l
+
+    @staticmethod
+    def average_kstep_reward(rewards: torch.Tensor, k: int):
+        d_batch, d_time, d_data = rewards.shape
+        n_macro_steps = ceil(d_time / k)
+        d_padding = n_macro_steps * k - d_time
+
+        padding = torch.zeros(d_batch, d_padding, d_data)
+        rewards = torch.concat([rewards, padding], dim=1)
+
+        avg = []
+        for i in range(n_macro_steps):
+            i_start = i * k
+            i_stop = (i + 1) * k
+            avg.append(torch.mean(rewards[:, i_start:i_stop], dim=1, keepdim=True))
+
+        return torch.concat(avg, dim=1)
 
     def forward(self,
                 start_states: torch.Tensor,
@@ -214,6 +252,7 @@ class MultiscaleDynamicsModel(torch.nn.Module):
 
         s_mem, s_dist_mem = [], []
         r_mem, r_dist_mem = [], []
+        macro_r_mem = []
         macro_s_prior_mem, macro_s_posterior_mem = [], []
         macro_r_prior_mem, macro_r_posterior_mem = [], []
 
@@ -235,7 +274,8 @@ class MultiscaleDynamicsModel(torch.nn.Module):
                 macro_s_next = macro_s_next_posterior.sample()
                 macro_r = macro_r_next_posterior.sample()
 
-                # store priors and posteriors for loss calculation
+                # store for loss calculation
+                macro_r_mem.append(macro_r)
                 macro_s_prior_mem.append(macro_s_next_prior)
                 macro_r_prior_mem.append(macro_r_next_prior)
                 macro_s_posterior_mem.append(macro_s_next_posterior)
@@ -269,6 +309,7 @@ class MultiscaleDynamicsModel(torch.nn.Module):
                 r_dist_mem,
                 macro_s_prior_mem,
                 macro_s_posterior_mem,
+                macro_r_mem,
                 macro_r_prior_mem,
                 macro_r_posterior_mem)
 
