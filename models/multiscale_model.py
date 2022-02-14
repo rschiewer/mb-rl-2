@@ -1,7 +1,8 @@
-from typing import Tuple
+from typing import Tuple, List
 from collections import deque
 
 import torch
+import torch.nn.functional as F
 
 from models.torch_tools import RecurrentBlock, GaussianBlock, FeedforwardBlock, add_time_dim, remove_time_dim
 
@@ -58,6 +59,7 @@ def build_single_step_model(d_macro_state: int,
 
 def build_abstract_model(d_macro_state: int,
                          d_macro_action: int,
+                         d_macro_reward: int,
                          d_memory: int,
                          n_memory_layers: int):
     # final hidden state info from single step model contains h and c of all LSTM layers
@@ -65,14 +67,33 @@ def build_abstract_model(d_macro_state: int,
     # assume markovian dynamics at this level of abstraction, so no recurrency
     det_mdl = FeedforwardBlock(d_macro_state, d_macro_action, d_hidden_final, lws=(64, 64))
     # the sampling model receives the output of the deterministic model and no additional input
-    s_prior = GaussianBlock(64, lws=(64, 64))
-    s_posterior = GaussianBlock(64, lws=(64, 64))
-    r_prior = GaussianBlock(64, lws=(64, 64))
-    r_posterior = GaussianBlock(64, lws=(64, 64))
+    s_prior = GaussianBlock(64, lws=(64, d_macro_state))
+    s_posterior = GaussianBlock(64, lws=(64, d_macro_state))
+    r_prior = GaussianBlock(64, lws=(64, d_macro_reward))
+    r_posterior = GaussianBlock(64, lws=(64, d_macro_reward))
     abstract_model = AbstractModel(det_mdl=det_mdl, sampling_mdl_s_prior=s_prior, sampling_mdl_s_posterior=s_posterior,
                                    sampling_mdl_r_prior=r_prior, sampling_mdl_r_posterior=r_posterior)
 
     return abstract_model
+
+
+class MacroActionModel(torch.nn.Module):
+
+    def __init__(self,
+                 d_action: int,
+                 n_abstract_steps: int,
+                 d_macro_action: int):
+        super(MacroActionModel, self).__init__()
+
+        self.flatten_layer = torch.nn.Flatten(start_dim=1)
+        self.det_mdl = FeedforwardBlock(d_action * n_abstract_steps, lws=(64, d_macro_action))
+
+    def forward(self, actions: torch.Tensor):
+        # actions.shape = (d_batch, n_abstract_steps, d_action)
+        actions = self.flatten_layer(actions)
+        actions = self.det_mdl(actions)
+        actions = F.gumbel_softmax(actions, hard=True)
+        return actions
 
 
 class SingleStepModel(torch.nn.Module):
@@ -171,6 +192,20 @@ class MultiscaleDynamicsModel(torch.nn.Module):
         self.d_macro_action = d_macro_action
         self.d_macro_reward = d_macro_reward
 
+        def reconstruction_loss(s_pred, r_pred, s_true, r_true):
+            l = torch.mean((s_pred - s_true) ** 2) + torch.mean((r_pred - r_true) ** 2)
+            return l
+
+        def kl_loss(s_priors, s_posteriors, r_priors, r_posteriors):
+            l = torch.tensor(0, dtype=torch.float32)
+            for s_prior, s_posterior, r_prior, r_posterior in zip(s_priors, s_posteriors, r_priors, r_posteriors):
+                l += torch.distributions.kl.kl_divergence(s_prior, s_posterior)
+                l += torch.distributions.kl.kl_divergence(r_prior, r_posterior)
+            return torch.mean(l)
+
+        self.rec_loss = reconstruction_loss
+        self.kl_loss = kl_loss
+
     def forward(self,
                 start_states: torch.Tensor,
                 actions: torch.Tensor):
@@ -190,6 +225,7 @@ class MultiscaleDynamicsModel(torch.nn.Module):
                 last_actions_tens = torch.stack(list(last_actions), dim=1)
                 macro_a = self.macro_action_model(last_actions_tens)  # TODO: think about this model more closely
                 h_flat = self._flatten_h(h)
+                macro_s = macro_s_next  # update current macro state to previously predicted one
 
                 # invoke models
                 _, macro_s_next_prior, macro_r_next_prior = self.abstract_model(macro_s, macro_a)
@@ -201,15 +237,15 @@ class MultiscaleDynamicsModel(torch.nn.Module):
 
                 # store priors and posteriors for loss calculation
                 macro_s_prior_mem.append(macro_s_next_prior)
-                macro_r_prior_mem(macro_r_next_prior)
-                macro_s_posterior_mem(macro_s_next_posterior)
-                macro_r_posterior_mem(macro_r_next_posterior)
+                macro_r_prior_mem.append(macro_r_next_prior)
+                macro_s_posterior_mem.append(macro_s_next_posterior)
+                macro_r_posterior_mem.append(macro_r_next_posterior)
 
                 h = (torch.zeros_like(h[0]), torch.zeros_like(h[1]))  # prevent memory leakage beyond macro steps
 
             if t < n_start_states:  # if still in warmup period, use teacher forcing for states
                 s = start_states[:, t]
-            a = actions[t]
+            a = actions[:, t]
 
             _, s_next_dist, r_next_dist, h = self.single_step_model(s, a, macro_s, macro_a, macro_r, macro_s_next, h)
             s_next = s_next_dist.sample()
@@ -226,8 +262,6 @@ class MultiscaleDynamicsModel(torch.nn.Module):
 
             # set next state to upcoming time step's current state
             s = s_next
-            if t % self.abstract_step_size == 0:
-                macro_s = macro_s_next
 
         return (s_mem,
                 s_dist_mem,
