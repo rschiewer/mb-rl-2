@@ -4,6 +4,7 @@ import gym
 import numpy as np
 
 from training.driver import Driver
+from memory.trajectory_memory import TrajectoryMemory
 
 
 class GymEpisodeDriver(Driver):
@@ -22,7 +23,7 @@ class GymEpisodeDriver(Driver):
             self._process_step = lambda x: (self._process_obs(x[0]), x[1], x[2], x[3])  # o, r, term, info
 
     def interact(self, num_episodes: int) -> Any:
-        mem = []
+        mem = TrajectoryMemory()
         for i_ep in range(num_episodes):
             traj_s, traj_a, traj_r, traj_terminal = [], [], [], []
             s = self._process_obs(self.env.reset())
@@ -40,8 +41,7 @@ class GymEpisodeDriver(Driver):
                 s = s_
             traj_s.append(s)  # final observation
 
-            mem.append({'s': np.array(traj_s), 'a': np.array(traj_a), 'r': np.array(traj_r),
-                        'terminal': np.array(traj_terminal)})
+            mem.push(np.array(traj_s), np.array(traj_a), np.array(traj_r), np.array(traj_terminal))
 
         return mem
 

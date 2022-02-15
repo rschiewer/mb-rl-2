@@ -52,7 +52,7 @@ class GymEpisodeDriverTest(unittest.TestCase):
 
                 trajectories = []
                 for _ in range(self.num_batches):
-                    trajectories.extend(collector.interact(batch_size))
+                    trajectories.extend(list(collector.interact(batch_size)))
                 self.assertEqual(len(trajectories), batch_size * self.num_batches)
 
                 # now reproduce samples with real environment (only test deterministic envs)
