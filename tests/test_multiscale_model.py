@@ -83,6 +83,10 @@ class MyTestCase(unittest.TestCase):
         device = gpu_mdl.device
         self.assertEqual(device.type, 'cuda')
 
+        broken_mdl = self.mdl.to('cuda')
+        broken_mdl.single_step_model = broken_mdl.single_step_model.to('cpu')
+        self.assertRaises(RuntimeError, lambda: broken_mdl.device)
+
 
 if __name__ == '__main__':
     unittest.main()
