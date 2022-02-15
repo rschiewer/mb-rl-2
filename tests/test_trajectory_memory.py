@@ -28,6 +28,21 @@ class TrajectoryMemoryTest(unittest.TestCase):
         self.n_trajectories = n_trajectories
         self.trajectories = [self._rand_traj(self.shapes, t_len) for t_len in t_lens]
 
+    def test_init_with_dict(self):
+        mem = TrajectoryMemory(self.trajectories)
+
+        for traj_mem, traj_orig in zip(mem, self.trajectories):
+            for traj_mem_elem, traj_orig_elem in zip(traj_mem.values(), traj_orig.values()):
+                self.assertTrue((traj_mem_elem == traj_orig_elem).all())
+
+    def test_init_with_sequence(self):
+        traj_list_format = [[traj['s'], traj['a'], traj['r'], traj['terminal']] for traj in self.trajectories]
+        mem = TrajectoryMemory(traj_list_format)
+
+        for traj_mem, traj_orig in zip(mem, self.trajectories):
+            for traj_mem_elem, traj_orig_elem in zip(traj_mem.values(), traj_orig.values()):
+                self.assertTrue((traj_mem_elem == traj_orig_elem).all())
+
     def test_push(self):
         for t in self.trajectories:
             self.mem.push(t['s'], t['a'], t['r'], t['terminal'])

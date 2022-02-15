@@ -1,5 +1,5 @@
 from collections import deque
-from typing import Dict
+from typing import Dict, List, Iterable, Sequence
 
 from torch.utils.data import Dataset
 from torch.utils.data.dataset import T_co
@@ -8,9 +8,25 @@ import numpy as np
 
 class TrajectoryMemory(Dataset):
 
-    def __init__(self):
+    def __init__(self, init_mem: List = None):
         self._mem = deque()
         self.shapes = None
+
+        if init_mem is not None:
+            for elem in init_mem:
+                try:
+                    if type(elem) is dict:
+                        self.push(elem['s'], elem['a'], elem['r'], elem['terminal'])
+                    elif isinstance(elem, Sequence):
+                        self.push(elem[0], elem[1], elem[2], elem[3])
+                    else:
+                        raise ValueError('Unknown content in init_mem, elements should have type dict, list or tuple '
+                                         f'but are of type {type(elem)}')
+                except KeyError:
+                    raise ValueError('Expected dict keys of elements are "s", "a", "r" and "terminal", found: '
+                                     f'{elem.keys()}')
+                except IndexError:
+                    raise ValueError(f'Expected length of elements is 4, found {len(elem)}')
 
     def __getitem__(self, index) -> T_co:
         return self._mem[index]
