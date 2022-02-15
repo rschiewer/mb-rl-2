@@ -6,6 +6,7 @@ import torch
 import torch.nn.functional as F
 
 from models.torch_tools import RecurrentBlock, GaussianBlock, FeedforwardBlock, add_time_dim, remove_time_dim
+from models.dynamics_model import DynamicsModel
 
 
 class old_DeterministicRecurrentModel(torch.nn.Module):
@@ -180,7 +181,7 @@ class AbstractModel(torch.nn.Module):
         return macro_sr_next_det, macro_s_next_dist, macro_r_next_dist
 
 
-class MultiscaleDynamicsModel(torch.nn.Module):
+class MultiscaleDynamicsModel(DynamicsModel):
 
     def __init__(self,
                  single_step_model: SingleStepModel,
@@ -246,7 +247,8 @@ class MultiscaleDynamicsModel(torch.nn.Module):
 
     def forward(self,
                 start_states: torch.Tensor,
-                actions: torch.Tensor):
+                actions: torch.Tensor,
+                context: torch.Tensor = None):
         d_batch, n_steps = actions.shape[:2]
         n_start_states = start_states.shape[1]
 
@@ -315,10 +317,10 @@ class MultiscaleDynamicsModel(torch.nn.Module):
 
     def train_step(self,
                    s_ground_truth: torch.Tensor,
-                   a_ground_truth,
+                   a_ground_truth: torch.Tensor,
                    r_ground_truth: torch.Tensor,
-                   n_warmup: int,
-                   optimizer: torch.optim.Optimizer):
+                   optimizer: torch.optim.Optimizer,
+                   n_warmup: int = 1):
 
         rec_loss = MultiscaleDynamicsModel.reconstruction_loss
         kl_loss = MultiscaleDynamicsModel.kl_loss

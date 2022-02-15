@@ -73,7 +73,7 @@ class MyTestCase(unittest.TestCase):
         optimizer = torch.optim.SGD(self.mdl.parameters(), lr=lr, momentum=momentum)
 
         loss, rec_loss, kl_loss, macro_r_loss = self.mdl.train_step(s_ground_truth, a_ground_truth, r_ground_truth,
-                                                                    n_warmup, optimizer)
+                                                                    optimizer, n_warmup)
 
 if __name__ == '__main__':
     unittest.main()
