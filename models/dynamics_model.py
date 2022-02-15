@@ -1,14 +1,27 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Dict, Any, Optional, Union
+from functools import reduce
+from collections import namedtuple
 
 import torch
-import pytorch_lightning as pl
+from torch import device, dtype
+
+Placeholder = namedtuple('placeholder', 'device')
 
 
 class DynamicsModel(torch.nn.Module, ABC):
 
     def __init__(self):
         super(DynamicsModel, self).__init__()
+
+    @property
+    def device(self):
+        ph = Placeholder(None)
+        first_param = reduce(lambda a, b: a if a.device == b.device else ph, self.parameters())
+        if type(first_param) is Placeholder:
+            raise RuntimeError('Model has parameters on multiple devices')
+
+        return first_param.device
 
     @abstractmethod
     def forward(self,

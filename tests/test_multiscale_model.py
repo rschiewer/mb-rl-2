@@ -75,5 +75,14 @@ class MyTestCase(unittest.TestCase):
         loss, rec_loss, kl_loss, macro_r_loss = self.mdl.train_step(s_ground_truth, a_ground_truth, r_ground_truth,
                                                                     optimizer, n_warmup)
 
+    def test_device(self):
+        device = self.mdl.device
+        self.assertEqual(device.type, 'cpu')
+
+        gpu_mdl = self.mdl.to('cuda')
+        device = gpu_mdl.device
+        self.assertEqual(device.type, 'cuda')
+
+
 if __name__ == '__main__':
     unittest.main()
