@@ -11,6 +11,7 @@ class TrajectoryMemory(Dataset):
     def __init__(self, init_mem: List = None):
         self._mem = deque()
         self.shapes = None
+        self.longest_trajectory = 0
 
         if init_mem is not None:
             for elem in init_mem:
@@ -46,7 +47,23 @@ class TrajectoryMemory(Dataset):
                 raise ValueError(f'Input has incompatible lengths, expected a, r, terminal to have equal lengths and'
                                  f' s to have on additional element')
 
+        if len(s) > self.longest_trajectory:
+            self.longest_trajectory = len(s)
+
         self._mem.append({'s': np.array(s), 'a': np.array(a), 'r': np.array(r), 'terminal': np.array(terminal)})
+
+    def to_np_arrays(self, padding: float = 0, dtype: np.dtype = np.float32):
+        mem = {'s': [], 'a': [], 'r': [], 'terminal': []}
+        for traj in self._mem:
+            for name, data in traj.items():
+                if len(data) != self.longest_trajectory:
+                    diff = self.longest_trajectory - len(data)
+                    padding_shape = (diff, *self.shapes[name])
+                    data = np.concatenate([data, np.full(padding_shape, fill_value=padding, dtype=dtype)], axis=0)
+                mem[name].append(data)
+
+        mem = [np.array(data) for data in mem.values()]
+        return tuple(mem)
 
     #@staticmethod
     #def fuse_batch(s, a, r, terminal):

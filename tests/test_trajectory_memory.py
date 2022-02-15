@@ -82,6 +82,30 @@ class TrajectoryMemoryTest(unittest.TestCase):
                 t_malformed[k] = t_malformed[k] = np.zeros((shape_current[0] + len_mismatch, *shape_current[1:]))
                 self.assertRaises(ValueError, self.mem.push, *t_malformed.values())
 
+    def test_to_numpy_arrays(self):
+        for t in self.trajectories:
+            self.mem.push(t['s'], t['a'], t['r'], t['terminal'])
+
+        for fill_value in [0, 1, 42]:
+            ss_, as_, rs_, terminals_ = self.mem.to_np_arrays(padding=fill_value)
+
+            for x in [ss_, as_, rs_, terminals_]:
+                self.assertEqual(x.shape[0], self.n_trajectories)
+                self.assertEqual(x.shape[1], self.mem.longest_trajectory)
+
+            for shp, x in zip(self.shapes.values(), [ss_, as_, rs_, terminals_]):
+                self.assertEqual(x.shape[2:], shp)
+
+            for i_t, traj in enumerate(self.trajectories):
+                for traj_data, np_data in zip(traj.values(), [ss_[i_t], as_[i_t], rs_[i_t], terminals_[i_t]]):
+                    l_orig = len(traj_data)
+                    l_diff = np_data.shape[0] - l_orig
+                    # non-padded part of current trajectory is the same as the original trajectory
+                    self.assertTrue((np_data[:l_orig] == traj_data).all())
+                    # padded part should all be the padding value
+                    if l_diff > 0:
+                        self.assertTrue((np_data[l_orig:] == fill_value).all())
+
 
 if __name__ == '__main__':
     unittest.main()
