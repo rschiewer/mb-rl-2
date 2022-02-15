@@ -2,6 +2,7 @@ from typing import Any, Callable
 
 import gym
 import numpy as np
+from tqdm import tqdm
 
 from training.driver import Driver
 from memory.trajectory_memory import TrajectoryMemory
@@ -9,7 +10,10 @@ from memory.trajectory_memory import TrajectoryMemory
 
 class GymEpisodeDriver(Driver):
 
-    def __init__(self, env: gym.Env, policy: Callable, observation_postprocessing: Callable = None):
+    def __init__(self,
+                 env: gym.Env,
+                 policy: Callable,
+                 observation_postprocessing: Callable = None):
         super(GymEpisodeDriver, self).__init__()
 
         self.env = env
@@ -22,9 +26,16 @@ class GymEpisodeDriver(Driver):
             self._process_obs = observation_postprocessing
             self._process_step = lambda x: (self._process_obs(x[0]), x[1], x[2], x[3])  # o, r, term, info
 
-    def interact(self, num_episodes: int) -> Any:
+    def interact(self,
+                 num_episodes: int,
+                 progress_bar: bool = False) -> Any:
         mem = TrajectoryMemory()
-        for i_ep in range(num_episodes):
+
+        ep_iter = range(num_episodes)
+        if progress_bar:
+            ep_iter = tqdm(ep_iter)
+
+        for i_ep in ep_iter:
             traj_s, traj_a, traj_r, traj_terminal = [], [], [], []
             s = self._process_obs(self.env.reset())
 
