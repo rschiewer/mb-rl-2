@@ -27,13 +27,14 @@ class GymEpisodeDriver(Driver):
             self._process_step = lambda x: (self._process_obs(x[0]), x[1], x[2], x[3])  # o, r, term, info
 
     def interact(self,
-                 num_episodes: int,
-                 progress_bar: bool = False) -> Any:
+                 n_episodes: int,
+                 progress_bar: bool = False,
+                 **kwargs) -> TrajectoryMemory:
         mem = TrajectoryMemory()
 
-        ep_iter = range(num_episodes)
+        ep_iter = range(n_episodes)
         if progress_bar:
-            ep_iter = tqdm(ep_iter)
+            ep_iter = tqdm(ep_iter, desc='Collecting Samples')
 
         for i_ep in ep_iter:
             traj_s, traj_a, traj_r, traj_terminal = [], [], [], []
