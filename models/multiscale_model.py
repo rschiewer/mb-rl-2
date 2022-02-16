@@ -1,4 +1,4 @@
-from typing import Tuple, List
+from typing import Tuple, Dict
 from collections import deque
 from math import floor, ceil
 
@@ -305,6 +305,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
             # set next state to upcoming time step's current state
             s = s_next
 
+        # TODO: make this a dict
         return (s_mem,
                 s_dist_mem,
                 r_mem,
@@ -321,7 +322,6 @@ class MultiscaleDynamicsModel(DynamicsModel):
                    r_ground_truth: torch.Tensor,
                    optimizer: torch.optim.Optimizer,
                    n_warmup: int = 1):
-
         rec_loss = MultiscaleDynamicsModel.reconstruction_loss
         kl_loss = MultiscaleDynamicsModel.kl_loss
         macro_r_loss = MultiscaleDynamicsModel.macro_reward_loss
@@ -344,7 +344,35 @@ class MultiscaleDynamicsModel(DynamicsModel):
         loss.backward()
         optimizer.step()
 
-        return loss, rec, kl, mr
+        return {'loss': loss, 'reconstruction_loss': rec, 'kl_loss': kl, 'macro_reward_loss': mr}
+
+    def eval_step(self,
+                  s_ground_truth: torch.Tensor,
+                  a_ground_truth: torch.Tensor,
+                  r_ground_truth: torch.Tensor,
+                  n_warmup: int = 1) -> Dict:
+        rec_loss = MultiscaleDynamicsModel.reconstruction_loss
+        kl_loss = MultiscaleDynamicsModel.kl_loss
+        macro_r_loss = MultiscaleDynamicsModel.macro_reward_loss
+
+        # target macro reward can be pre-computed from the single step rewards
+        macro_r_target = MultiscaleDynamicsModel.average_kstep_reward(r_ground_truth, self.abstract_step_size)
+
+        warmup_states = s_ground_truth[:, :n_warmup, :]
+        predictions = self(warmup_states, a_ground_truth)
+
+        s_mem, s_dist_mem, r_mem, r_dist_mem = predictions[:4]
+        macro_s_prior_mem, macro_s_posterior_mem = predictions[4:6]
+        macro_r_mem = predictions[6]
+        macro_r_prior_mem, macro_r_posterior_mem = predictions[7:]
+
+        rec = rec_loss(torch.stack(s_mem, dim=1), torch.stack(r_mem, dim=1), s_ground_truth, r_ground_truth)
+        kl = kl_loss(macro_s_prior_mem, macro_s_posterior_mem, macro_r_prior_mem, macro_r_posterior_mem)
+        mr = macro_r_loss(torch.stack(macro_r_mem, dim=1), macro_r_target)
+        loss = rec + kl + mr
+
+        return {'loss': loss, 'reconstruction_loss': rec, 'kl_loss': kl, 'macro_reward_loss': mr}
+
 
     def rollout_abstract(self,
                          macro_start_state: torch.Tensor,

@@ -75,6 +75,20 @@ class MyTestCase(unittest.TestCase):
         loss, rec_loss, kl_loss, macro_r_loss = self.mdl.train_step(s_ground_truth, a_ground_truth, r_ground_truth,
                                                                     optimizer, n_warmup)
 
+    def test_eval_step(self):
+        d_batch = 32
+        d_time = 20
+        lr = 0.0001
+        momentum = 0.9
+        n_warmup = 3
+
+        s_ground_truth = torch.ones(d_batch, d_time, self.d_state)
+        a_ground_truth = torch.ones(d_batch, d_time, self.d_action)
+        r_ground_truth = torch.ones(d_batch, d_time, self.d_reward)
+
+        loss, rec_loss, kl_loss, macro_r_loss = self.mdl.eval_step(s_ground_truth, a_ground_truth, r_ground_truth,
+                                                                   n_warmup)
+
     def test_device(self):
         device = self.mdl.device
         self.assertEqual(device.type, 'cpu')
