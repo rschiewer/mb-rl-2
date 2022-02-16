@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Any, Tuple
 from functools import reduce
 from collections import namedtuple
 
@@ -45,4 +45,11 @@ class DynamicsModel(torch.nn.Module, ABC):
                   a_ground_truth: torch.Tensor,
                   r_ground_truth: torch.Tensor,
                   n_warmup: int = 1) -> Dict:
+        pass
+
+    @abstractmethod
+    def input_compatible(self,
+                         s_ground_truth: torch.Tensor,
+                         a_ground_truth: torch.Tensor,
+                         r_ground_truth: torch.Tensor) -> Tuple[bool, str]:
         pass
