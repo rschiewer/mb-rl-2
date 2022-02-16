@@ -373,6 +373,45 @@ class MultiscaleDynamicsModel(DynamicsModel):
 
         return {'loss': loss, 'reconstruction_loss': rec, 'kl_loss': kl, 'macro_reward_loss': mr}
 
+    def input_compatible(self,
+                         s_ground_truth: torch.Tensor,
+                         a_ground_truth: torch.Tensor,
+                         r_ground_truth: torch.Tensor) -> Tuple[bool, str]:
+        compatible = True
+        msg = ''
+
+        # test lengths of shapes first
+        if len(s_ground_truth.shape) != 3:
+            compatible = False
+            msg += 's'
+        elif len(a_ground_truth.shape) != 3:
+            compatible = False
+            msg += 'a'
+        elif len(r_ground_truth.shape) != 3:
+            compatible = False
+            msg += 'r'
+
+        if not compatible:
+            msg += ' tensor should have 3 dimensions (d_batch, d_time, d_data) even if d_data is 1'
+            return compatible, msg
+
+        # test data shapes
+        if s_ground_truth.shape[2] != self.d_state:
+            compatible = False
+            msg += 's'
+        elif a_ground_truth.shape[2] != self.d_action:
+            compatible = False
+            msg += 'a'
+        elif r_ground_truth.shape[2] != self.d_reward:
+            compatible = False
+            msg += 'r'
+
+        if not compatible:
+            msg += ' tensor\'s data dimension does not match the expected size'
+            return compatible, msg
+
+        return compatible, msg
+
 
     def rollout_abstract(self,
                          macro_start_state: torch.Tensor,
