@@ -378,39 +378,48 @@ class MultiscaleDynamicsModel(DynamicsModel):
                          a_ground_truth: torch.Tensor,
                          r_ground_truth: torch.Tensor) -> Tuple[bool, str]:
         compatible = True
-        msg = ''
+        tens_name = None
+        shape = None
 
         # test lengths of shapes first
         if len(s_ground_truth.shape) != 3:
             compatible = False
-            msg += 's'
+            tens_name = 'state'
+            shape = s_ground_truth.shape
         elif len(a_ground_truth.shape) != 3:
             compatible = False
-            msg += 'a'
+            tens_name = 'action'
+            shape = a_ground_truth.shape
         elif len(r_ground_truth.shape) != 3:
             compatible = False
-            msg += 'r'
+            tens_name = 'reward'
+            shape = r_ground_truth.shape
 
         if not compatible:
-            msg += ' tensor should have 3 dimensions (d_batch, d_time, d_data) even if d_data is 1'
-            return compatible, msg
+            msg = f'{tens_name} tensor should have 3 dimensions (d_batch, d_time, d_data) even if d_data is 1 but has '
+            msg += f'shape {shape}'
+            return compatible, tens_name
 
         # test data shapes
         if s_ground_truth.shape[2] != self.d_state:
             compatible = False
-            msg += 's'
+            tens_name = 'state'
+            shape = (s_ground_truth.shape[2], self.d_state)
         elif a_ground_truth.shape[2] != self.d_action:
             compatible = False
-            msg += 'a'
+            tens_name = 'action'
+            shape = (a_ground_truth.shape[2], self.d_action)
         elif r_ground_truth.shape[2] != self.d_reward:
             compatible = False
-            msg += 'r'
+            tens_name = 'reward'
+            shape = (r_ground_truth.shape[2], self.d_reward)
 
         if not compatible:
-            msg += ' tensor\'s data dimension does not match the expected size'
+            msg = f'{tens_name} tensor\'s data dimension does not match the expected size (found {shape[0]}, '
+            msg += f'expected {shape[1]})'
             return compatible, msg
 
-        return compatible, msg
+        return compatible, tens_name
 
 
     def rollout_abstract(self,
