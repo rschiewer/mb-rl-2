@@ -48,7 +48,7 @@ class Gridworld(gym.Env):
         self._current_ep_time = 0
 
         self.action_space = gym.spaces.Discrete(n=4)
-        self.observation_space = gym.spaces.Box(low=0, high=255, shape=(2,), dtype=np.int8)
+        self.observation_space = gym.spaces.Box(low=0, high=255, shape=(2,), dtype=np.int64)
 
         self.canvas = None
         self._tk_master = None
@@ -137,7 +137,7 @@ class Gridworld(gym.Env):
         self._grid[:] = self._init_grid[:]
         self._grid.flags.writeable = False
         self._current_ep_time = 0
-        return self._grid
+        return self._get_agent_cell()
 
     def render(self, mode="human"):
         if self.canvas is None:

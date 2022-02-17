@@ -42,11 +42,11 @@ class GridworldTest(unittest.TestCase):
         self.assertEqual(world.grid[self.wall_pos], CellType.WALL)
 
         s = world.reset()
-        self.assertTrue((s == world.grid).all())
-        self.assertTrue((s == world._init_grid).all())
+        self.assertTrue((s == (2, 2)).all())
         self.assertEqual(world.grid[self.agent_start_pos], CellType.AGENT)
         self.assertEqual(world.grid[self.reward_pos], CellType.REWARD)
         self.assertEqual(world.grid[self.wall_pos], CellType.WALL)
+        self.assertTrue(world.observation_space.contains(s))
 
     def test_step_basic_moving(self):
         world = self.world
@@ -104,11 +104,14 @@ class GridworldTest(unittest.TestCase):
         rewards = [0, 0, 0, 0, 1.0]
         dones = [False, False, False, False, True]
 
+        s = world.observation_space.sample()
+
         for a, r_target, done_target in zip(actions, rewards, dones):
             s, r, done, info = world.step(a)
             self.assertTrue((s == world._get_agent_cell()).all())
             self.assertEqual(r, r_target)
             self.assertEqual(done, done_target)
+            self.assertTrue(world.observation_space.contains(s))
 
     @unittest.skip
     def test_render(self):
