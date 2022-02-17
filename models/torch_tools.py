@@ -54,10 +54,9 @@ class GaussianBlock(torch.nn.Module):
             x = torch.nn.functional.relu(x)
         x = self.layer_list[-1](x)  # no activation on last layer
 
-        loc, scale = torch.tensor_split(x, 2, dim=-1)
-        scale = torch.nn.functional.relu(scale) + 1e-5  # scale should always be positive
-
-        x_dist = torch.distributions.Normal(loc, scale)
+        mu, logvar = torch.tensor_split(x, 2, dim=-1)
+        std = logvar.exp().pow(0.5)
+        x_dist = torch.distributions.Normal(mu, std)
 
         return x_dist
 
