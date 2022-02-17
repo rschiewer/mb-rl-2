@@ -221,6 +221,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
         for s_prior, s_posterior, r_prior, r_posterior in zip(s_priors, s_posteriors, r_priors, r_posteriors):
             l += torch.distributions.kl.kl_divergence(s_prior, s_posterior)
             l += torch.distributions.kl.kl_divergence(r_prior, r_posterior)
+        l /= len(s_priors)  # normalize the loss w.r.t. the number of time steps explicitly
         return torch.mean(l)
 
     @staticmethod
