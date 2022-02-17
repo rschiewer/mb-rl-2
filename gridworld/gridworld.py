@@ -127,10 +127,10 @@ class Gridworld(gym.Env):
         self._grid.flags.writeable = False
 
         self._current_ep_time += 1
-        if self._current_ep_time == self.time_limit:
+        if self._current_ep_time == self.time_limit - 1:
             done = True
 
-        return self._grid, reward, done, info
+        return self._get_agent_cell(), reward, done, info
 
     def reset(self):
         self._grid.flags.writeable = True

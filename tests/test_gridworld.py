@@ -106,7 +106,7 @@ class GridworldTest(unittest.TestCase):
 
         for a, r_target, done_target in zip(actions, rewards, dones):
             s, r, done, info = world.step(a)
-            self.assertTrue((s == world.grid).all())
+            self.assertTrue((s == world._get_agent_cell()).all())
             self.assertEqual(r, r_target)
             self.assertEqual(done, done_target)
 
