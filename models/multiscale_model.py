@@ -273,8 +273,8 @@ class MultiscaleDynamicsModel(DynamicsModel):
                 _, macro_s_next_posterior, macro_r_next_posterior = self.abstract_model(macro_s, macro_a, h_flat)
 
                 # sample from more informed posterior distributions to get inputs for single step model
-                macro_s_next = macro_s_next_posterior.sample()
-                macro_r = macro_r_next_posterior.sample()
+                macro_s_next = macro_s_next_posterior.rsample()
+                macro_r = macro_r_next_posterior.rsample()
 
                 # store for loss calculation
                 macro_r_mem.append(macro_r)
@@ -290,8 +290,8 @@ class MultiscaleDynamicsModel(DynamicsModel):
             a = actions[:, t]
 
             _, s_next_dist, r_next_dist, h = self.single_step_model(s, a, macro_s, macro_a, macro_r, macro_s_next, h)
-            s_next = s_next_dist.sample()
-            r_next = r_next_dist.sample()
+            s_next = s_next_dist.rsample()
+            r_next = r_next_dist.rsample()
 
             # store single step states and rewards for loss calculation
             s_mem.append(s_next)
@@ -338,7 +338,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
         macro_r_prior_mem, macro_r_posterior_mem = predictions[7:]
 
         rec = rec_loss(torch.stack(s_mem, dim=1), torch.stack(r_mem, dim=1), s_ground_truth, r_ground_truth)
-        kl = kl_loss(macro_s_prior_mem, macro_s_posterior_mem, macro_r_prior_mem, macro_r_posterior_mem)
+        kl = kl_loss(macro_s_prior_mem, macro_s_posterior_mem, macro_r_prior_mem, macro_r_posterior_mem) #* 0.001
         mr = macro_r_loss(torch.stack(macro_r_mem, dim=1), macro_r_target)
         loss = rec + kl + mr
         loss.backward()
@@ -367,7 +367,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
         macro_r_prior_mem, macro_r_posterior_mem = predictions[7:]
 
         rec = rec_loss(torch.stack(s_mem, dim=1), torch.stack(r_mem, dim=1), s_ground_truth, r_ground_truth)
-        kl = kl_loss(macro_s_prior_mem, macro_s_posterior_mem, macro_r_prior_mem, macro_r_posterior_mem)
+        kl = kl_loss(macro_s_prior_mem, macro_s_posterior_mem, macro_r_prior_mem, macro_r_posterior_mem) #* 0.001
         mr = macro_r_loss(torch.stack(macro_r_mem, dim=1), macro_r_target)
         loss = rec + kl + mr
 
@@ -435,11 +435,11 @@ class MultiscaleDynamicsModel(DynamicsModel):
             _, macro_s_next_prior, macro_r_next_prior = self.abstract_model(macro_s, macro_actions[:, t])
             macro_s_prior_mem.append(macro_s_next_prior)
             macro_r_prior_mem.append(macro_r_next_prior)
-            macro_s = macro_s_next_prior.sample()
+            macro_s = macro_s_next_prior.rsample()
 
         if return_samples:
-            macro_s_prior_mem = [entry.sample() for entry in macro_s_prior_mem]
-            macro_r_prior_mem = [entry.sample() for entry in macro_r_prior_mem]
+            macro_s_prior_mem = [entry.rsample() for entry in macro_s_prior_mem]
+            macro_r_prior_mem = [entry.rsample() for entry in macro_r_prior_mem]
 
         return macro_s_prior_mem, macro_r_prior_mem
 
