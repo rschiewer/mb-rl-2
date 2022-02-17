@@ -211,8 +211,8 @@ class MultiscaleDynamicsModel(DynamicsModel):
         self.d_macro_reward = d_macro_reward
 
     @staticmethod
-    def reconstruction_loss(s_pred, r_pred, s_true, r_true):
-        l = torch.mean((s_pred - s_true) ** 2) + torch.mean((r_pred - r_true) ** 2)
+    def reconstruction_loss(x_pred, x_true):
+        l = torch.mean((x_pred - x_true) ** 2)
         return l
 
     @staticmethod
@@ -338,14 +338,15 @@ class MultiscaleDynamicsModel(DynamicsModel):
         macro_r_mem = predictions[6]
         macro_r_prior_mem, macro_r_posterior_mem = predictions[7:]
 
-        rec = rec_loss(torch.stack(s_mem, dim=1), torch.stack(r_mem, dim=1), s_ground_truth, r_ground_truth)
+        rec_s = rec_loss(torch.stack(s_mem, dim=1), s_ground_truth)
+        rec_r = rec_loss(torch.stack(r_mem, dim=1), r_ground_truth)
         kl = kl_loss(macro_s_prior_mem, macro_s_posterior_mem, macro_r_prior_mem, macro_r_posterior_mem) #* 0.001
         mr = macro_r_loss(torch.stack(macro_r_mem, dim=1), macro_r_target)
-        loss = rec + kl + mr
+        loss = rec_s + rec_r + kl + mr
         loss.backward()
         optimizer.step()
 
-        return {'loss': loss, 'reconstruction_loss': rec, 'kl_loss': kl, 'macro_reward_loss': mr}
+        return {'total': loss, 'rec_s': rec_s, 'rec_r': rec_r, 'kl': kl, 'macro_r': mr}
 
     def eval_step(self,
                   s_ground_truth: torch.Tensor,
@@ -367,12 +368,13 @@ class MultiscaleDynamicsModel(DynamicsModel):
         macro_r_mem = predictions[6]
         macro_r_prior_mem, macro_r_posterior_mem = predictions[7:]
 
-        rec = rec_loss(torch.stack(s_mem, dim=1), torch.stack(r_mem, dim=1), s_ground_truth, r_ground_truth)
+        rec_s = rec_loss(torch.stack(s_mem, dim=1), s_ground_truth)
+        rec_r = rec_loss(torch.stack(r_mem, dim=1), r_ground_truth)
         kl = kl_loss(macro_s_prior_mem, macro_s_posterior_mem, macro_r_prior_mem, macro_r_posterior_mem) #* 0.001
         mr = macro_r_loss(torch.stack(macro_r_mem, dim=1), macro_r_target)
-        loss = rec + kl + mr
+        loss = rec_s + rec_r + kl + mr
 
-        return {'loss': loss, 'reconstruction_loss': rec, 'kl_loss': kl, 'macro_reward_loss': mr}
+        return {'total': loss, 'rec_s': rec_s, 'rec_r': rec_r, 'kl': kl, 'macro_r': mr}
 
     def input_compatible(self,
                          s_ground_truth: torch.Tensor,
