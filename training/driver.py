@@ -10,6 +10,7 @@ class Driver(ABC):
 
     @abstractmethod
     def interact(self,
+                 n_episodes: int,
                  *args,
                  **kwargs) -> TrajectoryMemory:
         """
