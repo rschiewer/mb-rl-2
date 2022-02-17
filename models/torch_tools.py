@@ -16,7 +16,7 @@ class RecurrentBlock(torch.nn.Module):
         self.d_hidden = d_hidden
         self.n_rec_layers = n_layers
         self.batch_first = batch_first
-        self.__layers = torch.nn.LSTM(sum(d_inputs), d_hidden, num_layers=n_layers, batch_first=batch_first)
+        self.layer_list = torch.nn.LSTM(sum(d_inputs), d_hidden, num_layers=n_layers, batch_first=batch_first)
 
     def forward(self,
                 *xs: torch.Tensor,
@@ -26,7 +26,7 @@ class RecurrentBlock(torch.nn.Module):
             h = (torch.zeros(n_batch, self.d_hidden), torch.zeros(n_batch, self.d_hidden))
 
         x = torch.concat(xs, dim=-1)
-        x, h = self.__layers(x, h)
+        x, h = self.layer_list(x, h)
 
         return x, h
 
@@ -35,26 +35,29 @@ class GaussianBlock(torch.nn.Module):
 
     def __init__(self,
                  *d_inputs: int,
-                 lws: Union[Iterable[int], int] = None):
+                 lws: Union[Iterable[int], int]):
         super(GaussianBlock, self).__init__()
 
-        if lws is None:
-            lws = []
-        elif type(lws) is int:
+        if type(lws) is int:
             lws = [lws]
 
         self.d_inputs = d_inputs
-        self.lws = (sum(d_inputs), *lws, lws[-1] * 2)  # double last layer width to have parameters for loc and scale
-        self.__layers = torch.nn.ModuleList([torch.nn.Linear(lw_in, lw_out)
-                                             for lw_in, lw_out in zip(self.lws, self.lws[1:])])
+        self.lws = (sum(d_inputs), *lws[:-1], lws[-1] * 2)  # double last layer width to have parameters for loc and scale
+        self.layer_list = torch.nn.ModuleList([torch.nn.Linear(lw_in, lw_out)
+                                               for lw_in, lw_out in zip(self.lws, self.lws[1:])])
 
     def forward(self,
                 *xs: torch.Tensor):
         x = torch.concat(xs, dim=-1)
-        for l in self.__layers:
+        for l in self.layer_list[:-1]:  # only activations on inner layers
             x = l(x)
             x = torch.nn.functional.relu(x)
-        x_dist = torch.distributions.Normal(x[..., :self.lws[-1] // 2], x[..., self.lws[-1] // 2:] + 1e-5)
+        x = self.layer_list[-1](x)  # no activation on last layer
+
+        loc, scale = torch.tensor_split(x, 2, dim=-1)
+        scale = torch.nn.functional.relu(scale) + 1e-5  # scale should always be positive
+
+        x_dist = torch.distributions.Normal(loc, scale)
 
         return x_dist
 
@@ -73,13 +76,13 @@ class FeedforwardBlock(torch.nn.Module):
 
         self.d_inputs = d_inputs
         self.lws = (sum(d_inputs), *lws)
-        self.__layers = torch.nn.ModuleList([torch.nn.Linear(lw_in, lw_out)
-                                             for lw_in, lw_out in zip(self.lws, self.lws[1:])])
+        self.layer_list = torch.nn.ModuleList([torch.nn.Linear(lw_in, lw_out)
+                                               for lw_in, lw_out in zip(self.lws, self.lws[1:])])
 
     def forward(self,
                 *xs: torch.Tensor):
         x = torch.concat(xs, dim=-1)
-        for l in self.__layers:
+        for l in self.layer_list:
             x = l(x)
             x = torch.nn.functional.relu(x)
 
