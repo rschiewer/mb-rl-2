@@ -1,11 +1,11 @@
-from typing import Any, Callable
+from typing import Callable
 
 import gym
 import numpy as np
 from tqdm import tqdm
 
-from training.driver import Driver
-from memory.trajectory_memory import TrajectoryMemory
+from mdm.training.driver import Driver
+from mdm.memory.trajectory_memory import TrajectoryMemory
 
 
 class GymEpisodeDriver(Driver):

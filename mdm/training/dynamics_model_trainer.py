@@ -1,12 +1,12 @@
 from typing import Callable, Tuple, Dict
-from abc import ABC, abstractmethod
+from abc import ABC
 
 import torch
 from tqdm import tqdm
 import numpy as np
 
-from logging.logger import Logger, Scope
-from models.dynamics_model import DynamicsModel
+from mdm.logging.logger import Logger, Scope
+from mdm.models.dynamics_model import DynamicsModel
 
 
 def one_hot(x: np.array, n_categories: int):

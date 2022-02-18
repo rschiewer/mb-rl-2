@@ -4,7 +4,7 @@ from typing import Iterable
 import gym
 import numpy as np
 
-from training.gym_driver import GymEpisodeDriver
+from mdm.training.gym_driver import GymEpisodeDriver
 
 
 class GymEpisodeDriverTest(unittest.TestCase):

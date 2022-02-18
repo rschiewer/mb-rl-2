@@ -4,7 +4,7 @@ from time import sleep
 
 import numpy as np
 
-from gridworld.gridworld import Gridworld, CellType
+from mdm.gridworld.gridworld import Gridworld, CellType
 
 
 class GridworldTest(unittest.TestCase):

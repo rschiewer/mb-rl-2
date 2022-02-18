@@ -1,12 +1,12 @@
 from typing import Tuple, Dict
 from collections import deque
-from math import floor, ceil
+from math import ceil
 
 import torch
 import torch.nn.functional as F
 
-from models.torch_tools import RecurrentBlock, GaussianBlock, FeedforwardBlock, add_time_dim, remove_time_dim
-from models.dynamics_model import DynamicsModel
+from mdm.models.torch_tools import RecurrentBlock, GaussianBlock, FeedforwardBlock, add_time_dim, remove_time_dim
+from mdm.models.dynamics_model import DynamicsModel
 
 
 class old_DeterministicRecurrentModel(torch.nn.Module):

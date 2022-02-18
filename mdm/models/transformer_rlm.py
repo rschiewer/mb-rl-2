@@ -4,10 +4,10 @@ from enum import Enum
 import torch
 from transformers import GPT2Model, GPT2Config
 
-from rl_model import RLModel
+from dynamics_model import DynamicsModel
 
 
-class TransformerModel(RLModel):
+class TransformerModel(DynamicsModel):
 
     def __init__(self, config: dict, state_embedding: torch.nn.Module = None, action_embedding: torch.nn.Module = None):
         super(TransformerModel, self).__init__(config)

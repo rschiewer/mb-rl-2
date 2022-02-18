@@ -4,7 +4,7 @@ from random import shuffle
 
 import numpy as np
 
-from memory.trajectory_memory import TrajectoryMemory
+from mdm.memory.trajectory_memory import TrajectoryMemory
 
 
 class TrajectoryMemoryTest(unittest.TestCase):

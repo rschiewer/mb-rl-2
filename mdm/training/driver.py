@@ -1,9 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import Dict, List, AnyStr
 
-import numpy as np
-
-from memory.trajectory_memory import TrajectoryMemory
+from mdm.memory.trajectory_memory import TrajectoryMemory
 
 
 class Driver(ABC):

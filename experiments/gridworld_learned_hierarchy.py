@@ -1,12 +1,11 @@
-from time import sleep
+from pathlib import Path
 
-import gym
-import torch
+import numpy as np
 
-from models.multiscale_model import *
-from training.gym_driver import *
-from training.dynamics_model_trainer import DynamicsModelTrainer, flatten_and_unsqueeze, one_hot
-from gridworld.gridworld import *
+from mdm.training.dynamics_model_trainer import DynamicsModelTrainer, flatten_and_unsqueeze, one_hot
+from mdm.training.gym_driver import GymEpisodeDriver
+from mdm.models.multiscale_model import *
+from mdm.gridworld.gridworld import Gridworld
 
 
 if __name__ == '__main__':
@@ -21,11 +20,11 @@ if __name__ == '__main__':
     mdl_d_macro_state = 3
     mdl_d_macro_action = 8
     mdl_d_macro_reward = 1
-    mdl_n_abstract_steps = 3
+    mdl_n_abstract_steps = 2
 
-    trainer_d_batch = 32
+    trainer_d_batch = 128
     trainer_n_warmup_steps = 3
-    trainer_n_train_steps = 1000
+    trainer_n_train_steps = 500
     trainer_n_eval_interval = 10
 
     def collect_policy(observation):
@@ -41,17 +40,19 @@ if __name__ == '__main__':
     multiscale_mdl = MultiscaleDynamicsModel(single_step_mdl, abstract_mdl, macro_action_mdl, mdl_n_abstract_steps,
                                              mdl_d_state, mdl_d_action, mdl_d_reward, mdl_d_macro_state,
                                              mdl_d_macro_action, mdl_d_macro_reward)
-    optimizer = torch.optim.Adam(multiscale_mdl.parameters(), lr=0.0001)
+    optimizer = torch.optim.Adam(multiscale_mdl.parameters(), lr=0.001)
 
     def get_batch_train():
         s, a, r, terminal = collect_driver.interact(trainer_d_batch).to_np_arrays()
         s, a, r, terminal = flatten_and_unsqueeze(s, a, r, terminal)
+        s /= (env.grid_h - 1, env.grid_w - 1)
         a = one_hot(a.astype(np.int64), n_categories=mdl_d_action)
         return s, a, r, terminal
 
     def get_batch_test():
         s, a, r, terminal = collect_driver.interact(trainer_d_batch).to_np_arrays()
         s, a, r, terminal = flatten_and_unsqueeze(s, a, r, terminal)
+        s /= (env.grid_h - 1, env.grid_w - 1)
         a = one_hot(a.astype(np.int64), n_categories=mdl_d_action)
         return s, a, r, terminal
 

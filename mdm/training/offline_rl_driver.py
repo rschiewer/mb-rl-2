@@ -1,9 +1,7 @@
-from typing import Any
-
 from torch.utils.data import Dataset, DataLoader
 
-from training.driver import Driver
-from memory.trajectory_memory import TrajectoryMemory
+from mdm.training.driver import Driver
+from mdm.memory.trajectory_memory import TrajectoryMemory
 
 
 class OfflineRLDriver(Driver):
