@@ -5,7 +5,7 @@ import torch
 from tqdm import tqdm
 import numpy as np
 
-from training.driver import Driver
+from logging.logger import Logger, Scope
 from models.dynamics_model import DynamicsModel
 
 
@@ -46,7 +46,7 @@ class DynamicsModelTrainer(ABC):
                  warmup_steps: int,
                  eval_interval: int = None,
                  scheduler: object = None,
-                 logger: object = None):
+                 logger: Logger = None):
         self.model = model
         self.optimizer = optimizer
         self.get_batch_train = get_batch_train
@@ -76,13 +76,15 @@ class DynamicsModelTrainer(ABC):
             train_losses = self.model.train_step(s, a, r, self.optimizer, self.warmup_steps)
 
             if progress_bar:
-                train_losses = [str(loss.detach().cpu().numpy()) for loss in train_losses.values()]
-                eval_losses = [str(loss.detach().cpu().numpy()) for loss in last_eval_losses.values()]
-                descr = 'train_losses = ' + ', '.join(train_losses) + ' | val_losses = ' + ', '.join(eval_losses)
+                train_losses_stripped = [str(loss.detach().cpu().numpy()) for loss in train_losses.values()]
+                eval_losses_stripped = [str(loss.detach().cpu().numpy()) for loss in last_eval_losses.values()]
+                descr = 'train_losses = ' + ', '.join(train_losses_stripped) + ' | val_losses = ' +\
+                        ', '.join(eval_losses_stripped)
                 step_iter.set_description(descr)
 
             if self.logger is not None:
-                self.logger.log(train_losses)
+                train_losses.update({'r_raw': r, 'r_sum_ep': r.sum(axis=1), 'r_sum': r.sum(), 'r_mean': r.mean()})
+                self.logger.log(train_losses, Scope.TRAIN, i_step)
             if self.scheduler is not None:
                 self.scheduler.step()
 
@@ -97,7 +99,8 @@ class DynamicsModelTrainer(ABC):
                 eval_losses = self.model.eval_step(s, a, r, self.warmup_steps)
 
                 if self.logger is not None:
-                    self.logger.log(eval_losses)
+                    eval_losses.update({'r_raw': r, 'r_sum_ep': r.sum(axis=1), 'r_sum': r.sum(), 'r_mean': r.mean()})
+                    self.logger.log(eval_losses, Scope.TEST, i_step)
 
                 if progress_bar:
                     last_eval_losses = eval_losses
