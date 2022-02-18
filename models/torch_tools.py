@@ -1,6 +1,12 @@
 from typing import Tuple, Union, Iterable
+from enum import Enum
 
 import torch
+
+
+class Norm(Enum):
+    LAYER = 0
+    BATCH = 1
 
 
 class RecurrentBlock(torch.nn.Module):
@@ -9,6 +15,7 @@ class RecurrentBlock(torch.nn.Module):
                  *d_inputs: int,
                  d_hidden: int,
                  n_layers: int = 1,
+                 dropout: float = 0,
                  batch_first: bool = True):
         super(RecurrentBlock, self).__init__()
 
@@ -16,7 +23,8 @@ class RecurrentBlock(torch.nn.Module):
         self.d_hidden = d_hidden
         self.n_rec_layers = n_layers
         self.batch_first = batch_first
-        self.layer_list = torch.nn.LSTM(sum(d_inputs), d_hidden, num_layers=n_layers, batch_first=batch_first)
+        self.layer_list = torch.nn.LSTM(sum(d_inputs), d_hidden, num_layers=n_layers, batch_first=batch_first,
+                                        dropout=dropout)
 
     def forward(self,
                 *xs: torch.Tensor,
