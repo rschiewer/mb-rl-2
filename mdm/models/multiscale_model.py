@@ -400,8 +400,8 @@ class MultiscaleDynamicsModel(DynamicsModel):
 
         if not compatible:
             msg = f'{tens_name} tensor should have 3 dimensions (d_batch, d_time, d_data) even if d_data is 1 but has '
-            msg += f'shape {shape}'
-            return compatible, tens_name
+            msg += f'shape {tuple(shape)}'
+            return compatible, msg
 
         # test data shapes
         if s_ground_truth.shape[2] != self.d_state:

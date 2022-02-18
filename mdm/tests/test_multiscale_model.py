@@ -110,21 +110,24 @@ class MyTestCase(unittest.TestCase):
         r_ground_truth = torch.ones(d_batch, d_time, self.d_reward)
         compatible, msg = self.mdl.input_compatible(s_ground_truth, a_ground_truth, r_ground_truth)
         self.assertFalse(compatible)
-        self.assertEqual(msg, 'state tensor should have 3 dimensions (d_batch, d_time, d_data) even if d_data is 1')
+        self.assertEqual(msg, 'state tensor should have 3 dimensions (d_batch, d_time, d_data) even if d_data is 1 '
+                              f'but has shape ({d_batch}, {d_time})')
 
         s_ground_truth = torch.ones(d_batch, d_time, self.d_state)
         a_ground_truth = torch.ones(d_batch, d_time)
         r_ground_truth = torch.ones(d_batch, d_time, self.d_reward)
         compatible, msg = self.mdl.input_compatible(s_ground_truth, a_ground_truth, r_ground_truth)
         self.assertFalse(compatible)
-        self.assertEqual(msg, 'action tensor should have 3 dimensions (d_batch, d_time, d_data) even if d_data is 1')
+        self.assertEqual(msg, 'action tensor should have 3 dimensions (d_batch, d_time, d_data) even if d_data is 1 '
+                              f'but has shape ({d_batch}, {d_time})')
 
         s_ground_truth = torch.ones(d_batch, d_time, self.d_state)
         a_ground_truth = torch.ones(d_batch, d_time, self.d_action)
         r_ground_truth = torch.ones(d_batch, d_time)
         compatible, msg = self.mdl.input_compatible(s_ground_truth, a_ground_truth, r_ground_truth)
         self.assertFalse(compatible)
-        self.assertEqual(msg, 'reward tensor should have 3 dimensions (d_batch, d_time, d_data) even if d_data is 1')
+        self.assertEqual(msg, 'reward tensor should have 3 dimensions (d_batch, d_time, d_data) even if d_data is 1 '
+                              f'but has shape ({d_batch}, {d_time})')
 
         # wrong shapes
 
@@ -133,21 +136,24 @@ class MyTestCase(unittest.TestCase):
         r_ground_truth = torch.ones(d_batch, d_time, self.d_reward)
         compatible, msg = self.mdl.input_compatible(s_ground_truth, a_ground_truth, r_ground_truth)
         self.assertFalse(compatible)
-        self.assertEqual(msg, 'state tensor\'s data dimension does not match the expected size')
+        self.assertEqual(msg, 'state tensor\'s data dimension does not match the expected size '
+                              f'(found {self.d_state + 1}, expected {self.d_state})')
 
         s_ground_truth = torch.ones(d_batch, d_time, self.d_state)
         a_ground_truth = torch.ones(d_batch, d_time, self.d_action + 1)
         r_ground_truth = torch.ones(d_batch, d_time, self.d_reward)
         compatible, msg = self.mdl.input_compatible(s_ground_truth, a_ground_truth, r_ground_truth)
         self.assertFalse(compatible)
-        self.assertEqual(msg, 'action tensor\'s data dimension does not match the expected size')
+        self.assertEqual(msg, 'action tensor\'s data dimension does not match the expected size '
+                              f'(found {self.d_action + 1}, expected {self.d_action})')
 
         s_ground_truth = torch.ones(d_batch, d_time, self.d_state)
         a_ground_truth = torch.ones(d_batch, d_time, self.d_action)
         r_ground_truth = torch.ones(d_batch, d_time, self.d_reward + 1)
         compatible, msg = self.mdl.input_compatible(s_ground_truth, a_ground_truth, r_ground_truth)
         self.assertFalse(compatible)
-        self.assertEqual(msg, 'reward tensor\'s data dimension does not match the expected size')
+        self.assertEqual(msg, 'reward tensor\'s data dimension does not match the expected size '
+                              f'(found {self.d_reward + 1}, expected {self.d_reward})')
 
 
 if __name__ == '__main__':
