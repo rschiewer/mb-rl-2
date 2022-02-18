@@ -9,7 +9,7 @@ from mdm.gridworld.gridworld import Gridworld
 
 
 if __name__ == '__main__':
-    env = Gridworld.from_cleartext(Path(__file__).parent / '../gridworld/8x8_v0.mapdata')
+    env = Gridworld.from_cleartext(Path(__file__).parent / '../mdm/gridworld/8x8_v0.mapdata')
     n_episodes = 1000
 
     mdl_d_state = env.observation_space.shape[0]
@@ -43,14 +43,14 @@ if __name__ == '__main__':
     optimizer = torch.optim.Adam(multiscale_mdl.parameters(), lr=0.001)
 
     def get_batch_train():
-        s, a, r, terminal = collect_driver.interact(trainer_d_batch).to_np_arrays()
+        s, a, r, terminal = collect_driver.interact(trainer_d_batch).to_np_arrays(dtype=np.float32)
         s, a, r, terminal = flatten_and_unsqueeze(s, a, r, terminal)
         s /= (env.grid_h - 1, env.grid_w - 1)
         a = one_hot(a.astype(np.int64), n_categories=mdl_d_action)
         return s, a, r, terminal
 
     def get_batch_test():
-        s, a, r, terminal = collect_driver.interact(trainer_d_batch).to_np_arrays()
+        s, a, r, terminal = collect_driver.interact(trainer_d_batch).to_np_arrays(dtype=np.float32)
         s, a, r, terminal = flatten_and_unsqueeze(s, a, r, terminal)
         s /= (env.grid_h - 1, env.grid_w - 1)
         a = one_hot(a.astype(np.int64), n_categories=mdl_d_action)
