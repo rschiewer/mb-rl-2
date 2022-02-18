@@ -113,7 +113,7 @@ class Gridworld(gym.Env):
         #print(f'dest_pos: {dest_pos}')
         #print(f'dest_type: {dest_type}')
 
-        reward = 0
+        reward = 0.0
         done = False
         info = {}
 
