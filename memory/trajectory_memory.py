@@ -1,5 +1,5 @@
 from collections import deque
-from typing import Dict, List, Iterable, Sequence
+from typing import Dict, List, Iterable, Sequence, Union
 
 from torch.utils.data import Dataset
 from torch.utils.data.dataset import T_co
@@ -52,10 +52,14 @@ class TrajectoryMemory(Dataset):
 
         self._mem.append({'s': np.array(s), 'a': np.array(a), 'r': np.array(r), 'terminal': np.array(terminal)})
 
-    def to_np_arrays(self, padding: float = 0, dtype: np.dtype = np.float32):
+    def to_np_arrays(self, padding: float = 0, dtype: np.dtype = None):
+        if dtype is None:
+            dtype = np.float32
+
         mem = {'s': [], 'a': [], 'r': [], 'terminal': []}
         for traj in self._mem:
             for name, data in traj.items():
+                data = data.astype(dtype)
                 if len(data) != self.longest_trajectory:
                     diff = self.longest_trajectory - len(data)
                     padding_shape = (diff, *self.shapes[name])
