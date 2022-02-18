@@ -1,4 +1,4 @@
-from typing import Callable, Tuple
+from typing import Callable, Tuple, Dict
 from abc import ABC, abstractmethod
 
 import torch
@@ -76,15 +76,12 @@ class DynamicsModelTrainer(ABC):
             train_losses = self.model.train_step(s, a, r, self.optimizer, self.warmup_steps)
 
             if progress_bar:
-                train_losses_stripped = [str(loss.detach().cpu().numpy()) for loss in train_losses.values()]
-                eval_losses_stripped = [str(loss.detach().cpu().numpy()) for loss in last_eval_losses.values()]
-                descr = 'train_losses = ' + ', '.join(train_losses_stripped) + ' | val_losses = ' +\
-                        ', '.join(eval_losses_stripped)
-                step_iter.set_description(descr)
+                self._update_progressbar_descr(last_eval_losses, train_losses, step_iter)
 
             if self.logger is not None:
                 train_losses.update({'r_raw': r, 'r_sum_ep': r.sum(axis=1), 'r_sum': r.sum(), 'r_mean': r.mean()})
                 self.logger.log(train_losses, Scope.TRAIN, i_step)
+
             if self.scheduler is not None:
                 self.scheduler.step()
 
@@ -104,6 +101,16 @@ class DynamicsModelTrainer(ABC):
 
                 if progress_bar:
                     last_eval_losses = eval_losses
+
+    @staticmethod
+    def _update_progressbar_descr(last_eval_losses: Dict[str, torch.Tensor],
+                                  train_losses: Dict[str, torch.Tensor],
+                                  pbar: tqdm):
+        train_losses_stripped = [str(loss.detach().cpu().numpy()) for loss in train_losses.values()]
+        eval_losses_stripped = [str(loss.detach().cpu().numpy()) for loss in last_eval_losses.values()]
+        descr = 'train_losses = ' + ', '.join(train_losses_stripped) + ' | val_losses = ' + \
+                ', '.join(eval_losses_stripped)
+        pbar.set_description(descr)
 
 
 
