@@ -9,7 +9,7 @@ from mdm.logging.logger import Logger, Scope
 from mdm.models.dynamics_model import DynamicsModel
 
 
-def one_hot(x: np.array, n_categories: int):
+def np_one_hot(x: np.array, n_categories: int):
     if not np.issubdtype(x.dtype, np.integer):
         raise ValueError('Only integer arrays can be converted to one-hot encoding')
 
