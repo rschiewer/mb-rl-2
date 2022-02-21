@@ -10,9 +10,13 @@ from mdm.memory.trajectory_memory import TrajectoryMemory
 class TrajectoryMemoryTest(unittest.TestCase):
 
     @staticmethod
-    def _rand_traj(shapes, t_len):
+    def _rand_traj(shapes, t_len, dtype=np.float32):
         def _rand_tens(shape, tens_len):
-            return np.random.default_rng().uniform(size=(tens_len, *shape))
+            size = (tens_len, *shape)
+            if np.issubdtype(dtype, np.integer):
+                return np.random.default_rng().integers(0, 10, size=size, dtype=dtype)
+            else:
+                return np.random.default_rng().uniform(size=size)
 
         return {'s': _rand_tens(shapes['s'], t_len + 1), 'a': _rand_tens(shapes['a'], t_len),
                 'r': _rand_tens(shapes['r'], t_len), 'terminal': _rand_tens(shapes['terminal'], t_len)}
@@ -45,7 +49,7 @@ class TrajectoryMemoryTest(unittest.TestCase):
 
     def test_push(self):
         for t in self.trajectories:
-            self.mem.push(t['s'], t['a'], t['r'], t['terminal'])
+            self.mem.push(**t)
 
         self.assertEqual(len(self.mem), self.n_trajectories)
         self.assertEqual(self.mem.shapes, self.shapes)
@@ -61,18 +65,18 @@ class TrajectoryMemoryTest(unittest.TestCase):
 
     def test_push_shape(self):
         for t in self.trajectories:
-            self.mem.push(t['s'], t['a'], t['r'], t['terminal'])
+            self.mem.push(**t)
 
         for chosen_shape_key in self.shapes:
             new_dim, new_len = np.random.default_rng().integers(10, 50, 2)
             new_shapes = {k: s if k != chosen_shape_key else s + (new_dim,) for k, s in self.shapes.items()}
             new_traj = self._rand_traj(new_shapes, new_len)
-            self.assertRaises(ValueError, self.mem.push, *new_traj.values())
+            self.assertRaises(ValueError, self.mem.push, **new_traj)
             self.assertEqual(len(self.mem), self.n_trajectories)
 
     def test_push_len(self):
         for t in self.trajectories:
-            self.mem.push(t['s'], t['a'], t['r'], t['terminal'])
+            self.mem.push(**t)
 
         for k in ['s', 'a', 'r', 'terminal']:
             for traj in self.mem:
@@ -80,11 +84,25 @@ class TrajectoryMemoryTest(unittest.TestCase):
                 len_mismatch = np.random.default_rng().integers(1, 500)
                 shape_current = t_malformed[k].shape
                 t_malformed[k] = t_malformed[k] = np.zeros((shape_current[0] + len_mismatch, *shape_current[1:]))
-                self.assertRaises(ValueError, self.mem.push, *t_malformed.values())
+                self.assertRaises(ValueError, self.mem.push, **t_malformed)
+
+    def test_push_dtype(self):
+        for t in self.trajectories:
+            self.mem.push(**t)
+
+        t_malformed = self._rand_traj(self.shapes, 10, np.int32)
+        self.assertRaises(ValueError, self.mem.push, **t_malformed)
+
+        t_malformed = self._rand_traj(self.shapes, 10, self.mem.dtypes['s'])
+        t_malformed['s'] = t_malformed['s'].astype(np.int32)
+        self.assertRaises(ValueError, self.mem.push, **t_malformed)
+
+        t_ok = self._rand_traj(self.shapes, 10, self.mem.dtypes['s'])  # TODO: check with mixed dtypes
+        self.mem.push(**t_ok)
 
     def test_to_numpy_arrays(self):
         for t in self.trajectories:
-            self.mem.push(t['s'], t['a'], t['r'], t['terminal'])
+            self.mem.push(**t)
 
         for fill_value in [0, 1, 42]:
             ss_, as_, rs_, terminals_ = self.mem.to_np_arrays(padding=fill_value)
