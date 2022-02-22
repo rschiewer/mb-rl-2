@@ -34,10 +34,14 @@ class CrossentropyPlanner:
         self.type = type
         if type is DistributionType.NORMAL:
             self._act_dist = torch.distributions.Normal
-            self._update_dist_params = self._update_dist_params_normal
+            self._init_dist = self._init_normal
+            self._update_dist = self._update_normal
+            self._build_dist = self._build_normal
         elif type is DistributionType.CATEGORICAL:
             self._act_dist = torch.distributions.Categorical
-            self._update_dist_params = self._update_dist_params_categorical
+            self._init_dist = self._init_categorical
+            self._update_dist = self._update_categorical
+            self._build_dist = self._build_categorical
 
     def plan(self,
              rollout_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
@@ -51,11 +55,11 @@ class CrossentropyPlanner:
              init_act_params: Union[torch.Tensor, np.ndarray] = None):
         d_batch = start_states.shape[0]  # n_batch equals number of rollouts
         n_winners = ceil(d_batch * winning_perc)
-        act_dist_params = self._act_dist_params(d_batch, n_plan_steps, d_dist, init_act_params)
+        act_dist_params = self._init_params(d_batch, n_plan_steps, d_dist, init_act_params)
 
         winner_actions = None
         for i_ev in range(n_evolution_steps):
-            actions = self._act_dist(probs=act_dist_params).sample()
+            actions = self._build_dist(act_dist_params).sample()
             step_rewards = rollout_fn(start_states, actions)
 
             disc_ret = compute_episode_returns(step_rewards, discount)
@@ -64,41 +68,83 @@ class CrossentropyPlanner:
             winner_actions = actions[i_winners.tolist()]
 
             # update distribution parameters with MLE parameters of the winner samples
-            act_dist_params = self._update_dist_params(winner_actions, act_dist_params, act_noise)
+            act_dist_params = self._update_dist(winner_actions, act_dist_params, act_noise)
 
-        return winner_actions[0]
+        return winner_actions, self._build_dist(act_dist_params), i_winners
 
-    def _update_dist_params_normal(self,
-                                   winner_actions: torch.Tensor,
-                                   dist_params: torch.Tensor,
-                                   noise: float):
-        raise NotImplementedError('You have to do this')
+    def _init_normal(self,
+                     d_batch: int,
+                     n_time_steps: int,
+                     d_dist: int):
+        return torch.rand(2, d_batch, n_time_steps, d_dist)
 
-    def _update_dist_params_categorical(self,
-                                        winner_actions: torch.Tensor,
-                                        dist_params: torch.Tensor,
-                                        noise: float):
+    def _build_normal(self,
+                      dist_params: torch.Tensor):
+        mu, sigma = torch.unbind(dist_params, dim=0)
+        return torch.distributions.Normal(loc=mu, scale=sigma)
+
+    def _update_normal(self,
+                       winner_actions: torch.Tensor,
+                       dist_params: torch.Tensor,
+                       noise: float):
+        noise = torch.tensor(noise)
+        n_batch = dist_params.shape[1]
+        n_winners = winner_actions.shape[0]
+
+        # compute prototype mu and sigma
+        mu_ml = winner_actions.mean(dim=0)
+        sigma_ml = torch.mean((winner_actions - torch.tile(mu_ml, dims=(n_winners, 1, 1))) ** 2, dim=0)
+
+        # just copy prototype values along batch axis
+        mu_ml = torch.tile(mu_ml, dims=(n_batch, 1, 1))
+        sigma_ml = torch.tile(sigma_ml, dims=(n_batch, 1, 1))
+
+        # add noise to diversify
+        mu_ml = mu_ml + (2 * torch.rand_like(mu_ml) - 1) * noise
+        sigma_ml = sigma_ml + (2 * torch.rand_like(sigma_ml) - 1) * noise
+        #sigma_ml = torch.exp(sigma_ml) ** 0.5
+        sigma_ml = torch.maximum(sigma_ml, torch.tensor(0.00001))
+
+        return torch.stack([mu_ml, sigma_ml], dim=0)
+
+    def _init_categorical(self,
+                          d_batch: int,
+                          n_time_steps: int,
+                          d_dist: int):
+        return torch.rand(d_batch, n_time_steps, d_dist)
+
+    def _build_categorical(self,
+                           dist_params: torch.Tensor):
+        return self._act_dist(probs=dist_params)
+
+    def _update_categorical(self,
+                            winner_actions: torch.Tensor,
+                            dist_params: torch.Tensor,
+                            noise: float):
+        noise = torch.tensor(noise)
         n_batch = dist_params.shape[0]
         n_actions = dist_params.shape[-1]
         actions_onehot = torch.nn.functional.one_hot(winner_actions, num_classes=n_actions)
-        numerator = torch.sum(actions_onehot, dim=0)
-        denominator = torch.sum(actions_onehot, dim=[0, 2])[..., None]
-        dist_params = numerator / denominator  # this yields one list of distributions with shape (d_time, d_action)
+
+        dist_params = torch.mean(actions_onehot.float(), dim=(0))
         dist_params = torch.tile(dist_params, dims=(n_batch, 1, 1))  # this copies the one list to all batch items
-        dist_params = torch.clamp(dist_params + torch.rand_like(dist_params) * noise, 0.0, 1.0)  # this diversifies
+        # add noise to diversify
+        dist_params = dist_params + (2 * torch.rand_like(dist_params) - 1) * noise
+        dist_params = torch.clamp(dist_params, torch.tensor(0.0), torch.tensor(1.0))
+        dist_params /= dist_params.sum(dim=-1, keepdim=True)
         return dist_params
 
-    @staticmethod
-    def _act_dist_params(d_batch: int,
-                         n_time_steps: int,
-                         d_dist: int,
-                         init_act_params: Union[torch.Tensor, np.ndarray]):
+    def _init_params(self,
+                     d_batch: int,
+                     n_time_steps: int,
+                     d_dist: int,
+                     init_act_params: Union[torch.Tensor, np.ndarray]):
         if init_act_params is None:
-            act_params = torch.rand(d_batch, n_time_steps, d_dist)
+            act_params = self._init_dist(d_batch, n_time_steps, d_dist)
         else:
-            if init_act_params.shape != (d_batch, n_time_steps, d_dist):
-                raise ValueError(f'Initial action parameters argument shape mismatch, found: {init_act_params.shape}, '
-                                 f'expected: {(d_batch, n_time_steps, d_dist)}')
+            #if init_act_params.shape != (d_batch, n_time_steps, d_dist):
+            #    raise ValueError(f'Initial action parameters argument shape mismatch, found: {init_act_params.shape}, '
+            #                     f'expected: {(d_batch, n_time_steps, d_dist)}')
             if isinstance(init_act_params, np.ndarray):
                 act_params = torch.from_numpy(init_act_params)
             else:
