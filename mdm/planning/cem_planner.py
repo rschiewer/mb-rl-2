@@ -68,7 +68,7 @@ class CrossentropyPlanner:
             winner_actions = actions[i_winners.tolist()]
 
             # update distribution parameters with MLE parameters of the winner samples
-            act_dist_params = self._update_dist(winner_actions, act_dist_params, act_noise)
+            act_dist_params = self._update_dist(actions, act_dist_params, i_winners, act_noise)
 
         return winner_actions, self._build_dist(act_dist_params), i_winners
 
@@ -77,7 +77,7 @@ class CrossentropyPlanner:
                      n_time_steps: int,
                      d_dist: int):
         mu = 2 * torch.rand(d_batch, n_time_steps, d_dist) - 1
-        sigma = torch.maximum(torch.rand(d_batch, n_time_steps, d_dist), torch.tensor(0.1))
+        sigma = torch.maximum(torch.rand(d_batch, n_time_steps, d_dist), torch.tensor(0.25))
         return torch.stack([mu, sigma], dim=0)
 
     def _build_normal(self,
@@ -86,9 +86,11 @@ class CrossentropyPlanner:
         return torch.distributions.Normal(loc=mu, scale=sigma)
 
     def _update_normal(self,
-                       winner_actions: torch.Tensor,
+                       actions: torch.Tensor,
                        dist_params: torch.Tensor,
+                       i_winners: torch.Tensor,
                        noise: float):
+        winner_actions = actions[i_winners.tolist()]
         noise = torch.tensor(noise)
         n_batch = dist_params.shape[1]
         n_winners = winner_actions.shape[0]
@@ -104,7 +106,7 @@ class CrossentropyPlanner:
         # add noise to diversify
         mu_ml = mu_ml + (2 * torch.rand_like(mu_ml) - 1) * noise
         sigma_ml = sigma_ml + (2 * torch.rand_like(sigma_ml) - 1) * noise
-        sigma_ml = torch.maximum(sigma_ml, torch.tensor(0.1))
+        sigma_ml = torch.maximum(sigma_ml, torch.tensor(0.25))
 
         return torch.stack([mu_ml, sigma_ml], dim=0)
 
@@ -121,9 +123,11 @@ class CrossentropyPlanner:
         return self._act_dist(probs=dist_params)
 
     def _update_categorical(self,
-                            winner_actions: torch.Tensor,
+                            actions: torch.Tensor,
                             dist_params: torch.Tensor,
+                            i_winners: torch.Tensor,
                             noise: float):
+        winner_actions = actions[i_winners.tolist()]
         noise = torch.tensor(noise)
         n_batch = dist_params.shape[0]
         n_actions = dist_params.shape[-1]
@@ -131,7 +135,7 @@ class CrossentropyPlanner:
         actions_onehot = torch.nn.functional.one_hot(winner_actions, num_classes=n_actions)
         dist_params = torch.mean(actions_onehot.float(), dim=(0))  # yields one list of distributions, one per time step
         dist_params = torch.tile(dist_params, dims=(n_batch, 1, 1))  # this copies the list to all batch indices
-        #dist_params[dist_params.shape[0] // 2 :] = torch
+        #dist_params[dist_params.shape[0] // 2 :] = torch.rand_like(dist_params[dist_params.shape[0] // 2:])
         # add noise to diversify
         dist_params = dist_params + (2 * torch.rand_like(dist_params) - 1) * noise
         dist_params = torch.clamp(dist_params, torch.tensor(0.0), torch.tensor(1.0))

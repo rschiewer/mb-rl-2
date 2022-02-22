@@ -16,7 +16,7 @@ class CrossentropyMethodPlanner(unittest.TestCase):
         n_action = 10
         n_opt_steps = 10
         n_plan_steps = 20
-        winning_perc = 0.25
+        winning_perc = 0.35
         discount = 1
         act_noise = 0.01
         r_good, r_bad = 1.0, 0.0
@@ -51,7 +51,7 @@ class CrossentropyMethodPlanner(unittest.TestCase):
         n_action = 10
         n_opt_steps = 20
         n_plan_steps = 20
-        winning_perc = 0.25
+        winning_perc = 0.1
         discount = 1
         act_noise = 0.1
         dist_type = DistributionType.NORMAL
