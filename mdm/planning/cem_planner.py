@@ -76,7 +76,9 @@ class CrossentropyPlanner:
                      d_batch: int,
                      n_time_steps: int,
                      d_dist: int):
-        return torch.rand(2, d_batch, n_time_steps, d_dist)
+        mu = 2 * torch.rand(d_batch, n_time_steps, d_dist) - 1
+        sigma = torch.maximum(torch.rand(d_batch, n_time_steps, d_dist), torch.tensor(0.1))
+        return torch.stack([mu, sigma], dim=0)
 
     def _build_normal(self,
                       dist_params: torch.Tensor):
@@ -102,8 +104,7 @@ class CrossentropyPlanner:
         # add noise to diversify
         mu_ml = mu_ml + (2 * torch.rand_like(mu_ml) - 1) * noise
         sigma_ml = sigma_ml + (2 * torch.rand_like(sigma_ml) - 1) * noise
-        #sigma_ml = torch.exp(sigma_ml) ** 0.5
-        sigma_ml = torch.maximum(sigma_ml, torch.tensor(0.00001))
+        sigma_ml = torch.maximum(sigma_ml, torch.tensor(0.1))
 
         return torch.stack([mu_ml, sigma_ml], dim=0)
 
@@ -111,7 +112,9 @@ class CrossentropyPlanner:
                           d_batch: int,
                           n_time_steps: int,
                           d_dist: int):
-        return torch.rand(d_batch, n_time_steps, d_dist)
+        params = torch.rand(d_batch, n_time_steps, d_dist)
+        params /= params.sum(dim=-1, keepdim=True)
+        return params
 
     def _build_categorical(self,
                            dist_params: torch.Tensor):
@@ -124,10 +127,11 @@ class CrossentropyPlanner:
         noise = torch.tensor(noise)
         n_batch = dist_params.shape[0]
         n_actions = dist_params.shape[-1]
-        actions_onehot = torch.nn.functional.one_hot(winner_actions, num_classes=n_actions)
 
-        dist_params = torch.mean(actions_onehot.float(), dim=(0))
-        dist_params = torch.tile(dist_params, dims=(n_batch, 1, 1))  # this copies the one list to all batch items
+        actions_onehot = torch.nn.functional.one_hot(winner_actions, num_classes=n_actions)
+        dist_params = torch.mean(actions_onehot.float(), dim=(0))  # yields one list of distributions, one per time step
+        dist_params = torch.tile(dist_params, dims=(n_batch, 1, 1))  # this copies the list to all batch indices
+        #dist_params[dist_params.shape[0] // 2 :] = torch
         # add noise to diversify
         dist_params = dist_params + (2 * torch.rand_like(dist_params) - 1) * noise
         dist_params = torch.clamp(dist_params, torch.tensor(0.0), torch.tensor(1.0))

@@ -12,7 +12,7 @@ class CrossentropyMethodPlanner(unittest.TestCase):
         self.d_state = 5
 
     def test_plan_categorical_1(self):
-        d_batch = 128
+        d_batch = 64
         n_action = 10
         n_opt_steps = 10
         n_plan_steps = 20
@@ -47,7 +47,7 @@ class CrossentropyMethodPlanner(unittest.TestCase):
         print(len(torch.nonzero(ground_truth_best_a - all_dist_mode)))
 
     def test_plan_normal_1(self):
-        d_batch = 128
+        d_batch = 256
         n_action = 10
         n_opt_steps = 20
         n_plan_steps = 20
@@ -58,7 +58,7 @@ class CrossentropyMethodPlanner(unittest.TestCase):
 
         ce_planner = CrossentropyPlanner(dist_type)
         start_states = torch.zeros(d_batch, self.n_start_states, self.d_state)
-        ground_truth_best_a = torch.rand(n_plan_steps, n_action)
+        ground_truth_best_a = 2 * torch.rand(n_plan_steps, n_action) - 1
 
         def rollout_fn(start_states: torch.Tensor, actions: torch.Tensor):
             rewards = - torch.mean(torch.abs(actions - ground_truth_best_a.unsqueeze(0)), dim=2)
