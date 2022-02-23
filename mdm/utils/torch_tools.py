@@ -21,7 +21,7 @@ class RecurrentBlock(torch.nn.Module):
 
         self.d_inputs = d_inputs
         self.d_hidden = d_hidden
-        self.n_rec_layers = n_layers
+        self.n_layers = n_layers
         self.batch_first = batch_first
         self.layer_list = torch.nn.LSTM(sum(d_inputs), d_hidden, num_layers=n_layers, batch_first=batch_first,
                                         dropout=dropout)
@@ -29,14 +29,17 @@ class RecurrentBlock(torch.nn.Module):
     def forward(self,
                 *xs: torch.Tensor,
                 h: Tuple[torch.Tensor, torch.Tensor] = None):
-        n_batch = xs[0].shape[0]
+        d_batch = xs[0].shape[0]
         if h is None:
-            h = (torch.zeros(n_batch, self.d_hidden), torch.zeros(n_batch, self.d_hidden))
+            h = self.gen_h_placeholder(d_batch)
 
         x = torch.concat(xs, dim=-1)
         x, h = self.layer_list(x, h)
 
         return x, h
+
+    def gen_h_placeholder(self, d_batch: int):
+        return torch.zeros(self.n_layers, d_batch, self.d_hidden), torch.zeros(self.n_layers, d_batch, self.d_hidden)
 
 
 class GaussianBlock(torch.nn.Module):
@@ -50,7 +53,7 @@ class GaussianBlock(torch.nn.Module):
             lws = [lws]
 
         self.d_inputs = d_inputs
-        self.lws = (sum(d_inputs), *lws[:-1], lws[-1] * 2)  # double last layer width to have parameters for loc and scale
+        self.lws = (sum(d_inputs), *lws[:-1], lws[-1] * 2)  # double last layer width to have params for loc and scale
         self.layer_list = torch.nn.ModuleList([torch.nn.Linear(lw_in, lw_out)
                                                for lw_in, lw_out in zip(self.lws, self.lws[1:])])
 

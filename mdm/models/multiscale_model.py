@@ -408,8 +408,34 @@ class MultiscaleDynamicsModel(DynamicsModel):
         return compatible, tens_name
 
     def rollout_n_step(self,
-                       ):
-        pass
+                       start_states: torch.Tensor,
+                       actions: torch.Tensor,
+                       macro_s: torch.Tensor,
+                       macro_a: torch.Tensor,
+                       macro_r: torch.Tensor,
+                       macro_s_next: torch.Tensor,
+                       h = None):
+        d_batch, n_steps = actions.shape[:2]
+        n_start_states = start_states.shape[1]
+
+        s = torch.zeros(d_batch, self.d_state)
+        h = self.single_step_model.det_mdl.gen_h_placeholder(d_batch) if h is None else h
+
+        s_mem, s_dist_mem = [], []
+        r_mem, r_dist_mem = [], []
+        for t in range(n_steps):
+            if t < n_start_states:  # if still in warmup period, use teacher forcing for states
+                s = start_states[:, t]
+            a = actions[:, t]
+
+            _, s_next_dist, r_next_dist, h = self.single_step_model(s, a, macro_s, macro_a, macro_r, macro_s_next, h)
+            s_next = s_next_dist.rsample()
+            r_next = r_next_dist.rsample()
+
+            s_mem.append(s_next)
+            r_mem.append(r_next)
+            s_dist_mem.append(s_next_dist)
+            r_dist_mem.append(r_next_dist)
 
     def rollout_abstract(self,
                          macro_start_state: torch.Tensor,
@@ -433,11 +459,8 @@ class MultiscaleDynamicsModel(DynamicsModel):
         return macro_s_prior_mem, macro_r_prior_mem
 
     def _gen_placeholders(self, d_batch: int):
-        n_rec_layers_1sm = self.single_step_model.det_mdl.n_rec_layers
-        d_hidden_1sm = self.single_step_model.det_mdl.d_hidden
-
         s = torch.zeros(d_batch, self.d_state)
-        h = (torch.zeros(n_rec_layers_1sm, d_batch, d_hidden_1sm), torch.zeros(n_rec_layers_1sm, d_batch, d_hidden_1sm))
+        h = self.single_step_model.det_mdl.gen_h_placeholder(d_batch)
         macro_s = torch.zeros(d_batch, self.d_macro_state)
         macro_a = torch.zeros(d_batch, self.d_macro_action)
         macro_r = torch.zeros(d_batch, self.d_macro_reward)
