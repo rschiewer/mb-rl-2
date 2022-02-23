@@ -5,7 +5,7 @@ from math import ceil
 import torch
 import torch.nn.functional as F
 
-from mdm.models.torch_tools import RecurrentBlock, GaussianBlock, FeedforwardBlock, add_time_dim, remove_time_dim
+from mdm.utils.torch_tools import RecurrentBlock, GaussianBlock, FeedforwardBlock, add_time_dim, remove_time_dim
 from mdm.models.dynamics_model import DynamicsModel
 
 
