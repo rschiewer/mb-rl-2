@@ -44,7 +44,7 @@ class CrossentropyPlanner:
             self._build_dist = self._build_categorical
 
     def plan(self,
-             rollout_fn: Callable[[torch.Tensor, torch.Tensor], Dict[str, torch.Tensor]],
+             rollout_fn: Callable[[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, Dict[str, torch.Tensor]]],
              start_states: torch.Tensor,
              d_dist: int,
              n_plan_steps: int,
@@ -60,9 +60,9 @@ class CrossentropyPlanner:
         actions, i_winners, rollout_data = None, None, None
         for i_ev in range(n_evolution_steps):
             actions = self._build_dist(act_dist_params).sample()
-            rollout_data = rollout_fn(start_states, actions)
+            criterion, rollout_data = rollout_fn(start_states, actions)
 
-            disc_ret = compute_episode_returns(rollout_data['r'], discount)
+            disc_ret = compute_episode_returns(criterion, discount)
             disc_ret_sorted = torch.sort(disc_ret, dim=0, descending=True)
             i_winners, R_winners = disc_ret_sorted.indices[:n_winners], disc_ret_sorted.values[:n_winners]
 

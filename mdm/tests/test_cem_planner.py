@@ -31,7 +31,7 @@ class CrossentropyMethodPlanner(unittest.TestCase):
             rewards = torch.zeros(d_batch, d_time)
             for t in range(d_time):
                 rewards[:, t] = torch.where(actions[:, t] == ground_truth_best_a[t], r_good, r_bad)
-            return {'r': rewards}
+            return rewards, {}
 
         actions, dist, i_winners, rollout_data = ce_planner.plan(rollout_fn=rollout_fn, start_states=start_states,
                                                             d_dist=n_action, n_plan_steps=n_plan_steps,
@@ -62,7 +62,7 @@ class CrossentropyMethodPlanner(unittest.TestCase):
 
         def rollout_fn(start_states: torch.Tensor, actions: torch.Tensor):
             rewards = - torch.mean(torch.abs(actions - ground_truth_best_a.unsqueeze(0) ** 2), dim=2)
-            return {'r': rewards}
+            return rewards, {}
 
         actions, dist,i_winners, rollout_data = ce_planner.plan(rollout_fn=rollout_fn, start_states=start_states,
                                                             d_dist=n_action, n_plan_steps=n_plan_steps,
