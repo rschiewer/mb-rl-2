@@ -14,7 +14,7 @@ class CrossentropyMethodPlanner(unittest.TestCase):
     def test_plan_categorical_1(self):
         d_batch = 64
         n_action = 10
-        n_opt_steps = 10
+        n_opt_steps = 15
         n_plan_steps = 20
         winning_perc = 0.35
         discount = 1
@@ -27,14 +27,13 @@ class CrossentropyMethodPlanner(unittest.TestCase):
         ground_truth_best_a = torch.randint(0, n_action, (n_plan_steps,))
 
         def rollout_fn(start_states: torch.Tensor, actions: torch.Tensor):
-            d_state = start_states.shape[-1]
             d_batch, d_time = actions.shape[:2]
             rewards = torch.zeros(d_batch, d_time)
             for t in range(d_time):
                 rewards[:, t] = torch.where(actions[:, t] == ground_truth_best_a[t], r_good, r_bad)
-            return rewards, torch.zeros(d_batch, d_time, d_state)
+            return {'r': rewards}
 
-        actions, dist, states, i_winners = ce_planner.plan(rollout_fn=rollout_fn, start_states=start_states,
+        actions, dist, i_winners, rollout_data = ce_planner.plan(rollout_fn=rollout_fn, start_states=start_states,
                                                             d_dist=n_action, n_plan_steps=n_plan_steps,
                                                             n_evolution_steps=n_opt_steps, winning_perc=winning_perc,
                                                             discount=discount, act_noise=act_noise)
@@ -62,12 +61,10 @@ class CrossentropyMethodPlanner(unittest.TestCase):
         ground_truth_best_a = 10 * torch.rand(n_plan_steps, n_action) - 5
 
         def rollout_fn(start_states: torch.Tensor, actions: torch.Tensor):
-            d_state = start_states.shape[-1]
-            d_batch, d_time = actions.shape[:2]
             rewards = - torch.mean(torch.abs(actions - ground_truth_best_a.unsqueeze(0) ** 2), dim=2)
-            return rewards, torch.zeros(d_batch, d_time, d_state)
+            return {'r': rewards}
 
-        actions, dist, states, i_winners = ce_planner.plan(rollout_fn=rollout_fn, start_states=start_states,
+        actions, dist,i_winners, rollout_data = ce_planner.plan(rollout_fn=rollout_fn, start_states=start_states,
                                                             d_dist=n_action, n_plan_steps=n_plan_steps,
                                                             n_evolution_steps=n_opt_steps, winning_perc=winning_perc,
                                                             discount=discount, act_noise=act_noise)
