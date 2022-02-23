@@ -7,10 +7,11 @@ from mdm.memory.trajectory_memory import flatten_and_unsqueeze
 from mdm.training.gym_driver import GymEpisodeDriver
 from mdm.models.multiscale_model import *
 from mdm.gridworld.gridworld import Gridworld
+from mdm.utils.utils import here
 
 
 if __name__ == '__main__':
-    env = Gridworld.from_cleartext(Path(__file__).parent / '../../mdm/gridworld/8x8_v0.mapdata')
+    env = Gridworld.from_cleartext(here() / '../../mdm/gridworld/8x8_v0.mapdata')
     n_episodes = 1000
 
     mdl_d_state = env.observation_space.shape[0]
