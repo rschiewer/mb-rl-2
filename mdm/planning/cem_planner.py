@@ -97,18 +97,18 @@ class CrossentropyPlanner:
 
         # compute prototype mu and sigma
         mu_ml = winner_actions.mean(dim=0)
-        sigma_ml = torch.mean((winner_actions - torch.tile(mu_ml, dims=(n_winners, 1, 1))) ** 2, dim=0)
+        sigma_ml = torch.sqrt(torch.mean((winner_actions - mu_ml.unsqueeze(0)) ** 2, dim=0))
 
         # just copy prototype values along batch axis
         mu_ml = torch.tile(mu_ml, dims=(n_batch, 1, 1))
         sigma_ml = torch.tile(sigma_ml, dims=(n_batch, 1, 1))
 
         # add noise to diversify
-        mu_ml = mu_ml + (2 * torch.rand_like(mu_ml) - 1) * noise
-        sigma_ml = sigma_ml + (2 * torch.rand_like(sigma_ml) - 1) * noise
-        sigma_ml = torch.maximum(sigma_ml, torch.tensor(0.25))
+        mu_ml_noise = mu_ml + (2 * torch.rand_like(mu_ml) - 1) * noise
+        sigma_ml_noise = sigma_ml + (2 * torch.rand_like(sigma_ml) - 1) * noise
+        sigma_ml_noise = torch.where(sigma_ml_noise <= 0, sigma_ml, sigma_ml_noise)  # don't accidentally make sigma < 0
 
-        return torch.stack([mu_ml, sigma_ml], dim=0)
+        return torch.stack([mu_ml_noise, sigma_ml_noise], dim=0)
 
     def _init_categorical(self,
                           d_batch: int,

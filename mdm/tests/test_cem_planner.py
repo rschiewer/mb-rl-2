@@ -58,10 +58,10 @@ class CrossentropyMethodPlanner(unittest.TestCase):
 
         ce_planner = CrossentropyPlanner(dist_type)
         start_states = torch.zeros(d_batch, self.n_start_states, self.d_state)
-        ground_truth_best_a = 2 * torch.rand(n_plan_steps, n_action) - 1
+        ground_truth_best_a = 10 * torch.rand(n_plan_steps, n_action) - 5
 
         def rollout_fn(start_states: torch.Tensor, actions: torch.Tensor):
-            rewards = - torch.mean(torch.abs(actions - ground_truth_best_a.unsqueeze(0)), dim=2)
+            rewards = - torch.mean(torch.abs(actions - ground_truth_best_a.unsqueeze(0) ** 2), dim=2)
             return rewards
 
         winner_a, dist, i_winners = ce_planner.plan(rollout_fn=rollout_fn, start_states=start_states,
