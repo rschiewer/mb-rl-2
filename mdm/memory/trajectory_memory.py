@@ -122,3 +122,17 @@ class TrajectoryMemory(Dataset):
     def _lengths_match(lengths) -> bool:
         return lengths['a'] == lengths['r'] and lengths['a'] == lengths['terminal'] and lengths['s'] == lengths['a'] + 1
 
+
+def flatten_and_unsqueeze(s: np.array, a: np.array, r: np.array, terminal: np.array):
+    # flatten data dimensions if multiple or add explicit 1-sized data dimension if there is none
+    d_s = np.prod(s.shape[2:]) if len(s.shape) >= 3 else 1
+    d_a = np.prod(a.shape[2:]) if len(a.shape) >= 3 else 1
+    d_r = np.prod(r.shape[2:]) if len(r.shape) >= 3 else 1
+    d_term = np.prod(terminal.shape[2:]) if len(terminal.shape) >= 3 else 1
+
+    s = s.reshape((*s.shape[:2], d_s))
+    a = a.reshape((*a.shape[:2], d_a))  # mind: there is one more state than actions, rewards and terminal flags
+    r = r.reshape((*r.shape[:2], d_r))
+    terminal = terminal.reshape((*terminal.shape[:2], d_term))
+
+    return s, a, r, terminal

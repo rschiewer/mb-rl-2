@@ -2,14 +2,15 @@ from pathlib import Path
 
 import numpy as np
 
-from mdm.training.dynamics_model_trainer import DynamicsModelTrainer, flatten_and_unsqueeze, np_one_hot
+from mdm.training.dynamics_model_trainer import DynamicsModelTrainer, np_one_hot
+from mdm.memory.trajectory_memory import flatten_and_unsqueeze
 from mdm.training.gym_driver import GymEpisodeDriver
 from mdm.models.multiscale_model import *
 from mdm.gridworld.gridworld import Gridworld
 
 
 if __name__ == '__main__':
-    env = Gridworld.from_cleartext(Path(__file__).parent / '../mdm/gridworld/8x8_v0.mapdata')
+    env = Gridworld.from_cleartext(Path(__file__).parent / '../../mdm/gridworld/8x8_v0.mapdata')
     n_episodes = 1000
 
     mdl_d_state = env.observation_space.shape[0]
@@ -59,7 +60,12 @@ if __name__ == '__main__':
     trainer = DynamicsModelTrainer(multiscale_mdl, optimizer, get_batch_train, get_batch_test, trainer_n_warmup_steps,
                                    trainer_n_eval_interval)
 
-
     trainer.train(trainer_n_train_steps, progress_bar=True)
+
+    torch.save(multiscale_mdl, Path(__file__).parent / 'model.ptmdl')
+
+
+
+
 
 
