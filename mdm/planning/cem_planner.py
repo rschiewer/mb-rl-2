@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Callable, Union
+from typing import Callable, Union, Tuple
 from functools import reduce
 from math import ceil
 
@@ -44,7 +44,7 @@ class CrossentropyPlanner:
             self._build_dist = self._build_categorical
 
     def plan(self,
-             rollout_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+             rollout_fn: Callable[[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor]],
              start_states: torch.Tensor,
              d_dist: int,
              n_plan_steps: int,
@@ -57,20 +57,19 @@ class CrossentropyPlanner:
         n_winners = ceil(d_batch * winning_perc)
         act_dist_params = self._init_params(d_batch, n_plan_steps, d_dist, init_act_params)
 
-        winner_actions = None
+        actions, rollout_states, i_winners = None, None, None
         for i_ev in range(n_evolution_steps):
             actions = self._build_dist(act_dist_params).sample()
-            step_rewards = rollout_fn(start_states, actions)
+            step_rewards, rollout_states = rollout_fn(start_states, actions)
 
             disc_ret = compute_episode_returns(step_rewards, discount)
             disc_ret_sorted = torch.sort(disc_ret, dim=0, descending=True)
             i_winners, R_winners = disc_ret_sorted.indices[:n_winners], disc_ret_sorted.values[:n_winners]
-            winner_actions = actions[i_winners.tolist()]
 
             # update distribution parameters with MLE parameters of the winner samples
             act_dist_params = self._update_dist(actions, act_dist_params, i_winners, act_noise)
 
-        return winner_actions, self._build_dist(act_dist_params), i_winners
+        return actions, self._build_dist(act_dist_params), rollout_states, i_winners.tolist()
 
     def _init_normal(self,
                      d_batch: int,

@@ -27,18 +27,19 @@ class CrossentropyMethodPlanner(unittest.TestCase):
         ground_truth_best_a = torch.randint(0, n_action, (n_plan_steps,))
 
         def rollout_fn(start_states: torch.Tensor, actions: torch.Tensor):
+            d_state = start_states.shape[-1]
             d_batch, d_time = actions.shape[:2]
             rewards = torch.zeros(d_batch, d_time)
             for t in range(d_time):
                 rewards[:, t] = torch.where(actions[:, t] == ground_truth_best_a[t], r_good, r_bad)
-            return rewards
+            return rewards, torch.zeros(d_batch, d_time, d_state)
 
-        winner_a, dist, i_winners = ce_planner.plan(rollout_fn=rollout_fn, start_states=start_states,
-                                                    d_dist=n_action, n_plan_steps=n_plan_steps,
-                                                    n_evolution_steps=n_opt_steps, winning_perc=winning_perc,
-                                                    discount=discount, act_noise=act_noise)
+        actions, dist, states, i_winners = ce_planner.plan(rollout_fn=rollout_fn, start_states=start_states,
+                                                            d_dist=n_action, n_plan_steps=n_plan_steps,
+                                                            n_evolution_steps=n_opt_steps, winning_perc=winning_perc,
+                                                            discount=discount, act_noise=act_noise)
 
-        champion_a = winner_a[0]
+        champion_a = actions[i_winners[0]]
         champion_dist_mode = torch.argmax(dist.probs[i_winners[0]], dim=-1)
         all_dist_mode = torch.argmax(dist.probs[i_winners].mean(dim=(0)), dim=-1)
 
@@ -61,15 +62,17 @@ class CrossentropyMethodPlanner(unittest.TestCase):
         ground_truth_best_a = 10 * torch.rand(n_plan_steps, n_action) - 5
 
         def rollout_fn(start_states: torch.Tensor, actions: torch.Tensor):
+            d_state = start_states.shape[-1]
+            d_batch, d_time = actions.shape[:2]
             rewards = - torch.mean(torch.abs(actions - ground_truth_best_a.unsqueeze(0) ** 2), dim=2)
-            return rewards
+            return rewards, torch.zeros(d_batch, d_time, d_state)
 
-        winner_a, dist, i_winners = ce_planner.plan(rollout_fn=rollout_fn, start_states=start_states,
-                                                    d_dist=n_action, n_plan_steps=n_plan_steps,
-                                                    n_evolution_steps=n_opt_steps, winning_perc=winning_perc,
-                                                    discount=discount, act_noise=act_noise)
+        actions, dist, states, i_winners = ce_planner.plan(rollout_fn=rollout_fn, start_states=start_states,
+                                                            d_dist=n_action, n_plan_steps=n_plan_steps,
+                                                            n_evolution_steps=n_opt_steps, winning_perc=winning_perc,
+                                                            discount=discount, act_noise=act_noise)
 
-        champion_a = winner_a[0]
+        champion_a = actions[i_winners[0]]
         champion_dist_mode = dist.mean[i_winners[0]]
         all_dist_mode = dist.mean[i_winners].mean(dim=0)
 
