@@ -323,30 +323,13 @@ class MultiscaleDynamicsModel(DynamicsModel):
                    r_ground_truth: torch.Tensor,
                    optimizer: torch.optim.Optimizer,
                    n_warmup: int = 1):
-        rec_loss = MultiscaleDynamicsModel.reconstruction_loss
-        kl_loss = MultiscaleDynamicsModel.kl_loss
-        macro_r_loss = MultiscaleDynamicsModel.macro_reward_loss
-
-        # target macro reward can be pre-computed from the single step rewards
-        macro_r_target = MultiscaleDynamicsModel.average_kstep_reward(r_ground_truth, self.abstract_step_size)
-
-        warmup_states = s_ground_truth[:, :n_warmup, :]
         optimizer.zero_grad(set_to_none=True)
-        predictions = self(warmup_states, a_ground_truth)
-        s_mem, s_dist_mem, r_mem, r_dist_mem = predictions[:4]
-        macro_s_prior_mem, macro_s_posterior_mem = predictions[4:6]
-        macro_r_mem = predictions[6]
-        macro_r_prior_mem, macro_r_posterior_mem = predictions[7:]
 
-        rec_s = rec_loss(torch.stack(s_mem, dim=1), s_ground_truth)
-        rec_r = rec_loss(torch.stack(r_mem, dim=1), r_ground_truth)
-        kl = kl_loss(macro_s_prior_mem, macro_s_posterior_mem, macro_r_prior_mem, macro_r_posterior_mem) #* 0.001
-        mr = macro_r_loss(torch.stack(macro_r_mem, dim=1), macro_r_target)
-        loss = rec_s + rec_r + kl + mr
-        loss.backward()
+        losses = self.eval_step(s_ground_truth, a_ground_truth, r_ground_truth, n_warmup)
+        losses['total'].backward()
         optimizer.step()
 
-        return {'total': loss, 'rec_s': rec_s, 'rec_r': rec_r, 'kl': kl, 'macro_r': mr}
+        return losses
 
     def eval_step(self,
                   s_ground_truth: torch.Tensor,
@@ -424,6 +407,9 @@ class MultiscaleDynamicsModel(DynamicsModel):
 
         return compatible, tens_name
 
+    def rollout_n_step(self,
+                       ):
+        pass
 
     def rollout_abstract(self,
                          macro_start_state: torch.Tensor,
