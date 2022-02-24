@@ -57,3 +57,38 @@ class GymEpisodeDriver(Driver):
 
         return mem
 
+
+class GymStepDriver(GymEpisodeDriver):
+
+    def interact(self,
+                 n_steps: int,
+                 progress_bar: bool = False,
+                 **kwargs) -> TrajectoryMemory:
+        mem = TrajectoryMemory()
+
+        step_iter = range(n_steps)
+        if progress_bar:
+            step_iter = tqdm(step_iter, desc='Collecting Samples')
+
+        traj_s, traj_a, traj_r, traj_terminal, s = None, None, None, None, None
+        for i_t in step_iter:
+            if s is None:
+                traj_s, traj_a, traj_r, traj_terminal = [], [], [], []
+                s = self._process_obs(self.env.reset())
+
+            a = self.policy(s)
+            s_, r, terminal, info = self._process_step(self.env.step(a))
+
+            traj_s.append(s)
+            traj_a.append(a)
+            traj_r.append(r)
+            traj_terminal.append(terminal)
+
+            if terminal:
+                s = None
+                traj_s.append(s_)
+                mem.push(np.array(traj_s), np.array(traj_a), np.array(traj_r), np.array(traj_terminal))
+            else:
+                s = s_
+
+        return mem
