@@ -253,20 +253,23 @@ class MultiscaleDynamicsModel(DynamicsModel):
         d_batch, n_steps = actions.shape[:2]
         n_start_states = start_states.shape[1]
 
+        s = torch.zeros(d_batch, self.d_state)
+        h = self.single_step_model.det_mdl.gen_h_placeholder(d_batch)
+        macro_s = torch.zeros(d_batch, self.d_macro_state)
+        macro_a = self.macro_action_model(self._next_single_step_actions(actions, 0))
+        macro_r = torch.zeros(d_batch, self.d_macro_reward)
+        macro_s_next = torch.zeros_like(macro_s)
+
         s_mem, s_dist_mem = [], []
         r_mem, r_dist_mem = [], []
         macro_r_mem = []
         macro_s_prior_mem, macro_s_posterior_mem = [], []
         macro_r_prior_mem, macro_r_posterior_mem = [], []
 
-        s, h, macro_s, macro_a, macro_r, macro_s_next, last_actions = self._gen_placeholders(d_batch)
-
         for t in range(n_steps):
-            # TODO: should this be done at time step 0 already?
-            if t % self.abstract_step_size == 0:  # invoke abstract model every k time steps
-                # preparations
-                last_actions_tens = torch.stack(list(last_actions), dim=1)
-                macro_a = self.macro_action_model(last_actions_tens)  # TODO: think about this model more closely
+            if t % self.abstract_step_size == 0 and t > 0:  # invoke abstract model every k time steps
+                # TODO: think about this model more closely
+                macro_a = self.macro_action_model(self._next_single_step_actions(actions, t))
                 h_flat = self._flatten_h(h)
                 macro_s = macro_s_next  # update current macro state to previously predicted one
 
@@ -285,7 +288,10 @@ class MultiscaleDynamicsModel(DynamicsModel):
                 macro_s_posterior_mem.append(macro_s_next_posterior)
                 macro_r_posterior_mem.append(macro_r_next_posterior)
 
-                h = (torch.zeros_like(h[0]), torch.zeros_like(h[1]))  # prevent memory leakage beyond macro steps
+                # prevent memory leakage beyond macro steps
+                h = (torch.zeros_like(h[0]), torch.zeros_like(h[1]))
+                s = torch.zeros_like(s)
+
 
             if t < n_start_states:  # if still in warmup period, use teacher forcing for states
                 s = start_states[:, t]
@@ -301,8 +307,8 @@ class MultiscaleDynamicsModel(DynamicsModel):
             s_dist_mem.append(s_next_dist)
             r_dist_mem.append(r_next_dist)
             # update action history
-            last_actions.append(a)
-            last_actions.popleft()
+            #next_actions.append(a)
+            #next_actions.popleft()
 
             # set next state to upcoming time step's current state
             s = s_next
@@ -317,6 +323,16 @@ class MultiscaleDynamicsModel(DynamicsModel):
                 macro_r_mem,
                 macro_r_prior_mem,
                 macro_r_posterior_mem)
+
+    def _next_single_step_actions(self, actions: torch.Tensor, t: int):
+        n_steps = actions.shape[1]
+        if t + self.abstract_step_size > n_steps:
+            diff = t + self.abstract_step_size - n_steps
+            next_actions = actions[:, t:]
+            next_actions = torch.concat([next_actions, torch.zeros(actions.shape[0], diff, actions.shape[2])], dim=1)
+        else:
+            next_actions = actions[:, t: t + self.abstract_step_size]
+        return next_actions
 
     def train_step(self,
                    s_ground_truth: torch.Tensor,
@@ -343,6 +359,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
 
         # target macro reward can be pre-computed from the single step rewards
         macro_r_target = MultiscaleDynamicsModel.average_kstep_reward(r_ground_truth, self.abstract_step_size)
+        macro_r_target = macro_r_target[:, 1:]  # exclude first chunk since macro model is inactive there
 
         warmup_states = s_ground_truth[:, :n_warmup, :]
         predictions = self(warmup_states, a_ground_truth)
@@ -453,7 +470,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
     def rollout_abstract(self,
                          macro_start_states: torch.Tensor,
                          macro_actions: torch.Tensor,
-                         return_samples: bool = True):
+                         return_samples: bool = False):
         d_batch, n_steps = macro_actions.shape[:2]
         n_start_states = macro_start_states.shape[1]
 
@@ -482,7 +499,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
                              macro_s: torch.Tensor,
                              macro_a: torch.Tensor,
                              h: Tuple[torch.Tensor, torch.Tensor],
-                             return_samples: bool = True):
+                             return_samples: bool = False):
         h_flat = self._flatten_h(h)
         _, macro_s_next_posterior, macro_r_next_posterior = self.abstract_model(macro_s, macro_a, h_flat)
 
@@ -499,9 +516,9 @@ class MultiscaleDynamicsModel(DynamicsModel):
         macro_a = torch.zeros(d_batch, self.d_macro_action)
         macro_r = torch.zeros(d_batch, self.d_macro_reward)
         macro_s_next = torch.zeros_like(macro_s)
-        last_actions = deque([torch.zeros(d_batch, self.d_action) for _ in range(self.abstract_step_size)])
+        #last_actions = deque([torch.zeros(d_batch, self.d_action) for _ in range(self.abstract_step_size)])
 
-        return s, h, macro_s, macro_a, macro_r, macro_s_next, last_actions
+        return s, h, macro_s, macro_a, macro_r, macro_s_next #, last_actions
 
     def _flatten_h(self, h: Tuple[torch.Tensor, torch.Tensor]):
         h = torch.concat(h, dim=0)  # concat h and c tensors of LSTM along the layer dimension, this is arbitrary
