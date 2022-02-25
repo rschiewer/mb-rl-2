@@ -22,11 +22,11 @@ if __name__ == '__main__':
     mdl_d_macro_state = 3
     mdl_d_macro_action = 8
     mdl_d_macro_reward = 1
-    mdl_n_abstract_steps = 2
+    mdl_n_abstract_steps = 5
 
-    trainer_d_batch = 128
-    trainer_n_warmup_steps = 3
-    trainer_n_train_steps = 500
+    trainer_d_batch = 256
+    trainer_n_warmup_steps = 1
+    trainer_n_train_steps = 1000
     trainer_n_eval_interval = 10
 
     def collect_policy(observation):
