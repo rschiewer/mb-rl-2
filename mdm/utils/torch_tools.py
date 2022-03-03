@@ -6,12 +6,12 @@ from functools import reduce
 import torch
 
 
+_Placeholder = namedtuple('placeholder', 'device')
+
+
 class Norm(Enum):
     LAYER = 0
     BATCH = 1
-
-
-_Placeholder = namedtuple('placeholder', 'device')
 
 
 class DeviceMixin:
@@ -23,7 +23,7 @@ class DeviceMixin:
         return super(DeviceMixin, cls).__new__(cls)
 
     @property
-    def device(self):
+    def device(self: torch.nn.Module):
         ph = _Placeholder(None)
         first_param = reduce(lambda a, b: a if a.device == b.device else ph, self.parameters())
         if type(first_param) is _Placeholder:
@@ -32,7 +32,7 @@ class DeviceMixin:
         return first_param.device
 
 
-class RecurrentBlock(torch.nn.Module):
+class RecurrentBlock(torch.nn.Module, DeviceMixin):
 
     def __init__(self,
                  *d_inputs: int,
@@ -65,7 +65,7 @@ class RecurrentBlock(torch.nn.Module):
         return torch.zeros(self.n_layers, d_batch, self.d_hidden), torch.zeros(self.n_layers, d_batch, self.d_hidden)
 
 
-class GaussianBlock(torch.nn.Module):
+class GaussianBlock(torch.nn.Module, DeviceMixin):
 
     def __init__(self,
                  *d_inputs: int,
@@ -95,7 +95,7 @@ class GaussianBlock(torch.nn.Module):
         return x_dist
 
 
-class FeedforwardBlock(torch.nn.Module):
+class FeedforwardBlock(torch.nn.Module, DeviceMixin):
 
     def __init__(self,
                  *d_inputs: int,
