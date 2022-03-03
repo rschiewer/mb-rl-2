@@ -62,7 +62,9 @@ class RecurrentBlock(torch.nn.Module, DeviceMixin):
         return x, h
 
     def gen_h_placeholder(self, d_batch: int):
-        return torch.zeros(self.n_layers, d_batch, self.d_hidden), torch.zeros(self.n_layers, d_batch, self.d_hidden)
+        d = self.device
+        return (torch.zeros(self.n_layers, d_batch, self.d_hidden, device=d),
+                torch.zeros(self.n_layers, d_batch, self.d_hidden, device=d))
 
 
 class GaussianBlock(torch.nn.Module, DeviceMixin):
