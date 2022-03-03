@@ -44,6 +44,7 @@ class DynamicsModelTrainer(ABC):
     def train(self,
               n_train_steps: int,
               progress_bar: bool = False):
+        device = self.model.device
 
         step_iter = range(n_train_steps)
         if progress_bar:
@@ -52,7 +53,7 @@ class DynamicsModelTrainer(ABC):
 
         for i_step in step_iter:
             s, a, r, terminal = self.get_batch_train()
-            s, a, r = [torch.from_numpy(x).to(device=self.model.device, dtype=torch.float32) for x in (s, a, r)]
+            s, a, r = [torch.from_numpy(x).to(device=device, dtype=torch.float32) for x in (s, a, r)]
 
             compatible, msg = self.model.input_compatible(s, a, r)
             if not compatible:
@@ -72,7 +73,7 @@ class DynamicsModelTrainer(ABC):
 
             if self.eval_interval is not None and i_step % self.eval_interval == 0:
                 s, a, r, terminal = self.get_batch_test()
-                s, a, r = [torch.from_numpy(x).to(device=self.model.device, dtype=torch.float32) for x in (s, a, r)]
+                s, a, r = [torch.from_numpy(x).to(device=device, dtype=torch.float32) for x in (s, a, r)]
 
                 compatible, msg = self.model.input_compatible(s, a, r)
                 if not compatible:
