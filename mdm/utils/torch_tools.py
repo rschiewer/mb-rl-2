@@ -1,5 +1,7 @@
 from typing import Tuple, Union, Iterable
 from enum import Enum
+from collections import namedtuple
+from functools import reduce
 
 import torch
 
@@ -7,6 +9,27 @@ import torch
 class Norm(Enum):
     LAYER = 0
     BATCH = 1
+
+
+_Placeholder = namedtuple('placeholder', 'device')
+
+
+class DeviceMixin:
+
+    def __new__(cls, *args, **kwargs):
+        if not issubclass(cls, torch.nn.Module):
+            raise RuntimeError(f'The class {cls} can\'t use this mixin, it\'s designed for subclasses of '
+                               f'torch.nn.Module only!')
+        return super(DeviceMixin, cls).__new__(cls)
+
+    @property
+    def device(self):
+        ph = _Placeholder(None)
+        first_param = reduce(lambda a, b: a if a.device == b.device else ph, self.parameters())
+        if type(first_param) is _Placeholder:
+            raise RuntimeError('Model has parameters on multiple devices')
+
+        return first_param.device
 
 
 class RecurrentBlock(torch.nn.Module):

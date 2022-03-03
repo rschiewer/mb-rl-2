@@ -6,22 +6,14 @@ from collections import namedtuple
 import torch
 from torch import device, dtype
 
-Placeholder = namedtuple('placeholder', 'device')
+
+from mdm.utils.torch_tools import DeviceMixin
 
 
-class DynamicsModel(torch.nn.Module, ABC):
+class DynamicsModel(torch.nn.Module, DeviceMixin, ABC):
 
     def __init__(self):
         super(DynamicsModel, self).__init__()
-
-    @property
-    def device(self):
-        ph = Placeholder(None)
-        first_param = reduce(lambda a, b: a if a.device == b.device else ph, self.parameters())
-        if type(first_param) is Placeholder:
-            raise RuntimeError('Model has parameters on multiple devices')
-
-        return first_param.device
 
     @abstractmethod
     def forward(self,
