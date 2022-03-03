@@ -27,7 +27,7 @@ class DeviceMixin:
         ph = _Placeholder(None)
         first_param = reduce(lambda a, b: a if a.device == b.device else ph, self.parameters())
         if type(first_param) is _Placeholder:
-            raise RuntimeError('Model has parameters on multiple devices')
+            raise RuntimeError(f'Model {self} has parameters on multiple devices')
 
         return first_param.device
 
