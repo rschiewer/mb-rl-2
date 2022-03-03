@@ -7,22 +7,30 @@ from mdm.memory.trajectory_memory import TrajectoryMemory
 class OfflineRLDriver(Driver):
 
     def __init__(self,
-                 dataset: Dataset,
-                 batch_size: int,
+                 memory: TrajectoryMemory,
                  shuffle: bool = True):
-        self.dataset = dataset
-        self.batch_size = batch_size
-        self.data_loader = DataLoader(dataset, batch_size, shuffle, num_workers=0)
-        self._data_iter = iter(self.data_loader)
+        self.memory = memory
+        self._i_curr = 0
 
     def interact(self,
                  n_episodes: int,
                  *args,
                  **kwargs) -> TrajectoryMemory:
-        if n_episodes != self.batch_size:
-            raise ValueError(f'Expected n_episodes ({n_episodes}) to equal self.batch_size ({self.batch_size})')
+        i_start = self._i_curr
+        diff = self._i_curr + n_episodes - len(self.memory)
+        if diff > 0:
+            i_end = len(self.memory)
+        else:
+            i_end = self._i_curr + n_episodes
+        sub_memory = self.memory[i_start: i_end]
 
-        batch = next(self._data_iter)
+        self._incr_ptr(n_episodes)
 
-        return TrajectoryMemory(batch)
+        return sub_memory
+
+    def _incr_ptr(self,
+                  step: int):
+        self._i_curr += step
+        if self._i_curr > len(self.memory):
+            self._i_curr = 0
 
