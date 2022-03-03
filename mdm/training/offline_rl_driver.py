@@ -10,7 +10,11 @@ class OfflineRLDriver(Driver):
                  memory: TrajectoryMemory,
                  shuffle: bool = True):
         self.memory = memory
+        self.shuffle = shuffle
         self._i_curr = 0
+
+        if shuffle:
+            self.memory = self.memory.shuffle()
 
     def interact(self,
                  n_episodes: int,
@@ -33,4 +37,6 @@ class OfflineRLDriver(Driver):
         self._i_curr += step
         if self._i_curr > len(self.memory):
             self._i_curr = 0
+            if self.shuffle:
+                self.memory = self.memory.shuffle()
 
