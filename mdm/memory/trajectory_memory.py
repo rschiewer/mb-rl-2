@@ -1,5 +1,6 @@
 from collections import deque
 from typing import Dict, List, Iterable, Sequence, Union
+from copy import copy
 
 import torch
 from torch.utils.data import Dataset
@@ -10,7 +11,7 @@ import numpy as np
 class TrajectoryMemory(Dataset):
 
     def __init__(self, init_mem: List = None):
-        self._mem = deque()
+        self._mem = list()#deque()
         self.shapes = None
         self.dtypes = None
         self.longest_trajectory = 0
@@ -32,10 +33,17 @@ class TrajectoryMemory(Dataset):
                     raise ValueError(f'Expected length of elements is 4, found {len(elem)}')
 
     def __getitem__(self, index) -> T_co:
+        if type(index) is slice:
+            view = self._make_view()
+            view._mem = self._mem[index]
+            return view
         return self._mem[index]
 
     def __len__(self) -> int:
         return len(self._mem)
+
+    def _make_view(self):
+        return copy(self)
 
     def push(self, s, a, r, terminal) -> None:
         if self.shapes is None:
@@ -80,18 +88,6 @@ class TrajectoryMemory(Dataset):
 
         mem = [np.array(data) for data in mem.values()]
         return tuple(mem)
-
-    #@staticmethod
-    #def fuse_batch(s, a, r, terminal):
-    #    batch_size, time_steps = np.shape(a)[:2]  # don't use s to detect number of time steps
-    #    data_shapes = TrajectoryMemory._detect_shapes(s[0], a[0], r[0], terminal[0])
-    #
-    #    # s is one element longer than all other arrays, make them equal
-    #    a = np.concatenate(a, np.zeros((batch_size, 1, *data_shapes[1])), axis=1)
-    #    r = np.concatenate(r, np.zeros((batch_size, 1, *data_shapes[2])), axis=1)
-    #    terminal = np.concatenate(terminal, np.zeros((batch_size, 1, *data_shapes[3])), axis=1)
-    #
-    #    fused = np.stack([s, a, r, terminal], axis=2).reshape((batch_size, time_steps + 1, ))
 
     @staticmethod
     def _detect_dtypes(s, a, r, terminal) -> Dict:

@@ -124,6 +124,27 @@ class TrajectoryMemoryTest(unittest.TestCase):
                     if l_diff > 0:
                         self.assertTrue((np_data[l_orig:] == fill_value).all())
 
+    def test_getitem_slice(self):
+        for t in self.trajectories:
+            self.mem.push(**t)
+
+        # slices produce new TrajectoryMemory objects, indexes do not
+        sub_mem = self.mem[-3:]
+        self.assertEqual(sub_mem.__class__, self.mem.__class__)
+        single_element = self.mem[1]
+        self.assertNotEqual(single_element.__class__, self.mem.__class__)
+
+        # make sure sub_mem and self.mem share the same memory for common elements (i.e. avoid copies)
+        traj_new = self._rand_traj(self.shapes, 10)
+        self.mem[-1]['s'] = traj_new['s']
+        self.assertTrue((sub_mem[-1]['s'] == traj_new['s']).all())
+
+        # make sure sub_mem doesn't change if self.mem does
+        self.assertEqual(sub_mem[-1], self.mem[-1])
+        self.mem.push(**self.trajectories[0])
+        self.assertEqual(sub_mem[-1], self.mem[-2])
+
+
 
 if __name__ == '__main__':
     unittest.main()
