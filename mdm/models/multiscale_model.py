@@ -39,46 +39,6 @@ class old_DeterministicRecurrentModel(torch.nn.Module):
         return x, h
 
 
-def build_single_step_model(d_macro_state: int,
-                            d_macro_action: int,
-                            d_macro_reward: int,
-                            d_state: int,
-                            d_action: int,
-                            d_reward: int,
-                            d_hidden: int,
-                            n_rec_layers: int,
-                            batch_first: bool = True):
-    # the deterministic model receives s, a, marco_s, macro_a, macro_s_next
-    det_mdl = RecurrentBlock(d_state, d_action, d_macro_state, d_macro_action, d_macro_reward, d_macro_state,
-                             d_hidden=d_hidden, n_layers=n_rec_layers, batch_first=batch_first)
-    # the sampling model receives the output of the deterministic model and no additional input
-    sampling_mdl_s = GaussianBlock(d_hidden, lws=(64, d_state))
-    sampling_mdl_r = GaussianBlock(d_hidden, lws=(64, d_reward))
-    single_step_mdl = SingleStepModel(det_mdl, sampling_mdl_s, sampling_mdl_r)
-
-    return single_step_mdl
-
-
-def build_abstract_model(d_macro_state: int,
-                         d_macro_action: int,
-                         d_macro_reward: int,
-                         d_memory: int,
-                         n_memory_layers: int):
-    # final hidden state info from single step model contains h and c of all LSTM layers
-    d_hidden_final = d_memory * 2 * n_memory_layers
-    # assume markovian dynamics at this level of abstraction, so no recurrency
-    det_mdl = FeedforwardBlock(d_macro_state, d_macro_action, d_hidden_final, lws=(64, 64))
-    # the sampling model receives the output of the deterministic model and no additional input
-    s_prior = GaussianBlock(64, lws=(64, d_macro_state))
-    s_posterior = GaussianBlock(64, lws=(64, d_macro_state))
-    r_prior = GaussianBlock(64, lws=(64, d_macro_reward))
-    r_posterior = GaussianBlock(64, lws=(64, d_macro_reward))
-    abstract_model = AbstractModel(det_mdl=det_mdl, sampling_mdl_s_prior=s_prior, sampling_mdl_s_posterior=s_posterior,
-                                   sampling_mdl_r_prior=r_prior, sampling_mdl_r_posterior=r_posterior)
-
-    return abstract_model
-
-
 class MacroActionModel(torch.nn.Module):
 
     def __init__(self,
@@ -526,3 +486,42 @@ class MultiscaleDynamicsModel(DynamicsModel):
         h = torch.flatten(h, start_dim=1)  # fold h/c/layer dimension into d_hidden
         return h
 
+
+def build_single_step_model(d_macro_state: int,
+                            d_macro_action: int,
+                            d_macro_reward: int,
+                            d_state: int,
+                            d_action: int,
+                            d_reward: int,
+                            d_hidden: int,
+                            n_rec_layers: int,
+                            batch_first: bool = True) -> SingleStepModel:
+    # the deterministic model receives s, a, marco_s, macro_a, macro_s_next
+    det_mdl = RecurrentBlock(d_state, d_action, d_macro_state, d_macro_action, d_macro_reward, d_macro_state,
+                             d_hidden=d_hidden, n_layers=n_rec_layers, batch_first=batch_first)
+    # the sampling model receives the output of the deterministic model and no additional input
+    sampling_mdl_s = GaussianBlock(d_hidden, lws=(64, d_state))
+    sampling_mdl_r = GaussianBlock(d_hidden, lws=(64, d_reward))
+    single_step_mdl = SingleStepModel(det_mdl, sampling_mdl_s, sampling_mdl_r)
+
+    return single_step_mdl
+
+
+def build_abstract_model(d_macro_state: int,
+                         d_macro_action: int,
+                         d_macro_reward: int,
+                         d_memory: int,
+                         n_memory_layers: int) -> AbstractModel:
+    # final hidden state info from single step model contains h and c of all LSTM layers
+    d_hidden_final = d_memory * 2 * n_memory_layers
+    # assume markovian dynamics at this level of abstraction, so no recurrency
+    det_mdl = FeedforwardBlock(d_macro_state, d_macro_action, d_hidden_final, lws=(64, 64))
+    # the sampling model receives the output of the deterministic model and no additional input
+    s_prior = GaussianBlock(64, lws=(64, d_macro_state))
+    s_posterior = GaussianBlock(64, lws=(64, d_macro_state))
+    r_prior = GaussianBlock(64, lws=(64, d_macro_reward))
+    r_posterior = GaussianBlock(64, lws=(64, d_macro_reward))
+    abstract_model = AbstractModel(det_mdl=det_mdl, sampling_mdl_s_prior=s_prior, sampling_mdl_s_posterior=s_posterior,
+                                   sampling_mdl_r_prior=r_prior, sampling_mdl_r_posterior=r_posterior)
+
+    return abstract_model
