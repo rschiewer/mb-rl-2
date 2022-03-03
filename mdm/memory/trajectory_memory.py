@@ -1,3 +1,4 @@
+from __future__ import annotations
 from collections import deque
 from typing import Dict, List, Iterable, Sequence, Union
 from copy import copy
@@ -8,7 +9,7 @@ from torch.utils.data.dataset import T_co
 import numpy as np
 
 
-class TrajectoryMemory(Dataset):
+class TrajectoryMemory:
 
     def __init__(self, init_mem: List = None):
         self._mem = list()#deque()
@@ -32,7 +33,7 @@ class TrajectoryMemory(Dataset):
                 except IndexError:
                     raise ValueError(f'Expected length of elements is 4, found {len(elem)}')
 
-    def __getitem__(self, index) -> T_co:
+    def __getitem__(self, index) -> Union[Dict, TrajectoryMemory]:
         if type(index) is slice:
             view = self._make_view()
             view._mem = self._mem[index]
