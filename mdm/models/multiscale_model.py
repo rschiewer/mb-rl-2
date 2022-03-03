@@ -5,7 +5,7 @@ from math import ceil
 import torch
 import torch.nn.functional as F
 
-from mdm.utils.torch_tools import RecurrentBlock, GaussianBlock, FeedforwardBlock, add_time_dim, remove_time_dim
+from mdm.utils.torch_tools import *
 from mdm.models.dynamics_model import DynamicsModel
 
 
@@ -39,7 +39,7 @@ class old_DeterministicRecurrentModel(torch.nn.Module):
         return x, h
 
 
-class MacroActionModel(torch.nn.Module):
+class MacroActionModel(torch.nn.Module, DeviceMixin):
 
     def __init__(self,
                  d_action: int,
@@ -58,7 +58,7 @@ class MacroActionModel(torch.nn.Module):
         return macro_action
 
 
-class MacroRewardModel(torch.nn.Module):
+class MacroRewardModel(torch.nn.Module, DeviceMixin):
 
     def __init__(self,
                  d_reward: int,
@@ -74,7 +74,7 @@ class MacroRewardModel(torch.nn.Module):
         return macro_reward
 
 
-class SingleStepModel(torch.nn.Module):
+class SingleStepModel(torch.nn.Module, DeviceMixin):
 
     def __init__(self,
                  det_mdl: RecurrentBlock,
@@ -105,7 +105,7 @@ class SingleStepModel(torch.nn.Module):
         return sr_next_det, s_next_dist, r_next_dist, h
 
 
-class AbstractModel(torch.nn.Module):
+class AbstractModel(torch.nn.Module, DeviceMixin):
 
     def __init__(self,
                  det_mdl: FeedforwardBlock,
@@ -128,7 +128,7 @@ class AbstractModel(torch.nn.Module):
         if h is None:
             d_batch = macro_s.shape[0]
             d_memory = self.det_mdl.d_inputs[-1]
-            h = torch.zeros(d_batch, d_memory)
+            h = torch.zeros(d_batch, d_memory, device=self.device)
 
             macro_sr_next_det = self.det_mdl(macro_s, macro_a, h)
             macro_s_next_dist = self.sampling_mdl_s_prior(macro_sr_next_det)
@@ -190,12 +190,12 @@ class MultiscaleDynamicsModel(DynamicsModel):
         return l
 
     @staticmethod
-    def average_kstep_reward(rewards: torch.Tensor, k: int):
+    def average_kstep_reward(rewards: torch.Tensor, k: int, device: torch.device):
         d_batch, d_time, d_data = rewards.shape
         n_macro_steps = ceil(d_time / k)
         d_padding = n_macro_steps * k - d_time
 
-        padding = torch.zeros(d_batch, d_padding, d_data)
+        padding = torch.zeros(d_batch, d_padding, d_data, device=device)
         rewards = torch.concat([rewards, padding], dim=1)
 
         avg = []
@@ -212,13 +212,14 @@ class MultiscaleDynamicsModel(DynamicsModel):
                 context: torch.Tensor = None):
         d_batch, n_steps = actions.shape[:2]
         n_start_states = start_states.shape[1]
+        device = self.device
 
-        s = torch.zeros(d_batch, self.d_state)
+        s = torch.zeros(d_batch, self.d_state, device=device)
         h = self.single_step_model.det_mdl.gen_h_placeholder(d_batch)
-        macro_s = torch.zeros(d_batch, self.d_macro_state)
+        macro_s = torch.zeros(d_batch, self.d_macro_state, device=device)
         macro_a = self.macro_action_model(self._next_single_step_actions(actions, 0))
-        macro_r = torch.zeros(d_batch, self.d_macro_reward)
-        macro_s_next = torch.zeros_like(macro_s)
+        macro_r = torch.zeros(d_batch, self.d_macro_reward, device=device)
+        macro_s_next = torch.zeros_like(macro_s, device=device)
 
         s_mem, s_dist_mem = [], []
         r_mem, r_dist_mem = [], []
@@ -249,7 +250,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
                 macro_r_posterior_mem.append(macro_r_next_posterior)
 
                 # prevent memory leakage beyond macro steps
-                h = (torch.zeros_like(h[0]), torch.zeros_like(h[1]))
+                h = (torch.zeros_like(h[0], device=device), torch.zeros_like(h[1], device=device))
                 s = torch.zeros_like(s)
 
 
@@ -318,7 +319,8 @@ class MultiscaleDynamicsModel(DynamicsModel):
         macro_r_loss = MultiscaleDynamicsModel.macro_reward_loss
 
         # target macro reward can be pre-computed from the single step rewards
-        macro_r_target = MultiscaleDynamicsModel.average_kstep_reward(r_ground_truth, self.abstract_step_size)
+        macro_r_target = MultiscaleDynamicsModel.average_kstep_reward(r_ground_truth, self.abstract_step_size,
+                                                                      self.device)
         macro_r_target = macro_r_target[:, 1:]  # exclude first chunk since macro model is inactive there
 
         warmup_states = s_ground_truth[:, :n_warmup, :]
@@ -395,14 +397,15 @@ class MultiscaleDynamicsModel(DynamicsModel):
                             h: Tuple[torch.Tensor, torch.Tensor] = None):
         d_batch, n_steps = actions.shape[:2]
         n_start_states = start_states.shape[1]
+        device = self.device
 
         # prepare necessary placeholders
         s = torch.zeros(d_batch, self.d_state)
         h = self.single_step_model.det_mdl.gen_h_placeholder(d_batch) if h is None else h
-        macro_s = torch.zeros(d_batch, self.d_macro_state) if macro_s is None else macro_s
-        macro_a = torch.zeros(d_batch, self.d_macro_action) if macro_a is None else macro_a
-        macro_r = torch.zeros(d_batch, self.d_macro_reward) if macro_r is None else macro_r
-        macro_s_next = torch.zeros_like(macro_s) if macro_s_next is None else macro_s_next
+        macro_s = torch.zeros(d_batch, self.d_macro_state, device=device) if macro_s is None else macro_s
+        macro_a = torch.zeros(d_batch, self.d_macro_action, device=device) if macro_a is None else macro_a
+        macro_r = torch.zeros(d_batch, self.d_macro_reward, device=device) if macro_r is None else macro_r
+        macro_s_next = torch.zeros_like(macro_s, device=device) if macro_s_next is None else macro_s_next
 
         s_mem, s_dist_mem = [], []
         r_mem, r_dist_mem = [], []
@@ -468,17 +471,6 @@ class MultiscaleDynamicsModel(DynamicsModel):
             macro_r_next_posterior = macro_r_next_posterior.sample()
 
         return macro_s_next_posterior, macro_r_next_posterior
-
-    def _gen_placeholders(self, d_batch: int):
-        s = torch.zeros(d_batch, self.d_state)
-        h = self.single_step_model.det_mdl.gen_h_placeholder(d_batch)
-        macro_s = torch.zeros(d_batch, self.d_macro_state)
-        macro_a = torch.zeros(d_batch, self.d_macro_action)
-        macro_r = torch.zeros(d_batch, self.d_macro_reward)
-        macro_s_next = torch.zeros_like(macro_s)
-        #last_actions = deque([torch.zeros(d_batch, self.d_action) for _ in range(self.abstract_step_size)])
-
-        return s, h, macro_s, macro_a, macro_r, macro_s_next #, last_actions
 
     def _flatten_h(self, h: Tuple[torch.Tensor, torch.Tensor]):
         h = torch.concat(h, dim=0)  # concat h and c tensors of LSTM along the layer dimension, this is arbitrary
