@@ -24,6 +24,8 @@ class DeviceMixin:
 
     @property
     def device(self: torch.nn.Module):
+        #return next(iter(self.parameters())).device  # hack if this turns out to be too much of a bottleneck
+
         ph = _Placeholder(None)
         first_param = reduce(lambda a, b: a if a.device == b.device else ph, self.parameters())
         if type(first_param) is _Placeholder:
