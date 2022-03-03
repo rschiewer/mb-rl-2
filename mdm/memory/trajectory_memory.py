@@ -2,6 +2,7 @@ from __future__ import annotations
 from collections import deque
 from typing import Dict, List, Iterable, Sequence, Union
 from copy import copy
+import random
 
 import torch
 from torch.utils.data import Dataset
@@ -35,7 +36,7 @@ class TrajectoryMemory:
 
     def __getitem__(self, index) -> Union[Dict, TrajectoryMemory]:
         if type(index) is slice:
-            view = self._make_view()
+            view = copy(self)
             view._mem = self._mem[index]
             return view
         return self._mem[index]
@@ -43,8 +44,15 @@ class TrajectoryMemory:
     def __len__(self) -> int:
         return len(self._mem)
 
-    def _make_view(self):
-        return copy(self)
+    def get_view(self) -> TrajectoryMemory:
+        view = copy(self)
+        view._mem = copy(self._mem)
+        return view
+
+    def shuffle(self) -> TrajectoryMemory:
+        view = self.get_view()
+        random.shuffle(view._mem)
+        return view
 
     def push(self, s, a, r, terminal) -> None:
         if self.shapes is None:

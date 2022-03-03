@@ -144,6 +144,41 @@ class TrajectoryMemoryTest(unittest.TestCase):
         self.mem.push(**self.trajectories[0])
         self.assertEqual(sub_mem[-1], self.mem[-2])
 
+    def test_get_view(self):
+        empty_view = self.mem.get_view()
+
+        for t in self.trajectories:
+            self.mem.push(**t)
+
+        full_view = self.mem.get_view()
+
+        self.assertEqual(len(empty_view), 0)
+        self.assertEqual(len(full_view), len(self.mem))
+
+        # make sure sub_mem and self.mem share the same memory for common elements (i.e. avoid copies)
+        traj_new = self._rand_traj(self.shapes, 10)
+        self.mem[-1]['s'] = traj_new['s']
+        self.assertTrue((full_view[-1]['s'] == traj_new['s']).all())
+
+    def test_shuffle(self):
+        for t in self.trajectories:
+            self.mem.push(**t)
+
+        shuffled = self.mem.shuffle()
+
+        indices = list(range(len(self.mem)))
+        shuffle(indices)
+
+        mismatches = 0
+        for i in indices:
+            traj_mem = self.mem[i]
+            traj_orig = self.trajectories[i]
+            traj_shuffled = shuffled[i]
+            equal = all([np.all(lhs == rhs) for lhs, rhs in zip(traj_mem.values(), traj_orig.values())])
+            mismatches += np.sum([lhs.shape[0] != rhs.shape[0]  # trajectory lengths should differ in some cases
+                                  for lhs, rhs in zip(traj_mem.values(), traj_shuffled.values())])
+            self.assertTrue(equal)
+        self.assertNotEqual(mismatches, 0)
 
 
 if __name__ == '__main__':
