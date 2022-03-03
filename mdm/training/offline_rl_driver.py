@@ -10,8 +10,6 @@ class OfflineRLDriver(Driver):
                  dataset: Dataset,
                  batch_size: int,
                  shuffle: bool = True):
-        super(OfflineRLDriver, self).__init__(batch_size)
-
         self.dataset = dataset
         self.batch_size = batch_size
         self.data_loader = DataLoader(dataset, batch_size, shuffle, num_workers=0)
