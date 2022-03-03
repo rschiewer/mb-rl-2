@@ -1,6 +1,7 @@
 from collections import deque
 from typing import Dict, List, Iterable, Sequence, Union
 
+import torch
 from torch.utils.data import Dataset
 from torch.utils.data.dataset import T_co
 import numpy as np
@@ -123,7 +124,21 @@ class TrajectoryMemory(Dataset):
         return lengths['a'] == lengths['r'] and lengths['a'] == lengths['terminal'] and lengths['s'] == lengths['a'] + 1
 
 
-def flatten_and_unsqueeze(s: np.array, a: np.array, r: np.array, terminal: np.array):
+def flatten_and_unsqueeze(*xs: Union[torch.Tensor, np.ndarray]):
+    reshaped = []
+    for x in xs:
+        d_x = np.prod(x.shape[2:]) if len(x.shape) >= 3 else 1
+        reshaped.append(x.reshape((*x.shape[:2], d_x)))
+
+    if len(reshaped) > 1:
+        reshaped = tuple(reshaped)
+    else:
+        reshaped = reshaped[0]
+
+    return reshaped
+
+
+def flatten_and_unsqueeze_old(s: np.array, a: np.array, r: np.array, terminal: np.array):
     # flatten data dimensions if multiple or add explicit 1-sized data dimension if there is none
     d_s = np.prod(s.shape[2:]) if len(s.shape) >= 3 else 1
     d_a = np.prod(a.shape[2:]) if len(a.shape) >= 3 else 1
