@@ -5,8 +5,6 @@ from copy import copy
 import random
 
 import torch
-from torch.utils.data import Dataset
-from torch.utils.data.dataset import T_co
 import numpy as np
 
 
@@ -14,9 +12,9 @@ class TrajectoryMemory:
 
     def __init__(self, init_mem: List = None):
         self._mem = list()#deque()
-        self.shapes = None
-        self.dtypes = None
-        self.longest_trajectory = 0
+        self._shapes = None
+        self._dtypes = None
+        self._longest_trajectory = 0
 
         if init_mem is not None:
             for elem in init_mem:
@@ -34,8 +32,21 @@ class TrajectoryMemory:
                 except IndexError:
                     raise ValueError(f'Expected length of elements is 4, found {len(elem)}')
 
+    @property
+    def shapes(self):
+        return self._shapes
+
+    @property
+    def dtypes(self):
+        return self._dtypes
+
+    @property
+    def longest_trajectory(self):
+        return self._longest_trajectory
+
     def __getitem__(self, index) -> Union[Dict, TrajectoryMemory]:
         if type(index) is slice:
+            # note: this view will inherit the value of self.longest_trajectory even if it contains only shorter ones
             view = copy(self)
             view._mem = self._mem[index]
             return view
@@ -46,7 +57,7 @@ class TrajectoryMemory:
 
     def get_view(self) -> TrajectoryMemory:
         view = copy(self)
-        view._mem = copy(self._mem)
+        view._mem = self._mem[:]
         return view
 
     def shuffle(self) -> TrajectoryMemory:
@@ -55,30 +66,30 @@ class TrajectoryMemory:
         return view
 
     def push(self, s, a, r, terminal) -> None:
-        if self.shapes is None:
-            self.shapes = self._detect_shapes(s, a, r, terminal)
-            self.dtypes = self._detect_dtypes(s, a, r, terminal)
+        if self._shapes is None:
+            self._shapes = self._detect_shapes(s, a, r, terminal)
+            self._dtypes = self._detect_dtypes(s, a, r, terminal)
         else:
             data_shapes = self._detect_shapes(s, a, r, terminal)
             data_lengths = self._detect_lengths(s, a, r, terminal)
             data_dtypes = self._detect_dtypes(s, a, r, terminal)
-            if not self._shapes_match(self.shapes, data_shapes):
-                raise ValueError(f'Input has incompatible shape, expected {self.shapes}, found {data_shapes}')
+            if not self._shapes_match(self._shapes, data_shapes):
+                raise ValueError(f'Input has incompatible shape, expected {self._shapes}, found {data_shapes}')
             if not self._lengths_match(data_lengths):
                 raise ValueError(f'Input has incompatible lengths, expected a, r, terminal to have equal lengths and'
                                  f' s to have on additional element')
-            if not self._dtypes_match(self.dtypes, data_dtypes):
-                raise ValueError(f'Input has different dtypes than previously added content, expected {self.dtypes}, '
+            if not self._dtypes_match(self._dtypes, data_dtypes):
+                raise ValueError(f'Input has different dtypes than previously added content, expected {self._dtypes}, '
                                  f'found {data_dtypes}')
 
-        if len(s) > self.longest_trajectory:
-            self.longest_trajectory = len(s)
+        if len(s) > self._longest_trajectory:
+            self._longest_trajectory = len(s)
 
         self._mem.append({'s': np.array(s), 'a': np.array(a), 'r': np.array(r), 'terminal': np.array(terminal)})
 
     def to_np_arrays(self, padding: float = 0, dtype: Union[np.dtype, Iterable[np.dtype]] = None):
         if dtype is None:
-            dtype = self.dtypes.values()
+            dtype = self._dtypes.values()
         elif isinstance(dtype, Iterable):
             if len(list(dtype)) != 4:
                 raise ValueError(f'If dtype argument is an iterable, expected length is 4, got {len(list(dtype))}')
@@ -89,9 +100,9 @@ class TrajectoryMemory:
         for traj in self._mem:
             for (name, data), dt in zip(traj.items(), dtype):
                 data = data.astype(dt)
-                if len(data) != self.longest_trajectory:
-                    diff = self.longest_trajectory - len(data)
-                    padding_shape = (diff, *self.shapes[name])
+                if len(data) != self._longest_trajectory:
+                    diff = self._longest_trajectory - len(data)
+                    padding_shape = (diff, *self._shapes[name])
                     data = np.concatenate([data, np.full(padding_shape, fill_value=padding, dtype=dt)], axis=0)
                 mem[name].append(data)
 
