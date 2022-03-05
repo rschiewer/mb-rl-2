@@ -2,7 +2,7 @@ from __future__ import annotations
 from collections import deque
 from pathlib import Path
 from typing import Dict, List, Iterable, Sequence, Union
-from copy import copy
+from copy import copy, deepcopy
 import random
 import pickle
 
@@ -45,6 +45,14 @@ class TrajectoryMemory:
     @property
     def longest_trajectory(self):
         return self._longest_trajectory
+
+    def __copy__(self):
+        cls = self.__class__
+        result = cls.__new__(cls)
+        result.__dict__.update(self.__dict__)
+        result._shapes = deepcopy(self._shapes)
+        result._dtypes = deepcopy(self._dtypes)
+        return result
 
     def __getitem__(self, index) -> Union[Dict, TrajectoryMemory]:
         if type(index) is slice:
