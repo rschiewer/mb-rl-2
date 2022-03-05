@@ -1,8 +1,10 @@
 from __future__ import annotations
 from collections import deque
+from pathlib import Path
 from typing import Dict, List, Iterable, Sequence, Union
 from copy import copy
 import random
+import pickle
 
 import torch
 import numpy as np
@@ -108,6 +110,17 @@ class TrajectoryMemory:
 
         mem = [np.array(data) for data in mem.values()]
         return tuple(mem)
+
+    @staticmethod
+    def store(mem: TrajectoryMemory, path: Union[Path, str]):
+        with open(Path(path), 'wb') as f:
+            pickle.dump(mem, f)
+
+    @staticmethod
+    def load(path: Union[Path, str]) -> TrajectoryMemory:
+        with open(Path(path), 'rb') as f:
+            mem = pickle.load(f)
+        return mem
 
     @staticmethod
     def _detect_dtypes(s, a, r, terminal) -> Dict:
