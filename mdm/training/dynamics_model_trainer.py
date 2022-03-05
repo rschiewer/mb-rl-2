@@ -49,7 +49,7 @@ class DynamicsModelTrainer(ABC):
         step_iter = range(n_train_steps)
         if progress_bar:
             step_iter = tqdm(step_iter, desc='Training Progress')
-            last_eval_losses = {'N/A': torch.zeros(0)}
+            last_eval_losses = {'N/A': torch.tensor(0, device=self.model.device)}
 
         for i_step in step_iter:
             s, a, r, terminal = self.get_batch_train()
@@ -89,13 +89,13 @@ class DynamicsModelTrainer(ABC):
                     last_eval_losses = eval_losses
 
     @staticmethod
-    def _update_progressbar_descr(last_eval_losses: Dict[str, torch.Tensor],
+    def _update_progressbar_descr(eval_losses: Dict[str, torch.Tensor],
                                   train_losses: Dict[str, torch.Tensor],
                                   pbar: tqdm):
-        train_losses_stripped = [str(loss.detach().cpu().numpy()) for loss in train_losses.values()]
-        eval_losses_stripped = [str(loss.detach().cpu().numpy()) for loss in last_eval_losses.values()]
-        descr = 'train_losses = ' + ', '.join(train_losses_stripped) + ' | val_losses = ' + \
-                ', '.join(eval_losses_stripped)
+        l_train = [f'{n}: {l.detach().cpu().numpy():2.3e}' for n, l in train_losses.items()]
+        l_eval = [f'{n}: {l.detach().cpu().numpy():2.3e}' for n, l in eval_losses.items()]
+        descr = 'train_losses = ' + ', '.join(l_train) + ' | val_losses = ' + \
+                ', '.join(l_eval)
         pbar.set_description(descr)
 
 
