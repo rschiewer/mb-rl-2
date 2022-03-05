@@ -185,6 +185,18 @@ class MultiscaleDynamicsModel(DynamicsModel):
         return torch.mean(l)
 
     @staticmethod
+    def kl_regularizer(s_priors, r_priors):
+        uniform_gauss = torch.distributions.Normal(loc=torch.zeros_like(s_priors[0].loc),
+                                                   scale=torch.ones_like(s_priors[0].scale))
+        l = 0
+        for s_prior, r_prior in zip(s_priors, r_priors):
+            # regularize prior with kl divergence to unit gaussian (see https://mr-easy.github.io/2020-04-16-kl-divergence-between-2-gaussian-distributions/)
+            l += torch.distributions.kl.kl_divergence(s_prior, uniform_gauss)
+            l += torch.distributions.kl.kl_divergence(r_prior, uniform_gauss)
+        l /= len(s_priors)  # normalize the loss w.r.t. the number of time steps explicitly
+        return torch.mean(l)
+
+    @staticmethod
     def macro_reward_loss(macro_r_pred, macro_r_true):
         l = torch.mean((macro_r_pred - macro_r_true) ** 2)
         return l
@@ -290,7 +302,8 @@ class MultiscaleDynamicsModel(DynamicsModel):
         if t + self.abstract_step_size > n_steps:
             diff = t + self.abstract_step_size - n_steps
             next_actions = actions[:, t:]
-            next_actions = torch.concat([next_actions, torch.zeros(actions.shape[0], diff, actions.shape[2])], dim=1)
+            next_actions = torch.concat([next_actions, torch.zeros(actions.shape[0], diff, actions.shape[2],
+                                                                   device=self.device)], dim=1)
         else:
             next_actions = actions[:, t: t + self.abstract_step_size]
         return next_actions
@@ -316,6 +329,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
                   n_warmup: int = 1) -> Dict:
         rec_loss = MultiscaleDynamicsModel.reconstruction_loss
         kl_loss = MultiscaleDynamicsModel.kl_loss
+        kl_reg = MultiscaleDynamicsModel.kl_regularizer
         macro_r_loss = MultiscaleDynamicsModel.macro_reward_loss
 
         # target macro reward can be pre-computed from the single step rewards
@@ -333,11 +347,12 @@ class MultiscaleDynamicsModel(DynamicsModel):
 
         rec_s = rec_loss(torch.stack(s_mem, dim=1), s_ground_truth)
         rec_r = rec_loss(torch.stack(r_mem, dim=1), r_ground_truth)
-        kl = kl_loss(macro_s_prior_mem, macro_s_posterior_mem, macro_r_prior_mem, macro_r_posterior_mem) #* 0.001
+        kl = kl_loss(macro_s_prior_mem, macro_s_posterior_mem, macro_r_prior_mem, macro_r_posterior_mem)
+        reg = 0.01 * kl_reg(macro_s_prior_mem, macro_r_prior_mem)
         mr = macro_r_loss(torch.stack(macro_r_mem, dim=1), macro_r_target)
-        loss = rec_s + rec_r + kl + mr
+        loss = rec_s + rec_r + kl + reg + mr
 
-        return {'total': loss, 'rec_s': rec_s, 'rec_r': rec_r, 'kl': kl, 'macro_r': mr}
+        return {'total': loss, 'rec_s': rec_s, 'rec_r': rec_r, 'kl': kl, 'kl_reg': reg, 'macro_r': mr}
 
     def input_compatible(self,
                          s_ground_truth: torch.Tensor,
