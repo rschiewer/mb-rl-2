@@ -9,8 +9,10 @@ import numpy as np
 
 def compute_episode_returns(step_rewards: torch.Tensor, gamma: float):
     # in case of multi-dim rewards, sum reward dimension to one scalar
-    if len(step_rewards.shape) > 2 and step_rewards.shape[-1] > 1:
+    if step_rewards.ndim > 2 and step_rewards.shape[-1] > 1:
         step_rewards = step_rewards.sum(dim=(-1))
+    elif step_rewards.ndim == 1:
+        step_rewards = step_rewards.unsqueeze(-1)
     # if gamma is smaller 1 there is some work to do, else use torch builtin sum()
     if gamma < 1:
         d_time = step_rewards.shape[1]
