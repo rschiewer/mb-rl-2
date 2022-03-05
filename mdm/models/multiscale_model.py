@@ -251,7 +251,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
 
                 # prevent memory leakage beyond macro steps
                 h = (torch.zeros_like(h[0], device=device), torch.zeros_like(h[1], device=device))
-                s = torch.zeros_like(s)
+                s = torch.zeros_like(s, device=device)
 
 
             if t < n_start_states:  # if still in warmup period, use teacher forcing for states
