@@ -3,7 +3,7 @@ from enum import Enum
 from typing import Any, Dict
 
 
-class Scope(ABC):
+class Scope(Enum):
     DEFAULT = 0
     TRAIN = 1
     TEST = 2
