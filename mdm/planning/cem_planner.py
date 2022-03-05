@@ -25,13 +25,16 @@ def compute_episode_returns(step_rewards: torch.Tensor, gamma: float):
 class DistributionType(Enum):
     NORMAL = 0
     CATEGORICAL = 1
+    ONE_HOT_CATEGORICAL = 2
 
 
 class CrossentropyPlanner:
 
     def __init__(self,
-                 type: DistributionType = DistributionType.NORMAL):
+                 type: DistributionType = DistributionType.NORMAL,
+                 device: torch.device = 'cpu'):
         self.type = type
+        self.device = device
         if type is DistributionType.NORMAL:
             self._act_dist = torch.distributions.Normal
             self._init_dist = self._init_normal
@@ -53,6 +56,9 @@ class CrossentropyPlanner:
              discount: float,
              act_noise: float = 0,
              init_act_params: Union[torch.Tensor, np.ndarray] = None):
+        if start_states.device != self.device:
+            raise ValueError(f'Expected device for start_states is {self.device} but was {start_states.device}')
+
         d_batch = start_states.shape[0]  # n_batch equals number of rollouts
         n_winners = ceil(d_batch * winning_perc)
         act_dist_params = self._init_params(d_batch, n_plan_steps, d_dist, init_act_params)
@@ -75,8 +81,9 @@ class CrossentropyPlanner:
                      d_batch: int,
                      n_time_steps: int,
                      d_dist: int):
-        mu = 2 * torch.rand(d_batch, n_time_steps, d_dist) - 1
-        sigma = torch.maximum(torch.rand(d_batch, n_time_steps, d_dist), torch.tensor(0.25))
+        mu = 2 * torch.rand(d_batch, n_time_steps, d_dist, device=self.device) - 1
+        sigma = torch.maximum(torch.rand(d_batch, n_time_steps, d_dist, device=self.device),
+                              torch.tensor(0.25, device=self.device))
         return torch.stack([mu, sigma], dim=0)
 
     def _build_normal(self,
@@ -90,7 +97,7 @@ class CrossentropyPlanner:
                        i_winners: torch.Tensor,
                        noise: float):
         winner_actions = actions[i_winners.tolist()]
-        noise = torch.tensor(noise)
+        noise = torch.tensor(noise, device=self.device)
         n_batch = dist_params.shape[1]
         n_winners = winner_actions.shape[0]
 
@@ -103,8 +110,8 @@ class CrossentropyPlanner:
         sigma_ml = torch.tile(sigma_ml, dims=(n_batch, 1, 1))
 
         # add noise to diversify
-        mu_ml_noise = mu_ml + (2 * torch.rand_like(mu_ml) - 1) * noise
-        sigma_ml_noise = sigma_ml + (2 * torch.rand_like(sigma_ml) - 1) * noise
+        mu_ml_noise = mu_ml + (2 * torch.rand_like(mu_ml, device=self.device) - 1) * noise
+        sigma_ml_noise = sigma_ml + (2 * torch.rand_like(sigma_ml, device=self.device) - 1) * noise
         sigma_ml_noise = torch.where(sigma_ml_noise <= 0, sigma_ml, sigma_ml_noise)  # don't accidentally make sigma < 0
 
         return torch.stack([mu_ml_noise, sigma_ml_noise], dim=0)
@@ -113,7 +120,7 @@ class CrossentropyPlanner:
                           d_batch: int,
                           n_time_steps: int,
                           d_dist: int):
-        params = torch.rand(d_batch, n_time_steps, d_dist)
+        params = torch.rand(d_batch, n_time_steps, d_dist, device=self.device)
         params /= params.sum(dim=-1, keepdim=True)
         return params
 
@@ -127,7 +134,7 @@ class CrossentropyPlanner:
                             i_winners: torch.Tensor,
                             noise: float):
         winner_actions = actions[i_winners.tolist()]
-        noise = torch.tensor(noise)
+        noise = torch.tensor(noise, device=self.device)
         n_batch = dist_params.shape[0]
         n_actions = dist_params.shape[-1]
 
@@ -136,7 +143,7 @@ class CrossentropyPlanner:
         dist_params = torch.tile(dist_params, dims=(n_batch, 1, 1))  # this copies the list to all batch indices
         #dist_params[dist_params.shape[0] // 2 :] = torch.rand_like(dist_params[dist_params.shape[0] // 2:])
         # add noise to diversify
-        dist_params = dist_params + (2 * torch.rand_like(dist_params) - 1) * noise
+        dist_params = dist_params + (2 * torch.rand_like(dist_params, device=self.device) - 1) * noise
         dist_params = torch.clamp(dist_params, torch.tensor(0.0), torch.tensor(1.0))
         dist_params /= dist_params.sum(dim=-1, keepdim=True)
         return dist_params
@@ -153,7 +160,7 @@ class CrossentropyPlanner:
             #    raise ValueError(f'Initial action parameters argument shape mismatch, found: {init_act_params.shape}, '
             #                     f'expected: {(d_batch, n_time_steps, d_dist)}')
             if isinstance(init_act_params, np.ndarray):
-                act_params = torch.from_numpy(init_act_params)
+                act_params = torch.from_numpy(init_act_params).to(self.device)
             else:
-                act_params = init_act_params
+                act_params = init_act_params.to(self.device)
         return act_params
