@@ -45,11 +45,14 @@ class DynamicsModelTrainer(ABC):
               n_train_steps: int,
               progress_bar: bool = False):
         device = self.model.device
-
         step_iter = range(n_train_steps)
+
         if progress_bar:
             step_iter = tqdm(step_iter, desc='Training Progress')
             last_eval_losses = {'N/A': torch.tensor(0, device=self.model.device)}
+
+        if self.logger:
+            self.logger.setup()
 
         for i_step in step_iter:
             s, a, r, terminal = self.get_batch_train()
@@ -64,11 +67,11 @@ class DynamicsModelTrainer(ABC):
             if progress_bar:
                 self._update_progressbar_descr(last_eval_losses, train_losses, step_iter)
 
-            if self.logger is not None:
+            if self.logger:
                 train_losses.update({'r_raw': r, 'r_sum_ep': r.sum(axis=1), 'r_sum': r.sum(), 'r_mean': r.mean()})
                 self.logger.log(train_losses, Scope.TRAIN, i_step)
 
-            if self.scheduler is not None:
+            if self.scheduler:
                 self.scheduler.step()
 
             if self.eval_interval is not None and i_step % self.eval_interval == 0:
@@ -81,12 +84,15 @@ class DynamicsModelTrainer(ABC):
 
                 eval_losses = self.model.eval_step(s, a, r, self.warmup_steps)
 
-                if self.logger is not None:
+                if progress_bar:
+                    last_eval_losses = eval_losses
+
+                if self.logger:
                     eval_losses.update({'r_raw': r, 'r_sum_ep': r.sum(axis=1), 'r_sum': r.sum(), 'r_mean': r.mean()})
                     self.logger.log(eval_losses, Scope.TEST, i_step)
 
-                if progress_bar:
-                    last_eval_losses = eval_losses
+        if self.logger:
+            self.logger.teardown()
 
     @staticmethod
     def _update_progressbar_descr(eval_losses: Dict[str, torch.Tensor],
