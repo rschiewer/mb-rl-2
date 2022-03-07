@@ -153,7 +153,7 @@ class Gridworld(gym.Env):
                 x1, y1 = x0 + self._cell_w, y0 + self._cell_h
                 color = self.colors[self._grid[y, x]]
                 self.canvas.create_rectangle(x0, y0, x1, y1, fill=color)
-                self._tk_master.update()
+        self._tk_master.update()
 
 
     def _get_agent_cell(self):
