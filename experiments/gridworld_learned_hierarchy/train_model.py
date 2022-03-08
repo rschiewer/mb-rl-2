@@ -23,6 +23,8 @@ if __name__ == '__main__':
     mdl_d_macro_state = 3
     mdl_d_macro_action = 8
     mdl_d_macro_reward = 1
+    mdl_d_macro_hidden = 128
+    mdl_n_macro_rec_layers = 2
     mdl_n_abstract_steps = 3
 
     trainer_d_batch = 512
@@ -38,8 +40,8 @@ if __name__ == '__main__':
     # build model
     single_step_mdl = build_single_step_model(mdl_d_macro_state, mdl_d_macro_action, mdl_d_macro_reward, mdl_d_state,
                                               mdl_d_action, mdl_d_reward, mdl_d_hidden, mdl_n_rec_layers)
-    abstract_mdl = build_abstract_model(mdl_d_macro_state, mdl_d_macro_action, mdl_d_macro_reward, mdl_d_hidden,
-                                        mdl_n_rec_layers)
+    abstract_mdl = build_abstract_model(mdl_d_macro_state, mdl_d_macro_action, mdl_d_macro_reward, mdl_d_macro_hidden,
+                                        mdl_n_macro_rec_layers, mdl_d_hidden, mdl_n_rec_layers)
     macro_action_mdl = MacroActionModel(mdl_d_action, mdl_n_abstract_steps, mdl_d_macro_action)
     multiscale_mdl = MultiscaleDynamicsModel(single_step_mdl, abstract_mdl, macro_action_mdl, mdl_n_abstract_steps,
                                              mdl_d_state, mdl_d_action, mdl_d_reward, mdl_d_macro_state,
