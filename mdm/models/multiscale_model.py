@@ -230,7 +230,8 @@ class MultiscaleDynamicsModel(DynamicsModel):
         s = torch.zeros(d_batch, self.d_state, device=device)
         h = self.single_step_model.det_mdl.gen_h_placeholder(d_batch)
         macro_s = torch.zeros(d_batch, self.d_macro_state, device=device)
-        macro_a = self.macro_action_model(self._next_single_step_actions(actions, 0))
+        #macro_a = self.macro_action_model(self._next_single_step_actions(actions, 0))
+        macro_a = torch.zeros(d_batch, self.d_macro_action, device=device)
         macro_r = torch.zeros(d_batch, self.d_macro_reward, device=device)
         macro_s_next = torch.zeros_like(macro_s, device=device)
 
@@ -265,7 +266,6 @@ class MultiscaleDynamicsModel(DynamicsModel):
                 # prevent memory leakage beyond macro steps
                 h = (torch.zeros_like(h[0], device=device), torch.zeros_like(h[1], device=device))
                 s = torch.zeros_like(s, device=device)
-
 
             if t < n_start_states:  # if still in warmup period, use teacher forcing for states
                 s = start_states[:, t]
