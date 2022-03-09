@@ -22,5 +22,5 @@ def add_to_pythonpath(relative_path: str):
 def load_yaml(path: Union[str, Path]):
     path = Path(path)
     with open(path, 'r') as f:
-        config = yaml.load(f)
+        config = yaml.load(f, Loader=yaml.SafeLoader)
     return config
