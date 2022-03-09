@@ -1,20 +1,27 @@
 from abc import ABC, abstractmethod
-from enum import Enum
+import re
 from typing import Any, Dict
 
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 
 
-class Scope(Enum):
-    DEFAULT = 0
-    TRAIN = 1
-    TEST = 2
-    PARAMETERS = 3
-    MISC = 4
+class Scope:
+    DEFAULT = 'default'
+    TRAIN = 'train'
+    TEST = 'test'
+    PARAMETERS = 'parameters'
+    MISC = 'misc'
+    scope_check = re.compile('^[a-zA-Z0-9_/]+$')
+
+    def __init__(self,
+                 description: str):
+        if not self.scope_check.match(description):
+            raise ValueError(f'Provided scope description {description} contains invalid characters.')
+        self._descr = description.lower()
 
     def __str__(self):
-        return self.name.lower()
+        return self._descr
 
 
 class Logger(ABC):
@@ -28,13 +35,22 @@ class Logger(ABC):
         pass
 
     @abstractmethod
-    def log(self, message: Dict[str, Any], scope: Scope, time_step: int = None):
+    def log(self,
+            message: Dict[str, Any],
+            scope: Scope,
+            time_step: int = None):
         pass
 
     @abstractmethod
-    def log_object(self, object: Any, scope: Scope, time_step: int = None):
+    def log_object(self,
+                   object: Any,
+                   scope: Scope,
+                   time_step: int = None):
         pass
 
     @abstractmethod
-    def log_plot(self, figure: Figure, scope: Scope, time_step: int = None):
+    def log_plot(self,
+                 figure: Figure,
+                 scope: Scope,
+                 time_step: int = None):
         pass
