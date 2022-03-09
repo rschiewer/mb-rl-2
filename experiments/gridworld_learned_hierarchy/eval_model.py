@@ -43,7 +43,6 @@ if __name__ == '__main__':
         macro_r = macro_r.squeeze()
         return macro_r, {'macro_s': macro_s, 'macro_r': macro_r}
 
-
     def init_macro_s(s: torch.Tensor):
         s_batch = torch.tile(s, dims=(pln_d_batch, 1))  # copy same starting observation along batch
         s_batch = s_batch.unsqueeze(1)  # add time dimension of 1

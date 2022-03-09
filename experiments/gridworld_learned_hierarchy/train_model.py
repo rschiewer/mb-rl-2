@@ -27,7 +27,7 @@ if __name__ == '__main__':
 
     trainer_d_batch = 512
     trainer_n_warmup_steps = 1
-    trainer_n_train_steps = 5000
+    trainer_n_train_steps = 8000
     trainer_n_eval_interval = 50
 
     train_mem = TrajectoryMemory.load(here() / 'gridworld_train.samples')
@@ -45,7 +45,7 @@ if __name__ == '__main__':
                                              mdl_d_state, mdl_d_action, mdl_d_reward, mdl_d_macro_state,
                                              mdl_d_macro_action, mdl_d_macro_reward)
     multiscale_mdl = multiscale_mdl.to('cuda')
-    optimizer = torch.optim.Adam(multiscale_mdl.parameters(), lr=0.001, weight_decay=0.0001)
+    optimizer = torch.optim.Adam(multiscale_mdl.parameters(), lr=0.001, weight_decay=0.001)
 
     # train model
     def get_batch_train():
