@@ -28,22 +28,22 @@ if __name__ == '__main__':
     h_mem = []
     c_mem = []
 
-    def _rollout_init_fn(start_states: torch.Tensor, actions: torch.Tensor):
-        start_states = flatten_and_unsqueeze(start_states)
-        start_states = start_states.float() / torch.tensor((env.grid_h - 1, env.grid_w - 1), device=mdl.device)
-        actions = torch.nn.functional.one_hot(actions, num_classes=mdl.d_action)
-        s, s_dist, r, r_dist, h = mdl.rollout_low_level(start_states, actions)
+    def _rollout_init_fn(s_start: torch.Tensor, as_: torch.Tensor):
+        s_start = flatten_and_unsqueeze(s_start)
+        s_start = s_start.float() / torch.tensor((env.grid_h - 1, env.grid_w - 1), device=mdl.device)
+        as_ = torch.nn.functional.one_hot(as_, num_classes=mdl.d_action)
+        s, s_dist, r, r_dist, h = mdl.rollout_low_level(s_start, as_)
         r = r.squeeze()
         return r, {'h': h, 's': s}
 
-    def _rollout_abstract_fn(macro_start_state: torch.Tensor, macro_actions: torch.Tensor):
-        macro_actions = torch.nn.functional.one_hot(macro_actions, num_classes=mdl.d_hl_action)
+    def _rollout_abstract_fn(hl_s_start: torch.Tensor, hl_a: torch.Tensor):
+        hl_a = torch.nn.functional.one_hot(hl_a, num_classes=mdl.d_hl_action)
         # TODO: put in hl_h from init_macro_s() function
-        macro_s_prior, macro_r_prior, h_ms = mdl.rollout_high_level(macro_start_state, macro_actions)
-        macro_s = torch.stack([s.sample() for s in macro_s_prior], dim=1)
-        macro_r = torch.stack([r.sample() for r in macro_r_prior], dim=1)
-        macro_r = macro_r.squeeze()
-        return macro_r, {'hl_s': macro_s, 'hl_r': macro_r, 'hl_h': h_ms}
+        hl_s_prior, hl_r_prior, hl_h = mdl.rollout_high_level(hl_s_start, hl_a)
+        hl_s = torch.stack([s.sample() for s in hl_s_prior], dim=1)
+        hl_r = torch.stack([r.sample() for r in hl_r_prior], dim=1)
+        hl_r = hl_r.squeeze()
+        return hl_r, {'hl_s': hl_s, 'hl_r': hl_r, 'hl_h': hl_h}
 
 
     def init_macro_s(s: torch.Tensor):
@@ -62,11 +62,11 @@ if __name__ == '__main__':
         best_a = torch.nn.functional.one_hot(actions[i_best], num_classes=mdl.d_action).float()
         best_s = rollout_data['s'][i_best]
         zero_hl_s = torch.zeros(1, mdl.d_hl_state, device=mdl.device)
-        hl_h = mdl.abstract_model.det_mdl.gen_h_placeholder(1)
+        #hl_h = mdl.abstract_model.det_mdl.gen_h_placeholder(1)
         hl_a = mdl.macro_action_model(best_a.unsqueeze(0))
-        macro_s_next_posterior, macro_r_posterior, hl_h = mdl.hl_next_posterior(zero_hl_s, hl_a, hl_h,
-                                                                                best_ll_h, return_samples=True)
-        return macro_s_next_posterior, hl_a, macro_r_posterior, hl_h, best_a, best_s
+        hl_s_next_posterior, hl_r_posterior, hl_h = mdl.hl_next_posterior(zero_hl_s, hl_a, best_ll_h, None,
+                                                                                return_samples=True)
+        return hl_s_next_posterior, hl_a, hl_r_posterior, hl_h, best_a, best_s
 
     def plan_section(s: torch.Tensor, hl_s: torch.Tensor, hl_a: torch.Tensor, hl_r: torch.Tensor,
                      hl_s_next: torch.Tensor, hl_h: Tuple[torch.Tensor, torch.Tensor]):
@@ -87,13 +87,12 @@ if __name__ == '__main__':
                                                                hl_r_batch, hl_s_next_batch)
             h_mem.append(ll_h[0].detach().cpu().numpy())
             c_mem.append(ll_h[1].detach().cpu().numpy())
-            theoretical_macro_s_next, theoretical_macro_r, hl_h_ = mdl.hl_next_posterior(hl_s_batch, hl_a_batch,
-                                                                                         hl_h_batch, ll_h,
-                                                                                         return_samples=True)
+            potential_hl_s_next, potential_hl_r, hl_h_ = mdl.hl_next_posterior(hl_s_batch, hl_a_batch, ll_h,
+                                                                               hl_h_batch, return_samples=True)
             #overlap = [torch.distributions.kl_divergence(t_macro_s, macro_s)
-            #           for t_macro_s, macro_s in zip(theoretical_macro_s_next, hl_s_next_batch)]
+            #           for t_macro_s, macro_s in zip(potential_hl_s_next, hl_s_next_batch)]
             #overlap = -torch.stack(overlap).sum()
-            overlap = - torch.sum(torch.abs(theoretical_macro_s_next - hl_s_next_batch), dim=1, keepdim=True)
+            overlap = - torch.sum(torch.abs(potential_hl_s_next - hl_s_next_batch), dim=1, keepdim=True)
             return overlap, {'r': r, 'll_h': ll_h, 's': s}
 
         actions, act_dist, i_winners, rollout_data = planner.plan(rollout_fn=_rollout_detailed_fn,
@@ -144,7 +143,7 @@ if __name__ == '__main__':
 
         # act out the details
         for t in range(pln_n_abstract_steps):
-            s = ss[-1]
+            s = torch.zeros_like(ss[-1])
             new_ss, new_as = plan_section(s, macro_s_traj[t], macro_a_traj[t], macro_r_traj[t], macro_s_traj[t+1],
                                           macro_model_h[t].unbind())
             actions = torch.concat([as_, new_as], dim=0)
