@@ -49,7 +49,7 @@ if __name__ == '__main__':
                                              mdl_d_state, mdl_d_action, mdl_d_reward, mdl_d_macro_state,
                                              mdl_d_macro_action, mdl_d_macro_reward)
     multiscale_mdl = multiscale_mdl.to('cuda')
-    optimizer = torch.optim.Adam(multiscale_mdl.parameters(), lr=0.001, weight_decay=0.0001)
+    optimizer = torch.optim.Adam(multiscale_mdl.parameters(), lr=0.0001, weight_decay=0.001)
 
     # train model
     def get_batch_train():
