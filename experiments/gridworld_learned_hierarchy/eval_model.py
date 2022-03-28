@@ -4,7 +4,6 @@ from tqdm import tqdm
 
 from mdm.gridworld.gridworld import Gridworld
 from mdm.models.multiscale_model import MultiscaleDynamicsModel
-from mdm.training.gym_driver import GymStepDriver
 from mdm.planning.cem_planner import CrossentropyPlanner, DistributionType
 from mdm.utils.utils import here
 from mdm.memory.trajectory_memory import flatten_and_unsqueeze
@@ -15,9 +14,9 @@ if __name__ == '__main__':
     mdl: MultiscaleDynamicsModel = torch.load(here() / 'model.ptmdl')
     planner = CrossentropyPlanner(DistributionType.CATEGORICAL, device=mdl.device)
 
-    n_episodes = 30
+    n_episodes = 10
 
-    pln_d_batch = 512
+    pln_d_batch = 2048
     pln_n_optim_steps = 10
     pln_winning_perc = 0.1
     pln_discount = 1.0
@@ -137,14 +136,16 @@ if __name__ == '__main__':
         # act out the details
         actions = as_
         for t in range(pln_n_abstract_steps):
-            s = ss[-1]
+            s = torch.zeros_like(ss[-1])
             new_ss, new_as = plan_section(s, macro_s_traj[t], macro_a_traj[t], macro_r_traj[t], macro_s_traj[t+1])
             actions = torch.concat([actions, new_as], dim=0)
 
         action_iter = iter(actions.detach().cpu().numpy())
         terminal = False
+
         while not terminal:
             env.render()
+            #video.write(np.random.randint(0, 255, (500, 500, 3), np.uint8))
             try:
                 a_one_hot = next(action_iter)
                 a = np.argmax(a_one_hot, axis=-1)
@@ -160,9 +161,9 @@ if __name__ == '__main__':
     print(succeeded/n_episodes)
     print(action_stats)
 
-    h_mem = np.stack(h_mem, axis=0).reshape((len(h_mem), -1))
-    c_mem = np.stack(c_mem, axis=0).reshape((len(c_mem), -1))
+    #h_mem = np.stack(h_mem, axis=0).reshape((len(h_mem), -1))
+    #c_mem = np.stack(c_mem, axis=0).reshape((len(c_mem), -1))
 
-    print(np.std(h_mem, axis=0))
-    print(np.std(c_mem, axis=0))
+    #print(np.std(h_mem, axis=0))
+    #print(np.std(c_mem, axis=0))
 
