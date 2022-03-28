@@ -1,7 +1,7 @@
 from pathlib import Path
 from enum import IntEnum
 from typing import Union, Iterable
-from tkinter import Canvas, Tk
+from tkinter import Canvas, Tk, Toplevel
 
 import gym
 import numpy as np
@@ -142,10 +142,11 @@ class Gridworld(gym.Env):
     def render(self, mode="human"):
         if self.canvas is None:
             self._tk_master = Tk()
-            self._canvas_h, self._canvas_w = 300, 300
-            self._cell_h, self._cell_w = round(self._canvas_h / self.grid_h), round(self._canvas_w / self.grid_w)
+            self._canvas_h, self._canvas_w = 400, 400
             self.canvas = Canvas(self._tk_master, width=self._canvas_w, height=self._canvas_h)
-            self.canvas.pack()
+            self.canvas.pack(fill='both', expand=True)
+
+        self._cell_h, self._cell_w = round(self._canvas_h / self.grid_h), round(self._canvas_w / self.grid_w)
 
         for y in range(self.grid_h):
             for x in range(self.grid_w):
@@ -155,9 +156,47 @@ class Gridworld(gym.Env):
                 self.canvas.create_rectangle(x0, y0, x1, y1, fill=color)
         self._tk_master.update()
 
+    def render_alternative(self, mode="human"):
+        if self.canvas is None:
+            self._tk_master = Tk()
+            self._canvas_h, self._canvas_w = 400, 400
+            self.canvas = GridworldGUI(self._tk_master, 400, 400)
+
+        self.canvas.draw(self._grid)
 
     def _get_agent_cell(self):
         agent_pos = np.argwhere(self._grid == CellType.AGENT).squeeze()
         if agent_pos.shape != (2,):
             raise RuntimeError('No agent found in gridworld, please add agent to grid before calling step()')
         return agent_pos
+
+
+class GridworldGUI(Toplevel):
+
+    colors = {
+        CellType.AGENT: '#00FF00',
+        CellType.REWARD: '#FF0000',
+        CellType.FREE: '#FFFFFF',
+        CellType.WALL: '#505050'
+    }
+
+    def __init__(self, master, width, height):
+        Toplevel.__init__(self, master)
+        self.title('Gridworld')
+        self.resizable(True, True)
+        self.geometry(f'{width}x{height}')
+        self.canvas = Canvas(self, width=width, height=height)
+        self.canvas.pack(fill='both', expand=True)
+
+    def callback(self): pass
+
+    def draw(self, grid: np.ndarray):
+        grid_h, grid_w = grid.shape
+        cell_h, cell_w = round(self.canvas.winfo_height() / grid_h), round(self.canvas.winfo_width() / grid_w)
+        for y in range(grid_h):
+            for x in range(grid_w):
+                x0, y0 = cell_w * x, cell_h * y
+                x1, y1 = x0 + cell_w, y0 + cell_h
+                color = self.colors[grid[y, x]]
+                self.canvas.create_rectangle(x0, y0, x1, y1, fill=color)
+        self.update()

@@ -113,7 +113,7 @@ class GridworldTest(unittest.TestCase):
             self.assertEqual(done, done_target)
             self.assertTrue(world.observation_space.contains(s))
 
-    @unittest.skip
+    #@unittest.skip
     def test_render(self):
         world = self.world
 
