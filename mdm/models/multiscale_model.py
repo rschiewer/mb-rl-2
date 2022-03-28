@@ -350,7 +350,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
         rec_s = rec_loss(torch.stack(s_mem, dim=1), s_ground_truth)
         rec_r = rec_loss(torch.stack(r_mem, dim=1), r_ground_truth)
         kl = kl_loss(macro_s_prior_mem, macro_s_posterior_mem, macro_r_prior_mem, macro_r_posterior_mem)
-        reg = 0.0001 * kl_reg(macro_s_prior_mem, macro_r_prior_mem)
+        reg = 0.01 * kl_reg(macro_s_prior_mem, macro_r_prior_mem)
         mr = macro_r_loss(torch.stack(macro_r_mem, dim=1), macro_r_target)
         loss = rec_s + rec_r + kl + reg + mr
 
