@@ -152,7 +152,7 @@ if __name__ == '__main__':
                 s_, r, terminal, info = env.step(a)
                 s = s_
                 action_stats[a] += 1
-                if terminal:
+                if terminal and r > 0:
                     succeeded += 1
             except StopIteration:
                 break
