@@ -9,11 +9,13 @@ from mdm.training.offline_rl_driver import OfflineRLDriver
 from mdm.memory.trajectory_memory import TrajectoryMemory
 from mdm.models.multiscale_model import *
 from mdm.gridworld.gridworld import Gridworld
-from mdm.utils.utils import here
+from mdm.utils.utils import here, load_yaml
+from mdm.logging.NeptuneLogger import NeptuneLogger
 
 
 if __name__ == '__main__':
     env = Gridworld.from_cleartext(here() / '../../mdm/gridworld/8x8_v0.mapdata')
+    neptune_cfg = load_yaml(here() / '../neptune_settings.yaml')
 
     mdl_d_state = env.observation_space.shape[0]
     mdl_d_action = env.action_space.n
@@ -62,8 +64,9 @@ if __name__ == '__main__':
         a = np_one_hot(a.astype(np.int64), n_categories=mdl_d_action)
         return s, a, r, terminal
 
+    neptune_logger = NeptuneLogger(neptune_cfg['PROJECT_NAME'], api_token=neptune_cfg['NEPTUNE_API_TOKEN'])
     trainer = DynamicsModelTrainer(multiscale_mdl, optimizer, get_batch_train, get_batch_test, trainer_n_warmup_steps,
-                                   trainer_n_eval_interval)
+                                   trainer_n_eval_interval, logger=neptune_logger)
 
     trainer.train(trainer_n_train_steps, progress_bar=True)
 
