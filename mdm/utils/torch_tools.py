@@ -94,6 +94,7 @@ class GaussianBlock(torch.nn.Module, DeviceMixin):
 
         mu, logvar = torch.tensor_split(x, 2, dim=-1)
         std = logvar.exp().pow(0.5) + 1e-5
+        #std = torch.log(1 + logvar.exp()) + 0.01
         x_dist = torch.distributions.Normal(mu, std)
 
         return x_dist
