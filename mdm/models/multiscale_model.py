@@ -183,7 +183,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
             fixed_r_post = torch.distributions.Normal(loc=r_posterior.loc.detach(), scale=r_posterior.scale.detach())
             l += torch.distributions.kl.kl_divergence(fixed_s_post, s_prior)
             l += torch.distributions.kl.kl_divergence(fixed_r_post, r_prior)
-        l /= len(s_priors)  # normalize the loss w.r.t. the number of time steps explicitly
+        #l /= len(s_priors)  # normalize the loss w.r.t. the number of time steps explicitly
         return torch.mean(l)
 
     @staticmethod
@@ -194,7 +194,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
         for s_prior, r_prior in zip(s_priors, r_priors):
             l += torch.distributions.kl.kl_divergence(s_prior, uniform_gauss)
             l += torch.distributions.kl.kl_divergence(r_prior, uniform_gauss)
-        l /= len(s_priors)  # normalize the loss w.r.t. the number of time steps explicitly
+        #l /= (len(s_priors) * len(s_priors[0].loc[-1]))  # normalize the loss
         return torch.mean(l)
 
     @staticmethod
@@ -320,6 +320,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
 
         losses = self.eval_step(s_ground_truth, a_ground_truth, r_ground_truth, n_warmup)
         losses['total'].backward()
+        torch.nn.utils.clip_grad_value_(self.parameters(), 1.0)
         optimizer.step()
 
         return losses
@@ -350,7 +351,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
         rec_s = rec_loss(torch.stack(s_mem, dim=1), s_ground_truth)
         rec_r = rec_loss(torch.stack(r_mem, dim=1), r_ground_truth)
         kl = kl_loss(macro_s_prior_mem, macro_s_posterior_mem, macro_r_prior_mem, macro_r_posterior_mem)
-        reg = 0.01 * kl_reg(macro_s_prior_mem, macro_r_prior_mem)
+        reg = 0.001 * kl_reg(macro_s_prior_mem, macro_r_prior_mem)
         mr = macro_r_loss(torch.stack(macro_r_mem, dim=1), macro_r_target)
         loss = rec_s + rec_r + kl + reg + mr
 
