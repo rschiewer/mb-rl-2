@@ -6,6 +6,7 @@ from mdm.gridworld.gridworld import Gridworld
 from mdm.models.multiscale_model import MultiscaleDynamicsModel
 from mdm.planning.cem_planner import CrossentropyPlanner, DistributionType
 from mdm.utils.utils import here
+from mdm.utils.torch_tools import extract_sub_distribution
 from mdm.memory.trajectory_memory import flatten_and_unsqueeze
 
 
@@ -37,10 +38,9 @@ if __name__ == '__main__':
     def _rollout_abstract_fn(macro_start_state: torch.Tensor, macro_actions: torch.Tensor):
         macro_actions = torch.nn.functional.one_hot(macro_actions, num_classes=mdl.d_macro_action)
         macro_s_prior, macro_r_prior = mdl.rollout_abstract(macro_start_state, macro_actions)
-        macro_s = torch.stack([s.sample() for s in macro_s_prior], dim=1)
-        macro_r = torch.stack([r.sample() for r in macro_r_prior], dim=1)
-        macro_r = macro_r.squeeze()
-        return macro_r, {'macro_s': macro_s, 'macro_r': macro_r}
+        macro_r_samples = torch.stack([r.sample() for r in macro_r_prior], dim=1)
+        macro_r_samples = macro_r_samples.squeeze()
+        return macro_r_samples, {'macro_s': macro_s_prior, 'macro_r': macro_r_prior}
 
     def init_macro_s(s: torch.Tensor):
         s_batch = torch.tile(s, dims=(pln_d_batch, 1))  # copy same starting observation along batch
@@ -60,18 +60,18 @@ if __name__ == '__main__':
         zero_macro_s = torch.zeros(1, mdl.d_macro_state, device=mdl.device)
         macro_a = mdl.macro_action_model(best_a.unsqueeze(0))
         macro_s_next_posterior, macro_r_posterior = mdl.macro_next_posterior(zero_macro_s, macro_a, best_h,
-                                                                             return_samples=True)
+                                                                             return_samples=False)
 
         return macro_s_next_posterior, macro_a, macro_r_posterior, best_a, best_s
 
-    def plan_section(s: torch.Tensor, macro_s: torch.Tensor, macro_a: torch.Tensor, macro_r: torch.Tensor,
-                     macro_s_next: torch.Tensor):
+    def plan_section(s: torch.Tensor, macro_s: torch.distributions.Distribution, macro_a: torch.Tensor,
+                     macro_r: torch.distributions.Distribution, macro_s_next: torch.distributions.Distribution):
         s_batch = torch.tile(s, dims=(pln_d_batch, 1))  # copy same starting observation along batch
         s_batch = s_batch.unsqueeze(1)  # add time dimension of 1
-        macro_s_batch = torch.tile(macro_s, dims=(pln_d_batch, 1))
+        macro_s_batch = macro_s.sample(sample_shape=(pln_d_batch,))
         macro_a_batch = torch.tile(macro_a, dims=(pln_d_batch, 1))
-        macro_r_batch = torch.tile(macro_r, dims=(pln_d_batch, 1))
-        macro_s_next_batch = torch.tile(macro_s_next, dims=(pln_d_batch, 1))
+        macro_r_batch = macro_r.sample(sample_shape=(pln_d_batch,))
+        macro_s_next_batch = macro_s_next.sample(sample_shape=(pln_d_batch,))
 
         # use closure to bind macro_x arguments inside the function to the above defined ones
         def _rollout_detailed_fn(start_states: torch.Tensor, actions: torch.Tensor):
@@ -80,14 +80,11 @@ if __name__ == '__main__':
             actions = torch.nn.functional.one_hot(actions, num_classes=mdl.d_action)
             s, s_dist, r, r_dist, h = mdl.rollout_single_step(start_states, actions, macro_s_batch, macro_a_batch,
                                                               macro_r_batch, macro_s_next_batch)
-            h_mem.append(h[0].detach().cpu().numpy())
-            c_mem.append(h[1].detach().cpu().numpy())
             theoretical_macro_s_next, theoretical_macro_r = mdl.macro_next_posterior(macro_s_batch, macro_a_batch, h,
-                                                                                     return_samples=True)
-            #overlap = [torch.distributions.kl_divergence(t_macro_s, macro_s)
-            #           for t_macro_s, macro_s in zip(theoretical_macro_s_next, macro_s_next_batch)]
-            #overlap = -torch.stack(overlap).sum()
-            overlap = - torch.sum(torch.abs(theoretical_macro_s_next - macro_s_next_batch), dim=1, keepdim=True)
+                                                                                     return_samples=False)
+            overlap = torch.distributions.kl_divergence(theoretical_macro_s_next,
+                                                        macro_s_next.expand((pln_d_batch, mdl.d_macro_state)))
+            overlap = - overlap.abs().sum(dim=1, keepdim=True)
             return overlap, {'r': r, 'h': h, 's': s}
 
         actions, act_dist, i_winners, rollout_data = planner.plan(rollout_fn=_rollout_detailed_fn,
@@ -111,10 +108,14 @@ if __name__ == '__main__':
     for i_ep in tqdm(range(n_episodes)):
         s = torch.from_numpy(env.reset()).to(mdl.device)
         macro_s_1, macro_a_0, macro_r_0, as_, ss = init_macro_s(s)  # macro_s_0 is always fixed at 0
+        macro_s_1 = extract_sub_distribution(macro_s_1, 0)  # remove time dim
 
         # abstract level rollout
-        macro_s_batch = torch.tile(macro_s_1, dims=(pln_d_batch, 1))  # copy same starting observation along batch
-        macro_s_batch = macro_s_batch.unsqueeze(1)  # add time dimension of 1
+        #macro_s_batch = torch.tile(macro_s_1, dims=(pln_d_batch, 1))  # copy same starting observation along batch
+        #macro_s_batch = macro_s_batch.unsqueeze(1)  # add time dimension of 1
+
+        # time dimension is required
+        macro_s_batch = macro_s_1.sample(sample_shape=(pln_d_batch, 1))
         macro_actions, act_dist, i_winners, rollout_data = planner.plan(rollout_fn=_rollout_abstract_fn,
                                                                         start_states=macro_s_batch,
                                                                         d_dist=mdl.d_macro_action,
@@ -125,11 +126,12 @@ if __name__ == '__main__':
                                                                         act_noise=pln_act_noise)
         i_top_cand = i_winners[0]
         best_macro_as = torch.nn.functional.one_hot(macro_actions[i_top_cand], num_classes=mdl.d_macro_action).float()
-        best_macro_ss = rollout_data['macro_s'][i_top_cand]
-        best_macro_rs = rollout_data['macro_r'][i_top_cand]
+        # extract best performer for each time step
+        best_macro_ss = [extract_sub_distribution(d, i_top_cand) for d in rollout_data['macro_s']]
+        best_macro_rs = [extract_sub_distribution(d, i_top_cand) for d in rollout_data['macro_r']]
 
         # assemble macro trajectories out of initial data and rollout results
-        macro_s_traj = torch.concat([macro_s_1, best_macro_ss], dim=0)
+        macro_s_traj = [macro_s_1] + best_macro_ss
         macro_a_traj = best_macro_as
         macro_r_traj = best_macro_rs
 

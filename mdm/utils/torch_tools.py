@@ -1,4 +1,4 @@
-from typing import Tuple, Union, Iterable
+from typing import Tuple, Union, Iterable, List
 from enum import Enum
 from collections import namedtuple
 from functools import reduce
@@ -94,7 +94,6 @@ class GaussianBlock(torch.nn.Module, DeviceMixin):
 
         mu, logvar = torch.tensor_split(x, 2, dim=-1)
         std = logvar.exp().pow(0.5) + 1e-5
-        #std = torch.log(1 + logvar.exp()) + 0.01
         x_dist = torch.distributions.Normal(mu, std)
 
         return x_dist
@@ -155,3 +154,13 @@ def make_time_constant(*xs: torch.Tensor,
     if len(consts) == 1:
         consts = consts[0]
     return consts
+
+
+def extract_sub_distribution(d: torch.distributions.Distribution, *idx: int):
+    if len(d.batch_shape) < len(idx):
+        raise ValueError(f'Batch size of distribution should be smaller or equal to number of specified indices ',
+                         f'but found {len(d.batch_shape)} and {len(idx)}')
+    if isinstance(d, torch.distributions.Normal):
+        return torch.distributions.Normal(loc=d.loc[idx], scale=d.scale[idx])
+    else:
+        raise ValueError(f'Distribution class not supported: {type(d)}')
