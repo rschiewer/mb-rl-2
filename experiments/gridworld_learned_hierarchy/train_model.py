@@ -10,7 +10,7 @@ from mdm.memory.trajectory_memory import TrajectoryMemory
 from mdm.models.multiscale_model import *
 from mdm.gridworld.gridworld import Gridworld
 from mdm.utils.utils import here, load_yaml
-from mdm.logging.NeptuneLogger import NeptuneLogger
+from mdm.logging.neptune_logger import NeptuneLogger
 
 
 if __name__ == '__main__':
@@ -27,9 +27,9 @@ if __name__ == '__main__':
     mdl_d_macro_reward = 1
     mdl_n_abstract_steps = 3
 
-    trainer_d_batch = 512
+    trainer_d_batch = 2048
     trainer_n_warmup_steps = 1
-    trainer_n_train_steps = 8000
+    trainer_n_train_steps = 4000
     trainer_n_eval_interval = 50
 
     train_mem = TrajectoryMemory.load(here() / 'gridworld_train.samples')
@@ -47,7 +47,7 @@ if __name__ == '__main__':
                                              mdl_d_state, mdl_d_action, mdl_d_reward, mdl_d_macro_state,
                                              mdl_d_macro_action, mdl_d_macro_reward)
     multiscale_mdl = multiscale_mdl.to('cuda')
-    optimizer = torch.optim.Adam(multiscale_mdl.parameters(), lr=0.001, weight_decay=0.001)
+    optimizer = torch.optim.AdamW(multiscale_mdl.parameters(), lr=0.001, weight_decay=0.001)
 
     # train model
     def get_batch_train():
