@@ -93,7 +93,8 @@ class GaussianBlock(torch.nn.Module, DeviceMixin):
         x = self.layer_list[-1](x)  # no activation on last layer
 
         mu, logvar = torch.tensor_split(x, 2, dim=-1)
-        std = logvar.exp().pow(0.5) + 1e-5
+        #std = logvar.exp().pow(0.5) + 1e-5
+        std = torch.log(1 + logvar.exp()) + 1e-5
         x_dist = torch.distributions.Normal(mu, std)
 
         return x_dist
