@@ -150,7 +150,7 @@ class Gridworld(gym.Env):
 
         self._grid.flags.writeable = False
         self._current_ep_time = 0
-        return agent_pos
+        return self.find_cell_type(CellType.AGENT)
 
     def render(self, mode="human"):
         if self.canvas is None:

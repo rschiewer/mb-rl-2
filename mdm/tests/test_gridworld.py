@@ -119,6 +119,7 @@ class GridworldTest(unittest.TestCase):
         for i in range(50):
             world.reset()
             agent_pos = world.find_cell_type(CellType.AGENT)
+            self.assertEqual(agent_pos.shape, (2,))
             self.assertEqual(agent_pos.size, 2)  # only one agent after reset
             self.assertTrue((agent_pos < (world.grid_h, world.grid_w)).all())  # check out of bounds
             self.assertTrue((agent_pos >= 0).all())
@@ -133,6 +134,7 @@ class GridworldTest(unittest.TestCase):
         for i in range(50):
             world.reset()
             agent_pos = world.find_cell_type(CellType.AGENT)
+            self.assertEqual(agent_pos.shape, (2,))
             self.assertEqual(agent_pos.size, 2)  # only one agent after reset
             self.assertTrue((agent_pos < (world.grid_h, world.grid_w)).all())  # check out of bounds
             self.assertTrue((agent_pos >= 0).all())
