@@ -106,7 +106,7 @@ class Gridworld(gym.Env):
 
         self._grid.flags.writeable = True
 
-        pos_agent = self._get_agent_cell()
+        pos_agent = self.find_cell_type(CellType.AGENT)
         dest_pos = pos_agent + self.move_offset[action]
         dest_pos_clipped = np.clip(dest_pos, (0, 0), (self.grid_h - 1, self.grid_w - 1))
         dest_type = self._grid[tuple(dest_pos_clipped)]
@@ -130,14 +130,27 @@ class Gridworld(gym.Env):
         if self._current_ep_time == self.time_limit - 1:
             done = True
 
-        return self._get_agent_cell(), reward, done, info
+        return self.find_cell_type(CellType.AGENT), reward, done, info
 
     def reset(self):
         self._grid.flags.writeable = True
         self._grid[:] = self._init_grid[:]
+
+        agent_pos = self.find_cell_type(CellType.AGENT)
+        if agent_pos.size == 0:  # no start position given, pick free cell at random
+            candidate_positions = self.find_cell_type(CellType.FREE)
+            start_pos = np.random.default_rng().choice(candidate_positions)
+            self._grid[tuple(start_pos)] = CellType.AGENT
+        elif agent_pos.size > 2:  # multiple possible start positions given, pick one
+            candidate_positions = agent_pos
+            for pos in candidate_positions:
+                self._grid[tuple(pos)] = CellType.FREE
+            start_pos = np.random.default_rng().choice(candidate_positions)
+            self._grid[tuple(start_pos)] = CellType.AGENT
+
         self._grid.flags.writeable = False
         self._current_ep_time = 0
-        return self._get_agent_cell()
+        return agent_pos
 
     def render(self, mode="human"):
         if self.canvas is None:
@@ -164,11 +177,10 @@ class Gridworld(gym.Env):
 
         self.canvas.draw(self._grid)
 
-    def _get_agent_cell(self):
-        agent_pos = np.argwhere(self._grid == CellType.AGENT).squeeze()
-        if agent_pos.shape != (2,):
-            raise RuntimeError('No agent found in gridworld, please add agent to grid before calling step()')
-        return agent_pos
+    def find_cell_type(self,
+                       type: CellType) -> np.ndarray:
+        cells = np.argwhere(self._grid == type).squeeze()
+        return cells
 
 
 class GridworldGUI(Toplevel):

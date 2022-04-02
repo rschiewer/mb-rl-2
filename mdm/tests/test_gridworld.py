@@ -5,6 +5,7 @@ from time import sleep
 import numpy as np
 
 from mdm.gridworld.gridworld import Gridworld, CellType
+from mdm.utils.utils import here
 
 
 class GridworldTest(unittest.TestCase):
@@ -108,12 +109,41 @@ class GridworldTest(unittest.TestCase):
 
         for a, r_target, done_target in zip(actions, rewards, dones):
             s, r, done, info = world.step(a)
-            self.assertTrue((s == world._get_agent_cell()).all())
+            self.assertTrue((s == world.find_cell_type(CellType.AGENT)).all())
             self.assertEqual(r, r_target)
             self.assertEqual(done, done_target)
             self.assertTrue(world.observation_space.contains(s))
 
-    #@unittest.skip
+    def test_fully_random_start_pos(self):
+        world = Gridworld.from_cleartext(here() / 'testmap_no_start_pos.mapdata')
+        for i in range(50):
+            world.reset()
+            agent_pos = world.find_cell_type(CellType.AGENT)
+            self.assertEqual(agent_pos.size, 2)  # only one agent after reset
+            self.assertTrue((agent_pos < (world.grid_h, world.grid_w)).all())  # check out of bounds
+            self.assertTrue((agent_pos >= 0).all())
+            self.assertEqual(world.grid[0, 0], CellType.WALL)  # check that no existing entities were overwritten
+            self.assertEqual(world.grid[3, 1], CellType.WALL)
+            self.assertEqual(world.grid[6, 2], CellType.WALL)
+            self.assertEqual(world.grid[7, 7], CellType.WALL)
+            self.assertEqual(world.grid[0, 7], CellType.REWARD)
+
+    def test_multi_start_pos_set(self):
+        world = Gridworld.from_cleartext(here() / 'testmap_multi_start_pos.mapdata')
+        for i in range(50):
+            world.reset()
+            agent_pos = world.find_cell_type(CellType.AGENT)
+            self.assertEqual(agent_pos.size, 2)  # only one agent after reset
+            self.assertTrue((agent_pos < (world.grid_h, world.grid_w)).all())  # check out of bounds
+            self.assertTrue((agent_pos >= 0).all())
+            self.assertEqual(world.grid[0, 0], CellType.WALL)  # check that no existing entities were overwritten
+            self.assertEqual(world.grid[3, 1], CellType.WALL)
+            self.assertEqual(world.grid[6, 2], CellType.WALL)
+            self.assertEqual(world.grid[7, 7], CellType.WALL)
+            self.assertEqual(world.grid[0, 7], CellType.REWARD)
+            self.assertTrue((world.grid[(0, 3, 3, 6), (1, 2, 3, 0)] == CellType.AGENT).any())
+
+    @unittest.skip
     def test_render(self):
         world = self.world
 
