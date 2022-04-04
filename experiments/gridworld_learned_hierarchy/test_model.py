@@ -58,11 +58,12 @@ if __name__ == '__main__':
         best_a = torch.nn.functional.one_hot(actions[i_best], num_classes=mdl.d_action).float()
         best_s = rollout_data['s'][i_best]
         zero_macro_s = torch.zeros(1, mdl.d_macro_state, device=mdl.device)
-        macro_a = mdl.macro_action_model(best_a.unsqueeze(0))
-        macro_s_next_posterior, macro_r_posterior = mdl.macro_next_posterior(zero_macro_s, macro_a, best_h,
+        zero_macro_a = torch.zeros(1, mdl.d_macro_action, device=mdl.device)
+        #macro_a = mdl.macro_action_model(best_a.unsqueeze(0))
+        macro_s_next_posterior, macro_r_posterior = mdl.macro_next_posterior(zero_macro_s, zero_macro_a, best_h,
                                                                              return_samples=False)
 
-        return macro_s_next_posterior, macro_a, macro_r_posterior, best_a, best_s
+        return macro_s_next_posterior, zero_macro_a, macro_r_posterior, best_a, best_s
 
     def plan_section(s: torch.Tensor, macro_s: torch.distributions.Distribution, macro_a: torch.Tensor,
                      macro_r: torch.distributions.Distribution, macro_s_next: torch.distributions.Distribution):
@@ -115,7 +116,9 @@ if __name__ == '__main__':
         #macro_s_batch = macro_s_batch.unsqueeze(1)  # add time dimension of 1
 
         # time dimension is required
-        macro_s_batch = macro_s_1.sample(sample_shape=(pln_d_batch, 1))
+        macro_s_batch = macro_s_1.sample(sample_shape=(pln_d_batch,))
+        #macro_s_batch = torch.tile(macro_s_1.loc, dims=(pln_d_batch, 1))
+        macro_s_batch = macro_s_batch.unsqueeze(1)  # add time dimension of 1
         macro_actions, act_dist, i_winners, rollout_data = planner.plan(rollout_fn=_rollout_abstract_fn,
                                                                         start_states=macro_s_batch,
                                                                         d_dist=mdl.d_macro_action,
