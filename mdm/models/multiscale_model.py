@@ -320,7 +320,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
 
         losses = self.eval_step(s_ground_truth, a_ground_truth, r_ground_truth, n_warmup)
         losses['total'].backward()
-        torch.nn.utils.clip_grad_value_(self.parameters(), 1.0)
+        #torch.nn.utils.clip_grad_value_(self.parameters(), 1.0)
         optimizer.step()
 
         return losses
@@ -348,9 +348,16 @@ class MultiscaleDynamicsModel(DynamicsModel):
         macro_r_mem = predictions[6]
         macro_r_prior_mem, macro_r_posterior_mem = predictions[7:]
 
+        # https://stats.stackexchange.com/questions/332179/how-to-weight-kld-loss-vs-reconstruction-loss-in-variational-auto-encoder
+        # and beta VAE paper for further explanation
+        M = self.abstract_model.sampling_mdl_s_prior.lws[-1] / 2
+        N = self.abstract_model.sampling_mdl_s_prior.lws[0] 
+        beta = 10
+        beta_norm = M / N * beta
+
         rec_s = rec_loss(torch.stack(s_mem, dim=1), s_ground_truth)
         rec_r = rec_loss(torch.stack(r_mem, dim=1), r_ground_truth)
-        kl = kl_loss(macro_s_prior_mem, macro_s_posterior_mem, macro_r_prior_mem, macro_r_posterior_mem)
+        kl = 0.001 * kl_loss(macro_s_prior_mem, macro_s_posterior_mem, macro_r_prior_mem, macro_r_posterior_mem)
         reg = 0.001 * kl_reg(macro_s_prior_mem, macro_r_prior_mem)
         mr = macro_r_loss(torch.stack(macro_r_mem, dim=1), macro_r_target)
         loss = rec_s + rec_r + kl + reg + mr
