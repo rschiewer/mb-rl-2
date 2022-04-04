@@ -5,7 +5,7 @@ from mdm.utils.utils import here
 
 
 if __name__ == '__main__':
-    env = Gridworld.from_cleartext(here() / '../../mdm/gridworld/8x8_v0.mapdata')
+    env = Gridworld.from_cleartext(here() / '../../mdm/gridworld/8x8_v1.mapdata')
     n_episodes_train = 10000
     n_episodes_test = 1000
 
