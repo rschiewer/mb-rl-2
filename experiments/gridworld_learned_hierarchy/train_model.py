@@ -20,16 +20,16 @@ if __name__ == '__main__':
     mdl_d_state = env.observation_space.shape[0]
     mdl_d_action = env.action_space.n
     mdl_d_reward = 1
-    mdl_d_hidden = 128
-    mdl_n_rec_layers = 2
+    mdl_d_hidden = 16
+    mdl_n_rec_layers = 1
     mdl_d_macro_state = 3
     mdl_d_macro_action = 8
     mdl_d_macro_reward = 1
     mdl_n_abstract_steps = 3
 
-    trainer_d_batch = 2048
+    trainer_d_batch = 4096
     trainer_n_warmup_steps = 1
-    trainer_n_train_steps = 4000
+    trainer_n_train_steps = 3000
     trainer_n_eval_interval = 50
 
     train_mem = TrajectoryMemory.load(here() / 'gridworld_train.samples')
@@ -47,7 +47,7 @@ if __name__ == '__main__':
                                              mdl_d_state, mdl_d_action, mdl_d_reward, mdl_d_macro_state,
                                              mdl_d_macro_action, mdl_d_macro_reward)
     multiscale_mdl = multiscale_mdl.to('cuda')
-    optimizer = torch.optim.AdamW(multiscale_mdl.parameters(), lr=0.001, weight_decay=0.001)
+    optimizer = torch.optim.AdamW(multiscale_mdl.parameters(), lr=0.0005, weight_decay=0.01)
 
     # train model
     def get_batch_train():
