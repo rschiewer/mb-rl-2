@@ -1,6 +1,7 @@
 import copy
 import unittest
 from random import shuffle
+from typing import Dict
 
 import numpy as np
 
@@ -10,7 +11,7 @@ from mdm.memory.trajectory_memory import TrajectoryMemory
 class TrajectoryMemoryTest(unittest.TestCase):
 
     @staticmethod
-    def _rand_traj(shapes, t_len, dtype=np.float32):
+    def _rand_traj(shapes, t_len, dtype=np.float32) -> Dict[str, np.ndarray]:
         def _rand_tens(shape, tens_len):
             size = (tens_len, *shape)
             if np.issubdtype(dtype, np.integer):
@@ -191,6 +192,18 @@ class TrajectoryMemoryTest(unittest.TestCase):
                                   for lhs, rhs in zip(traj_mem.values(), traj_shuffled.values())])
             self.assertTrue(equal)
         self.assertNotEqual(mismatches, 0)
+
+    def test_cmp_trajectories(self):
+        for t in self.trajectories:
+            self.mem.push(**t)
+
+        for t_mem, t_orig in zip(self.mem, self.trajectories):
+            self.assertTrue(self.mem.cmp_trajectories(t_mem, t_orig))
+
+        # if accidentally two consecutive trajectories are the same, this fails while the code might sill be ok
+        for i_t, t_mem in enumerate(self.mem[:-1]):
+            t_orig = self.trajectories[i_t + 1]
+            self.assertFalse(self.mem.cmp_trajectories(t_mem, t_orig))
 
 
 if __name__ == '__main__':

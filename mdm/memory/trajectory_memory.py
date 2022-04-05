@@ -120,6 +120,13 @@ class TrajectoryMemory:
         return tuple(mem)
 
     @staticmethod
+    def cmp_trajectories(t1: Dict[str, np.ndarray], t2: Dict[str, np.ndarray]):
+        for k, v in t1.items():
+            if np.all(v != t2[k]):
+                return False
+        return True
+
+    @staticmethod
     def store(mem: TrajectoryMemory, path: Union[Path, str]):
         with open(Path(path), 'wb') as f:
             pickle.dump(mem, f)
