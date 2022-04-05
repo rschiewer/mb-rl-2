@@ -12,7 +12,7 @@ import numpy as np
 
 class TrajectoryMemory:
 
-    def __init__(self, init_mem: List = None):
+    def __init__(self, init_mem: Iterable = None):
         self._mem = list()#deque()
         self._shapes = None
         self._dtypes = None
