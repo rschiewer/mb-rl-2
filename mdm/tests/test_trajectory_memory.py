@@ -205,6 +205,12 @@ class TrajectoryMemoryTest(unittest.TestCase):
             t_orig = self.trajectories[i_t + 1]
             self.assertFalse(self.mem.cmp_trajectories(t_mem, t_orig))
 
+        # test if compare fails of only a subset of trajectory info differs
+        traj = self.mem[0]
+        traj_altered = copy.deepcopy(self.mem[0])
+        traj_altered['s'][0] += 10
+        self.assertFalse(self.mem.cmp_trajectories(traj, traj_altered))
+
 
 if __name__ == '__main__':
     unittest.main()

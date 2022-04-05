@@ -67,7 +67,7 @@ class TrajectoryMemory:
 
     def get_view(self) -> TrajectoryMemory:
         view = copy(self)
-        view._mem = self._mem[:]
+        view._mem = self._mem[:]  # see https://docs.python.org/3/library/copy.html
         return view
 
     def shuffle(self) -> TrajectoryMemory:
@@ -122,7 +122,7 @@ class TrajectoryMemory:
     @staticmethod
     def cmp_trajectories(t1: Dict[str, np.ndarray], t2: Dict[str, np.ndarray]):
         for k, v in t1.items():
-            if np.all(v != t2[k]):
+            if np.any(v != t2[k]):
                 return False
         return True
 
