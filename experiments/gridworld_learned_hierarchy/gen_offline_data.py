@@ -1,20 +1,44 @@
+from math import ceil
+
 from mdm.training.gym_driver import GymEpisodeDriver
 from mdm.memory.trajectory_memory import TrajectoryMemory
 from mdm.gridworld.gridworld import Gridworld
 from mdm.utils.utils import here
 
 
+def remove_duplicates(mem: TrajectoryMemory):
+    uniques = []
+    for curr_traj in mem:
+        unique = True
+        for comp_traj in mem:
+            if curr_traj is comp_traj:
+                continue
+            elif mem.cmp_trajectories(curr_traj, comp_traj):
+                unique = False
+                break
+        if unique:
+            uniques.append(curr_traj)
+    return TrajectoryMemory(uniques)
+
+
 if __name__ == '__main__':
     env = Gridworld.from_cleartext(here() / '../../mdm/gridworld/8x8_v1.mapdata')
-    n_episodes_train = 10000
-    n_episodes_test = 1000
+    n_episodes_train = 50000
+    perc_test = 0.10
 
     def collect_policy(observation):
         return env.action_space.sample()
 
     collect_driver = GymEpisodeDriver(env, collect_policy)
     train_mem = collect_driver.interact(n_episodes_train, True)
-    test_mem = collect_driver.interact(n_episodes_test, True)
+
+    train_mem_cleaned = remove_duplicates(train_mem)
+    print(f'Removed {len(train_mem) - len(train_mem_cleaned)} duplicate trajectories from sample memory.')
+
+    train_mem_cleaned = train_mem_cleaned.shuffle()
+    n_episodes_test = round(len(train_mem_cleaned) * perc_test)
+    train_mem = train_mem_cleaned[n_episodes_test:]
+    test_mem = train_mem_cleaned[:n_episodes_test]
 
     TrajectoryMemory.store(train_mem, here() / 'gridworld_train.samples')
     TrajectoryMemory.store(test_mem, here() / 'gridworld_test.samples')
