@@ -70,7 +70,7 @@ if __name__ == '__main__':
     collect_driver = GymEpisodeDriver(env, collect_policy)
     train_mem = collect_driver.interact(n_episodes_train, True)
 
-    train_mem_cleaned = remove_duplicates_mp(train_mem)
+    train_mem_cleaned = remove_duplicates_mp(train_mem, n_proc=14)
     #train_mem_cleaned_2 = remove_duplicates(train_mem)
     print(f'Removed {len(train_mem) - len(train_mem_cleaned)} duplicate trajectories from sample memory.')
     #print(f'Removed {len(train_mem) - len(train_mem_cleaned_2)} duplicate trajectories from sample memory.')
