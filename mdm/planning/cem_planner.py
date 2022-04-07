@@ -74,6 +74,9 @@ class CrossentropyPlanner:
             disc_ret_sorted = torch.sort(disc_ret, dim=0, descending=True)
             i_winners, R_winners = disc_ret_sorted.indices[:n_winners], disc_ret_sorted.values[:n_winners]
 
+            if i_ev == n_evolution_steps - 1:  # disable action noise for the last update
+                act_noise = 0
+
             # update distribution parameters with MLE parameters of the winner samples
             act_dist_params = self._update_dist(actions, act_dist_params, i_winners, act_noise)
 
