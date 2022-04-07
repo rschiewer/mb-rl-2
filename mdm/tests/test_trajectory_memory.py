@@ -132,6 +132,7 @@ class TrajectoryMemoryTest(unittest.TestCase):
         # slices produce new TrajectoryMemory objects, indexes do not
         sub_mem = self.mem[-3:]
         self.assertEqual(sub_mem.__class__, self.mem.__class__)
+        self.assertEqual(len(sub_mem), 3)
         single_element = self.mem[1]
         self.assertNotEqual(single_element.__class__, self.mem.__class__)
 
