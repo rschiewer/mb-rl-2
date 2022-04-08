@@ -111,7 +111,7 @@ if __name__ == '__main__':
             a_seq_batch = torch.tile(a_seq, dims=(n_evals, 1))  # copy same starting observation along batch
             a_seq_batch = torch.nn.functional.one_hot(a_seq_batch, num_classes=mdl.d_action)
             s, s_dist, r, r_dist, h = mdl.rollout_single_step(s_start_batch, a_seq_batch)
-            seq_histories[seq_descr].append(mdl._flatten_h(h))
+            seq_histories[seq_descr].append(mdl.filter_single_step_model_history(h))
 
     #plot_hidden_state_variation(n_locations, action_sequences, seq_histories, locations)
     plot_hidden_state_distances(n_locations, action_sequences, seq_histories, locations)

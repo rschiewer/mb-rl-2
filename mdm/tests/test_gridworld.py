@@ -1,6 +1,7 @@
 from pathlib import Path
 import unittest
 from time import sleep
+from copy import deepcopy
 
 import numpy as np
 
@@ -144,6 +145,45 @@ class GridworldTest(unittest.TestCase):
             self.assertEqual(world.grid[7, 7], CellType.WALL)
             self.assertEqual(world.grid[0, 7], CellType.REWARD)
             self.assertTrue((world.grid[(0, 3, 3, 6), (1, 2, 3, 0)] == CellType.AGENT).any())
+
+    def test_enact_sequence(self):
+        world = Gridworld.from_cleartext(here() / 'testmap_multi_start_pos.mapdata')
+
+        s_mem, a_mem, r_mem, terminal_mem = [], [], [], []
+
+        s_mem.append(world.reset())
+        done = False
+        while not done:
+            a = world.action_space.sample()
+            s_next, r, done, info = world.step(a)
+
+            s_mem.append(s_next)
+            a_mem.append(a)
+            r_mem.append(r)
+            terminal_mem.append(done)
+
+        # correct sequence
+        world.enact_sequence(s_mem, a_mem, r_mem, terminal_mem, False, 0)
+
+        # wrong sequences
+        for i in range(len(s_mem)):
+            s_mem_cp = deepcopy(s_mem)
+            s_mem_cp[i] = s_mem_cp[i] + 1
+            with self.assertRaises(RuntimeError):
+                world.enact_sequence(s_mem_cp, a_mem, r_mem, terminal_mem, False, 0)
+        # randomly changing action sequences could end up in the trajectory not changing at all
+        # so this is not tested here
+        for i in range(len(r_mem)):
+            r_mem_cp = deepcopy(r_mem)
+            r_mem_cp[i] = r_mem_cp[i] + 1
+            with self.assertRaises(RuntimeError):
+                world.enact_sequence(s_mem, a_mem, r_mem_cp, terminal_mem, False, 0)
+        for i in range(len(terminal_mem)):
+            terminal_mem_cp = deepcopy(terminal_mem)
+            terminal_mem_cp[i] = not terminal_mem_cp[i]
+            with self.assertRaises(RuntimeError):
+                world.enact_sequence(s_mem, a_mem, r_mem, terminal_mem_cp, False, 0)
+
 
     @unittest.skip
     def test_render(self):

@@ -1,7 +1,8 @@
 from pathlib import Path
 from enum import IntEnum
-from typing import Union, Iterable
+from typing import Union, Iterable, Sequence
 from tkinter import Canvas, Tk, Toplevel
+from time import sleep
 
 import gym
 import numpy as np
@@ -168,6 +169,39 @@ class Gridworld(gym.Env):
                 color = self.colors[self._grid[y, x]]
                 self.canvas.create_rectangle(x0, y0, x1, y1, fill=color)
         self._tk_master.update()
+
+    def enact_sequence(self,
+                       states: Sequence,
+                       actions: Sequence,
+                       rewards: Sequence,
+                       terminals: Sequence,
+                       render: bool = True,
+                       t_sleep: int = 0):
+        # place agent at correct starting point
+        self.reset()
+        self._grid.flags.writeable = True
+        self._grid[self._grid == CellType.AGENT] = CellType.FREE
+        self._grid[tuple(states[0])] = CellType.AGENT
+        self._grid.flags.writeable = False
+
+        for i_t, (s_seq, a_seq, r_seq, done_seq) in enumerate(zip(states[1:], actions, rewards, terminals)):
+            if render:
+                self.render()
+            sleep(t_sleep)
+
+            s, r, done, info = self.step(a_seq)
+
+            #print(f'{a_seq}')
+
+            if s[0] != s_seq[0] or s[1] != s_seq[1]:
+                raise RuntimeError(f'State of provided sequence and generated state differ in step {i_t}, '
+                                   f'sequence state: {s_seq}, generated state: {s}.')
+            if r != r_seq:
+                raise RuntimeError(f'Reward of provided sequence and generated reward differ in step {i_t}, '
+                                   f'sequence reward: {r_seq}, generated reward: {r}.')
+            if done != done_seq:
+                raise RuntimeError(f'Terminal flag of provided sequence and generated terminal flag differ in step '
+                                   f'{i_t}, sequence terminal flag: {r_seq}, generated terminal flag: {r}.')
 
     def render_alternative(self, mode="human"):
         if self.canvas is None:
