@@ -115,6 +115,23 @@ class GridworldTest(unittest.TestCase):
             self.assertEqual(done, done_target)
             self.assertTrue(world.observation_space.contains(s))
 
+    def test_step_reward(self):
+        world = self.world
+        world.step_reward = -0.01
+
+        actions = [0, 0, 0, 1, 1]
+        rewards = [-0.01, -0.01, -0.01, -0.01, 0.99]
+        dones = [False, False, False, False, True]
+
+        s = world.observation_space.sample()
+
+        for a, r_target, done_target in zip(actions, rewards, dones):
+            s, r, done, info = world.step(a)
+            self.assertTrue((s == world.find_cell_type(CellType.AGENT)).all())
+            self.assertEqual(r, r_target)
+            self.assertEqual(done, done_target)
+            self.assertTrue(world.observation_space.contains(s))
+
     def test_fully_random_start_pos(self):
         world = Gridworld.from_cleartext(here() / 'testmap_no_start_pos.mapdata')
         for i in range(50):
