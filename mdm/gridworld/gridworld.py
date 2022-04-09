@@ -114,7 +114,7 @@ class Gridworld(gym.Env):
         #print(f'dest_pos: {dest_pos}')
         #print(f'dest_type: {dest_type}')
 
-        reward = 0.0
+        reward = self.step_reward
         done = False
         info = {}
 
@@ -122,7 +122,7 @@ class Gridworld(gym.Env):
             self._grid[tuple(pos_agent)] = CellType.FREE
             self._grid[tuple(dest_pos_clipped)] = CellType.AGENT
         elif dest_type == CellType.REWARD:
-            reward = self.reward
+            reward += self.reward
             done = True
 
         self._grid.flags.writeable = False
@@ -190,8 +190,6 @@ class Gridworld(gym.Env):
             sleep(t_sleep)
 
             s, r, done, info = self.step(a_seq)
-
-            #print(f'{a_seq}')
 
             if s[0] != s_seq[0] or s[1] != s_seq[1]:
                 raise RuntimeError(f'State of provided sequence and generated state differ in step {i_t}, '
