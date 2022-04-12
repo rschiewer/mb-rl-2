@@ -177,7 +177,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
 
     @staticmethod
     def kl_loss(s_priors, s_posteriors, r_priors, r_posteriors):
-        l = 0
+        l = torch.zeros_like(s_priors[0].loc)
         for s_prior, s_posterior, r_prior, r_posterior in zip(s_priors, s_posteriors, r_priors, r_posteriors):
             fixed_s_post = torch.distributions.Normal(loc=s_posterior.loc.detach(), scale=s_posterior.scale.detach())
             fixed_r_post = torch.distributions.Normal(loc=r_posterior.loc.detach(), scale=r_posterior.scale.detach())
@@ -190,7 +190,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
     def kl_regularizer(s_priors, r_priors):
         uniform_gauss = torch.distributions.Normal(loc=torch.zeros_like(s_priors[0].loc, requires_grad=False),
                                                    scale=torch.ones_like(s_priors[0].scale, requires_grad=False))
-        l = 0
+        l = torch.zeros_like(s_priors[0].loc)
         for s_prior, r_prior in zip(s_priors, r_priors):
             l += torch.distributions.kl.kl_divergence(s_prior, uniform_gauss)
             l += torch.distributions.kl.kl_divergence(r_prior, uniform_gauss)
@@ -245,7 +245,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
             if t % self.abstract_step_size == 0 and t > 0:  # invoke abstract model every k time steps
                 # TODO: think about this model more closely
                 macro_a = self.macro_action_model(self._next_single_step_actions(actions, t))
-                h_flat = self._flatten_h(h)
+                h_flat = self.filter_single_step_model_history(h)
                 macro_s = macro_s_next  # update current macro state to previously predicted one
 
                 # invoke models
@@ -357,9 +357,14 @@ class MultiscaleDynamicsModel(DynamicsModel):
 
         rec_s = rec_loss(torch.stack(s_mem, dim=1), s_ground_truth)
         rec_r = rec_loss(torch.stack(r_mem, dim=1), r_ground_truth)
-        kl = 0.001 * kl_loss(macro_s_prior_mem, macro_s_posterior_mem, macro_r_prior_mem, macro_r_posterior_mem)
-        reg = 0.001 * kl_reg(macro_s_prior_mem, macro_r_prior_mem)
-        mr = macro_r_loss(torch.stack(macro_r_mem, dim=1), macro_r_target)
+        if len(macro_s_prior_mem) > 0:
+            kl = 0.01 * kl_loss(macro_s_prior_mem, macro_s_posterior_mem, macro_r_prior_mem, macro_r_posterior_mem)
+            reg = 0.001 * kl_reg(macro_s_posterior_mem, macro_r_posterior_mem)
+            mr = macro_r_loss(torch.stack(macro_r_mem, dim=1), macro_r_target)
+        else:
+            kl = torch.tensor(0)
+            reg = torch.tensor(0)
+            mr = torch.tensor(0)
         loss = rec_s + rec_r + kl + reg + mr
 
         return {'total': loss, 'rec_s': rec_s, 'rec_r': rec_r, 'kl': kl, 'kl_reg': reg, 'macro_r': mr}
@@ -425,7 +430,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
         device = self.device
 
         # prepare necessary placeholders
-        s = torch.zeros(d_batch, self.d_state)
+        s = torch.zeros(d_batch, self.d_state, device=device)
         h = self.single_step_model.det_mdl.gen_h_placeholder(d_batch) if h is None else h
         macro_s = torch.zeros(d_batch, self.d_macro_state, device=device) if macro_s is None else macro_s
         macro_a = torch.zeros(d_batch, self.d_macro_action, device=device) if macro_a is None else macro_a
@@ -440,8 +445,8 @@ class MultiscaleDynamicsModel(DynamicsModel):
             a = actions[:, t]
 
             _, s_next_dist, r_next_dist, h = self.single_step_model(s, a, macro_s, macro_a, macro_r, macro_s_next, h)
-            s_next = s_next_dist.rsample()
-            r_next = r_next_dist.rsample()
+            s_next = s_next_dist.sample()
+            r_next = r_next_dist.sample()
 
             s_mem.append(s_next)
             r_mem.append(r_next)
@@ -457,47 +462,48 @@ class MultiscaleDynamicsModel(DynamicsModel):
 
     def rollout_abstract(self,
                          macro_start_states: torch.Tensor,
-                         macro_actions: torch.Tensor,
-                         return_samples: bool = False):
+                         macro_actions: torch.Tensor):
         d_batch, n_steps = macro_actions.shape[:2]
         n_start_states = macro_start_states.shape[1]
+        device = self.device
 
-        macro_s = None
+        macro_s = torch.zeros(d_batch, self.d_macro_state, device=device)
 
-        macro_s_prior_mem, macro_r_prior_mem = [], []
+        macro_s_prior_mem, macro_s_prior_dist_mem = [], []
+        macro_r_prior_mem, macro_r_prior_dist_mem = [], []
         for t in range(n_steps):
             if t < n_start_states:
                 macro_s = macro_start_states[:, t]
             macro_a = macro_actions[:, t]
 
             _, macro_s_next_prior, macro_r_next_prior = self.abstract_model(macro_s, macro_a)
+            macro_s_next = macro_s_next_prior.sample()
+            macro_r_next = macro_r_next_prior.sample()
 
-            macro_s_prior_mem.append(macro_s_next_prior)
-            macro_r_prior_mem.append(macro_r_next_prior)
+            macro_s_prior_mem.append(macro_s_next)
+            macro_r_prior_mem.append(macro_r_next)
+            macro_s_prior_dist_mem.append(macro_s_next_prior)
+            macro_r_prior_dist_mem.append(macro_r_next_prior)
 
-            macro_s = macro_s_next_prior.rsample()
+            macro_s = macro_s_next
 
-        if return_samples:
-            macro_s_prior_mem = [entry.rsample() for entry in macro_s_prior_mem]
-            macro_r_prior_mem = [entry.rsample() for entry in macro_r_prior_mem]
+        macro_s_prior_mem = torch.stack(macro_s_prior_mem, dim=1)
+        macro_r_prior_mem = torch.stack(macro_r_prior_mem, dim=1)
 
-        return macro_s_prior_mem, macro_r_prior_mem
+        return macro_s_prior_mem, macro_s_prior_dist_mem, macro_r_prior_mem, macro_r_prior_dist_mem
 
     def macro_next_posterior(self,
                              macro_s: torch.Tensor,
                              macro_a: torch.Tensor,
-                             h: Tuple[torch.Tensor, torch.Tensor],
-                             return_samples: bool = False):
-        h_flat = self._flatten_h(h)
-        _, macro_s_next_posterior, macro_r_next_posterior = self.abstract_model(macro_s, macro_a, h_flat)
+                             h: Tuple[torch.Tensor, torch.Tensor]):
+        h_flat = self.filter_single_step_model_history(h)
+        _, macro_s_next_post_dist, macro_r_next_post_dist = self.abstract_model(macro_s, macro_a, h_flat)
+        macro_s_next_post = macro_s_next_post_dist.sample()
+        macro_r_next_post = macro_r_next_post_dist.sample()
 
-        if return_samples:
-            macro_s_next_posterior = macro_s_next_posterior.sample()
-            macro_r_next_posterior = macro_r_next_posterior.sample()
+        return macro_s_next_post, macro_s_next_post_dist, macro_r_next_post, macro_r_next_post_dist
 
-        return macro_s_next_posterior, macro_r_next_posterior
-
-    def _flatten_h(self, h: Tuple[torch.Tensor, torch.Tensor]):
+    def filter_single_step_model_history(self, h: Tuple[torch.Tensor, torch.Tensor]):
         h = torch.concat(h, dim=0)  # concat h and c tensors of LSTM along the layer dimension, this is arbitrary
         h = torch.transpose(h, 0, 1)  # bring batch dimension to front
         h = torch.flatten(h, start_dim=1)  # fold h/c/layer dimension into d_hidden
@@ -512,13 +518,17 @@ def build_single_step_model(d_macro_state: int,
                             d_reward: int,
                             d_hidden: int,
                             n_rec_layers: int,
+                            s_lws: Iterable[int],
+                            r_lws: Iterable[int],
                             batch_first: bool = True) -> SingleStepModel:
     # the deterministic model receives s, a, marco_s, macro_a, macro_s_next
     det_mdl = RecurrentBlock(d_state, d_action, d_macro_state, d_macro_action, d_macro_reward, d_macro_state,
                              d_hidden=d_hidden, n_layers=n_rec_layers, batch_first=batch_first)
     # the sampling model receives the output of the deterministic model and no additional input
-    sampling_mdl_s = GaussianBlock(d_hidden, lws=(64, d_state))
-    sampling_mdl_r = GaussianBlock(d_hidden, lws=(64, d_reward))
+    s_lws = (*s_lws, d_state)
+    r_lws = (*r_lws, d_reward)
+    sampling_mdl_s = GaussianBlock(d_hidden, lws=s_lws)
+    sampling_mdl_r = GaussianBlock(d_hidden, lws=r_lws)
     single_step_mdl = SingleStepModel(det_mdl, sampling_mdl_s, sampling_mdl_r)
 
     return single_step_mdl
@@ -528,16 +538,26 @@ def build_abstract_model(d_macro_state: int,
                          d_macro_action: int,
                          d_macro_reward: int,
                          d_memory: int,
-                         n_memory_layers: int) -> AbstractModel:
+                         n_memory_layers: int,
+                         ff_lws: Iterable[int],
+                         s_prior_lws: Iterable[int],
+                         s_post_lws: Iterable[int],
+                         r_prior_lws: Iterable[int],
+                         r_post_lws: Iterable[int]) -> AbstractModel:
     # final hidden state info from single step model contains h and c of all LSTM layers
     d_hidden_final = d_memory * 2 * n_memory_layers
     # assume markovian dynamics at this level of abstraction, so no recurrency
-    det_mdl = FeedforwardBlock(d_macro_state, d_macro_action, d_hidden_final, lws=(64, 64))
+    ff_lws = tuple(ff_lws)
+    det_mdl = FeedforwardBlock(d_macro_state, d_macro_action, d_hidden_final, lws=ff_lws)
     # the sampling model receives the output of the deterministic model and no additional input
-    s_prior = GaussianBlock(64, lws=(64, d_macro_state))
-    s_posterior = GaussianBlock(64, lws=(64, d_macro_state))
-    r_prior = GaussianBlock(64, lws=(64, d_macro_reward))
-    r_posterior = GaussianBlock(64, lws=(64, d_macro_reward))
+    s_prior_lws = (*s_prior_lws, d_macro_state)
+    s_post_lws = (*s_post_lws, d_macro_state)
+    r_prior_lws = (*r_prior_lws, d_macro_reward)
+    r_post_lws = (*r_post_lws, d_macro_reward)
+    s_prior = GaussianBlock(ff_lws[-1], lws=s_prior_lws)
+    s_posterior = GaussianBlock(ff_lws[-1], lws=s_post_lws)
+    r_prior = GaussianBlock(ff_lws[-1], lws=r_prior_lws)
+    r_posterior = GaussianBlock(ff_lws[-1], lws=r_post_lws)
     abstract_model = AbstractModel(det_mdl=det_mdl, sampling_mdl_s_prior=s_prior, sampling_mdl_s_posterior=s_posterior,
                                    sampling_mdl_r_prior=r_prior, sampling_mdl_r_posterior=r_posterior)
 
