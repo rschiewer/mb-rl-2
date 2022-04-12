@@ -7,20 +7,17 @@ import torch
 import numpy as np
 
 
-def compute_episode_returns(step_rewards: torch.Tensor, gamma: float):
+def compute_episode_returns(step_rewards: torch.Tensor, disc_mat: Union[None, torch.Tensor]):
     # in case of multi-dim rewards, sum reward dimension to one scalar
     if step_rewards.ndim > 2 and step_rewards.shape[-1] > 1:
-        step_rewards = step_rewards.sum(dim=(-1))
+        step_rewards = step_rewards.sum(dim=(-1), keepdim=True)
     elif step_rewards.ndim == 1:
         step_rewards = step_rewards.unsqueeze(-1)
-    # if gamma is smaller 1 there is some work to do, else use torch builtin sum()
-    if gamma < 1:
-        d_time = step_rewards.shape[1]
-        step_rewards_bw = step_rewards.flip(dims=(1,))
-        discounted_returns = [reduce(lambda disc_sum, r: disc_sum * gamma + r, batch) for batch in step_rewards_bw]
-        discounted_returns = torch.stack(discounted_returns, dim=0)
-    else:
+    # if disc_mat is None, no discounting is necessary, just sum rewards per run
+    if disc_mat is None:
         discounted_returns = step_rewards.sum(dim=1)
+    else:
+        discounted_returns = torch.sum(step_rewards * disc_mat, dim=1)
     return discounted_returns
 
 
@@ -65,12 +62,18 @@ class CrossentropyPlanner:
         n_winners = ceil(d_batch * winning_perc)
         act_dist_params = self._init_params(d_batch, n_plan_steps, d_dist, init_act_params)
 
+        if discount != 0:
+            exponents = torch.arange(n_plan_steps, device=self.device)
+            disc_mat = torch.tile(torch.pow(discount, exponents), (d_batch, 1))
+        else:
+            disc_mat = None
+
         actions, i_winners, rollout_data = None, None, None
         for i_ev in range(n_evolution_steps):
             actions = self._build_dist(act_dist_params).sample()
             criterion, rollout_data = rollout_fn(start_states, actions)
 
-            disc_ret = compute_episode_returns(criterion, discount)
+            disc_ret = compute_episode_returns(criterion, disc_mat)
             disc_ret_sorted = torch.sort(disc_ret, dim=0, descending=True)
             i_winners, R_winners = disc_ret_sorted.indices[:n_winners], disc_ret_sorted.values[:n_winners]
 
@@ -79,6 +82,8 @@ class CrossentropyPlanner:
 
             # update distribution parameters with MLE parameters of the winner samples
             act_dist_params = self._update_dist(actions, act_dist_params, i_winners, act_noise)
+
+        #print(disc_ret_sorted.values[:n_winners])
 
         return actions, self._build_dist(act_dist_params), i_winners.tolist(), rollout_data
 
