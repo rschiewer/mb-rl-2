@@ -4,15 +4,14 @@ from random import shuffle
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns; sns.set_theme()
 from sklearn.cluster import KMeans
-from sklearn.manifold import TSNE
 
 from mdm.gridworld.gridworld import Gridworld
 from mdm.models.multiscale_model import MultiscaleDynamicsModel
 from mdm.utils.utils import here
 from mdm.memory.trajectory_memory import TrajectoryMemory
 from mdm.training.offline_rl_driver import OfflineRLDriver
-from mdm.memory.trajectory_memory import flatten_and_unsqueeze
 
 
 def find_suitable_trajectory(mem: TrajectoryMemory, min_traj_len: int, shuffle: bool = True):
@@ -65,6 +64,7 @@ def mse_per_location(title: str, quantity_history: dict, s_history: dict, env_h:
         ax.xaxis.set_ticks_position('bottom')
         ax.set_yticks(ticks)
         ax.set_yticklabels(mat_labels)
+        ax.grid(False)
 
     plt.subplots_adjust(top=0.9, wspace=0.2, hspace=0.5)
     fig.colorbar(im, ax=axes.flat, shrink=0.95)
@@ -132,12 +132,12 @@ if __name__ == '__main__':
     }
     mode = 'various'
 
-    action_sequences = {
-        'UP_UP_RIGHT': [0, 0, 1],
-        'UP_RIGHT_UP': [0, 1, 0],
-        'RIGHT_UP_UP': [1, 0, 0],
-    }
-    mode = 'similar'
+    #action_sequences = {
+    #    'UP_UP_RIGHT': [0, 0, 1],
+    #    'UP_RIGHT_UP': [0, 1, 0],
+    #    'RIGHT_UP_UP': [1, 0, 0],
+    #}
+    #mode = 'similar'
 
     action_sequences = {k: torch.tensor(v,device=mdl.device) for k, v in action_sequences.items()}  # convert to tensor
     h_history = {k: None for k in action_sequences.keys()}
@@ -193,14 +193,12 @@ if __name__ == '__main__':
     macro_s_prior_history = {k: v.detach().cpu().numpy() for k, v in macro_s_prior_history.items()}
     macro_s_posterior_history = {k: v.detach().cpu().numpy() for k, v in macro_s_posterior_history.items()}
 
-    #mse_per_location(f'h {mode} sequences', h_history, s_history, env.grid_h, env.grid_w, 3)
-    #mse_per_location(f'macro_s_init {mode} sequences', macro_s_start_history, s_history, env.grid_h, env.grid_w, 3)
-    #mse_per_location(f'macro_s_prior {mode} sequences', macro_s_prior_history, s_history, env.grid_h, env.grid_w, 3)
-    #mse_per_location(f'macro_s_post {mode} sequences', macro_s_posterior_history, s_history, env.grid_h, env.grid_w, 3)
-    #cmp_prior_posterior(f'macro_s_post {mode} sequences', macro_s_prior_history, macro_s_posterior_history, s_history,
-    #                    env.grid_h, env.grid_w, 3)
+    mse_per_location(f'h {mode} sequences', h_history, s_history, env.grid_h, env.grid_w, 3)
+    mse_per_location(f'macro_s_init {mode} sequences', macro_s_start_history, s_history, env.grid_h, env.grid_w, 3)
+    mse_per_location(f'macro_s_prior {mode} sequences', macro_s_prior_history, s_history, env.grid_h, env.grid_w, 3)
+    mse_per_location(f'macro_s_post {mode} sequences', macro_s_posterior_history, s_history, env.grid_h, env.grid_w, 3)
     macro_s_prior_history.update({k + '_P': v for k, v in macro_s_posterior_history.items()})
     mse_per_location(f'macro_s_prior_post_comp {mode} sequences', macro_s_prior_history, s_history, env.grid_h, env.grid_w, 3)
-    #cluster_h(h_history)
+    cluster_h(h_history)
 
     
