@@ -127,6 +127,21 @@ class FeedforwardBlock(torch.nn.Module, DeviceMixin):
         return x
 
 
+class BernoulliBlock(FeedforwardBlock):
+
+    def forward(self,
+                *xs: torch.Tensor):
+        x = torch.concat(xs, dim=-1)
+        for l in self.layer_list[:-1]:
+            x = l(x)
+            x = torch.nn.functional.relu(x)
+        x = self.layer_list[-1](x)
+
+        x_dist = torch.distributions.Bernoulli(logits=x)
+
+        return x_dist
+
+
 def add_time_dim(*xs: torch.Tensor,
                  batch_first: bool = True):
     i_unsqueeze = 1 if batch_first else 0
