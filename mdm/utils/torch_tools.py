@@ -129,6 +129,13 @@ class FeedforwardBlock(torch.nn.Module, DeviceMixin):
 
 class BernoulliBlock(FeedforwardBlock):
 
+    def __init__(self,
+                 *d_inputs: int,
+                 lws: Union[Iterable[int], int] = None,
+                 temperature: float = 0.1):
+        super(BernoulliBlock, self).__init__(*d_inputs, lws)
+        self.temperature = temperature
+
     def forward(self,
                 *xs: torch.Tensor):
         x = torch.concat(xs, dim=-1)
@@ -137,7 +144,7 @@ class BernoulliBlock(FeedforwardBlock):
             x = torch.nn.functional.relu(x)
         x = self.layer_list[-1](x)
 
-        x_dist = torch.distributions.Bernoulli(logits=x)
+        x_dist = torch.distributions.RelaxedBernoulli(logits=x, temperature=self.temperature)
 
         return x_dist
 
