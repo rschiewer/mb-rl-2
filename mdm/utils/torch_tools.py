@@ -133,7 +133,7 @@ class BernoulliBlock(FeedforwardBlock):
                  *d_inputs: int,
                  lws: Union[Iterable[int], int] = None,
                  temperature: float = 0.1):
-        super(BernoulliBlock, self).__init__(*d_inputs, lws)
+        super(BernoulliBlock, self).__init__(*d_inputs, lws=lws)
         self.temperature = temperature
 
     def forward(self,
