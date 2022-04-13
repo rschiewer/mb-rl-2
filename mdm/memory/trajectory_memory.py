@@ -12,7 +12,8 @@ import numpy as np
 
 class TrajectoryMemory:
 
-    def __init__(self, init_mem: Iterable = None):
+    def __init__(self,
+                 init_mem: Iterable = None):
         self._mem = list()#deque()
         self._shapes = None
         self._dtypes = None
@@ -54,7 +55,8 @@ class TrajectoryMemory:
         result._dtypes = deepcopy(self._dtypes)
         return result
 
-    def __getitem__(self, index) -> Union[Dict, TrajectoryMemory]:
+    def __getitem__(self,
+                    index) -> Union[Dict, TrajectoryMemory]:
         if type(index) is slice:
             # note: this view will inherit the value of self.longest_trajectory even if it contains only shorter ones
             view = copy(self)
@@ -97,7 +99,10 @@ class TrajectoryMemory:
 
         self._mem.append({'s': np.array(s), 'a': np.array(a), 'r': np.array(r), 'terminal': np.array(terminal)})
 
-    def to_np_arrays(self, padding: float = 0, dtype: Union[np.dtype, Iterable[np.dtype]] = None):
+    def to_np_arrays(self,
+                     padding: float = 0,
+                     pad_last_terminal_flag: bool = True,
+                     dtype: Union[np.dtype, Iterable[np.dtype]] = None):
         if dtype is None:
             dtype = self._dtypes.values()
         elif isinstance(dtype, Iterable):
@@ -113,21 +118,26 @@ class TrajectoryMemory:
                 if len(data) != self._longest_trajectory:
                     diff = self._longest_trajectory - len(data)
                     padding_shape = (diff, *self._shapes[name])
-                    data = np.concatenate([data, np.full(padding_shape, fill_value=padding, dtype=dt)], axis=0)
+                    if name == 'terminal' and pad_last_terminal_flag:
+                        data = np.concatenate([data, np.full(padding_shape, fill_value=data[-1], dtype=dt)], axis=0)
+                    else:
+                        data = np.concatenate([data, np.full(padding_shape, fill_value=padding, dtype=dt)], axis=0)
                 mem[name].append(data)
 
         mem = [np.array(data) for data in mem.values()]
         return tuple(mem)
 
     @staticmethod
-    def cmp_trajectories(t1: Dict[str, np.ndarray], t2: Dict[str, np.ndarray]):
+    def cmp_trajectories(t1: Dict[str, np.ndarray],
+                         t2: Dict[str, np.ndarray]):
         for k, v in t1.items():
             if np.any(v != t2[k]):
                 return False
         return True
 
     @staticmethod
-    def store(mem: TrajectoryMemory, path: Union[Path, str]):
+    def store(mem: TrajectoryMemory,
+              path: Union[Path, str]):
         with open(Path(path), 'wb') as f:
             pickle.dump(mem, f)
 
@@ -150,14 +160,16 @@ class TrajectoryMemory:
         return {k: np.shape(x)[0] for k, x in zip(('s', 'a', 'r', 'terminal'), (s, a, r, terminal))}
 
     @staticmethod
-    def _dtypes_match(dt0: Dict, dt1: Dict):
+    def _dtypes_match(dt0: Dict,
+                      dt1: Dict):
         if dt0.keys() != dt1.keys():
             raise ValueError(f'Mismatch in data structures to compare: {dt0.keys()} vs. {dt1.keys()}')
 
         return all([pair[0] == pair[1] for pair in zip(dt0.values(), dt1.values())])
 
     @staticmethod
-    def _shapes_match(s0: Dict, s1: Dict) -> bool:
+    def _shapes_match(s0: Dict,
+                      s1: Dict) -> bool:
         if s0.keys() != s1.keys():
             raise ValueError(f'Mismatch in data structures to compare: {s0.keys()} vs. {s1.keys()}')
 

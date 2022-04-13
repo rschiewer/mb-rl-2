@@ -12,15 +12,17 @@ class TrajectoryMemoryTest(unittest.TestCase):
 
     @staticmethod
     def _rand_traj(shapes, t_len, dtype=np.float32) -> Dict[str, np.ndarray]:
-        def _rand_tens(shape, tens_len):
+        def _rand_tens(shape, tens_len, dtype):
             size = (tens_len, *shape)
             if np.issubdtype(dtype, np.integer):
                 return np.random.default_rng().integers(0, 10, size=size, dtype=dtype)
+            elif np.issubdtype(dtype, np.bool):
+                return np.random.default_rng().choice([True, False], size=size)
             else:
                 return np.random.default_rng().uniform(size=size)
 
-        return {'s': _rand_tens(shapes['s'], t_len + 1), 'a': _rand_tens(shapes['a'], t_len),
-                'r': _rand_tens(shapes['r'], t_len), 'terminal': _rand_tens(shapes['terminal'], t_len)}
+        return {'s': _rand_tens(shapes['s'], t_len + 1, dtype), 'a': _rand_tens(shapes['a'], t_len, dtype),
+                'r': _rand_tens(shapes['r'], t_len, dtype), 'terminal': _rand_tens(shapes['terminal'], t_len, dtype)}
 
     def setUp(self) -> None:
         n_trajectories = 100
@@ -101,12 +103,12 @@ class TrajectoryMemoryTest(unittest.TestCase):
         t_ok = self._rand_traj(self.shapes, 10, self.mem.dtypes['s'])  # TODO: check with mixed dtypes
         self.mem.push(**t_ok)
 
-    def test_to_numpy_arrays(self):
+    def test_to_numpy_arrays_pad_all(self):
         for t in self.trajectories:
             self.mem.push(**t)
 
         for fill_value in [0, 1, 42]:
-            ss_, as_, rs_, terminals_ = self.mem.to_np_arrays(padding=fill_value)
+            ss_, as_, rs_, terminals_ = self.mem.to_np_arrays(padding=fill_value, pad_last_terminal_flag=False)
 
             for x in [ss_, as_, rs_, terminals_]:
                 self.assertEqual(x.shape[0], self.n_trajectories)
@@ -116,14 +118,40 @@ class TrajectoryMemoryTest(unittest.TestCase):
                 self.assertEqual(x.shape[2:], shp)
 
             for i_t, traj in enumerate(self.trajectories):
-                for traj_data, np_data in zip(traj.values(), [ss_[i_t], as_[i_t], rs_[i_t], terminals_[i_t]]):
+                for (name, traj_data), np_data in zip(traj.items(), [ss_[i_t], as_[i_t], rs_[i_t], terminals_[i_t]]):
+                    l_orig = len(traj_data)
+                    l_diff = np_data.shape[0] - l_orig
+                    dt_orig = self.mem.dtypes[name]
+                    # non-padded part of current trajectory is the same as the original trajectory
+                    self.assertTrue((np_data[:l_orig] == traj_data).all())
+                    # padded part should all be the padding value
+                    if l_diff > 0:
+                        self.assertTrue((np_data[l_orig:] == fill_value).all())
+
+    def test_to_numpy_arrays_repeat_last_terminal(self):
+        for t in self.trajectories:
+            self.mem.push(**t)
+
+        for fill_value in [0, 1, 42]:
+            ss_, as_, rs_, terminals_ = self.mem.to_np_arrays(padding=fill_value, pad_last_terminal_flag=True)
+
+            for x in [ss_, as_, rs_, terminals_]:
+                self.assertEqual(x.shape[0], self.n_trajectories)
+                self.assertEqual(x.shape[1], self.mem.longest_trajectory)
+
+            for shp, x in zip(self.shapes.values(), [ss_, as_, rs_, terminals_]):
+                self.assertEqual(x.shape[2:], shp)
+
+            for i_t, traj in enumerate(self.trajectories):
+                for (name, traj_data), np_data in zip(traj.items(), [ss_[i_t], as_[i_t], rs_[i_t], terminals_[i_t]]):
                     l_orig = len(traj_data)
                     l_diff = np_data.shape[0] - l_orig
                     # non-padded part of current trajectory is the same as the original trajectory
                     self.assertTrue((np_data[:l_orig] == traj_data).all())
                     # padded part should all be the padding value
                     if l_diff > 0:
-                        self.assertTrue((np_data[l_orig:] == fill_value).all())
+                        cmp_val = traj_data[-1] if name == 'terminal' else fill_value
+                        self.assertTrue((np_data[l_orig:] == cmp_val).all())
 
     def test_getitem_slice(self):
         for t in self.trajectories:
