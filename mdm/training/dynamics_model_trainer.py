@@ -55,14 +55,14 @@ class DynamicsModelTrainer(ABC):
             self.logger.setup()
 
         for i_step in step_iter:
-            s, a, r, terminal = self.get_batch_train()
-            s, a, r = [torch.from_numpy(x).to(device=device, dtype=torch.float32) for x in (s, a, r)]
+            s, a, r, term = self.get_batch_train()
+            s, a, r, term = [torch.from_numpy(x).to(device=device, dtype=torch.float32) for x in (s, a, r, term)]
 
             compatible, msg = self.model.input_compatible(s, a, r)
             if not compatible:
                 raise ValueError(msg)
 
-            train_losses = self.model.train_step(s, a, r, self.optimizer, self.warmup_steps)
+            train_losses = self.model.train_step(s, a, r, term, self.optimizer, self.warmup_steps)
 
             if progress_bar:
                 self._update_progressbar_descr(last_eval_losses, train_losses, step_iter)
@@ -76,14 +76,14 @@ class DynamicsModelTrainer(ABC):
                 self.scheduler.step()
 
             if self.eval_interval is not None and i_step % self.eval_interval == 0:
-                s, a, r, terminal = self.get_batch_test()
-                s, a, r = [torch.from_numpy(x).to(device=device, dtype=torch.float32) for x in (s, a, r)]
+                s, a, r, term = self.get_batch_test()
+                s, a, r, term = [torch.from_numpy(x).to(device=device, dtype=torch.float32) for x in (s, a, r, term)]
 
                 compatible, msg = self.model.input_compatible(s, a, r)
                 if not compatible:
                     raise ValueError(msg)
 
-                eval_losses = self.model.eval_step(s, a, r, self.warmup_steps)
+                eval_losses = self.model.eval_step(s, a, r, term, self.warmup_steps)
                 last_eval_losses = eval_losses
 
                 if self.logger:

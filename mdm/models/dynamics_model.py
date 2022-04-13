@@ -27,6 +27,7 @@ class DynamicsModel(torch.nn.Module, DeviceMixin, ABC):
                    s_ground_truth: torch.Tensor,
                    a_ground_truth: torch.Tensor,
                    r_ground_truth: torch.Tensor,
+                   term_ground_truth: torch.Tensor,
                    optimizer: torch.optim.Optimizer,
                    n_warmup: int = 1) -> Dict[str, torch.Tensor]:
         pass
@@ -36,6 +37,7 @@ class DynamicsModel(torch.nn.Module, DeviceMixin, ABC):
                   s_ground_truth: torch.Tensor,
                   a_ground_truth: torch.Tensor,
                   r_ground_truth: torch.Tensor,
+                  term_ground_truth: torch.Tensor,
                   n_warmup: int = 1) -> Dict[str, torch.Tensor]:
         pass
 
@@ -44,4 +46,5 @@ class DynamicsModel(torch.nn.Module, DeviceMixin, ABC):
                          s_ground_truth: torch.Tensor,
                          a_ground_truth: torch.Tensor,
                          r_ground_truth: torch.Tensor) -> Tuple[bool, str]:
+        # TODO: add term_ground_truth here as well
         pass
