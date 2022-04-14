@@ -120,9 +120,10 @@ class FeedforwardBlock(torch.nn.Module, DeviceMixin):
     def forward(self,
                 *xs: torch.Tensor):
         x = torch.concat(xs, dim=-1)
-        for l in self.layer_list:
+        for l in self.layer_list[:-1]:
             x = l(x)
             x = torch.nn.functional.relu(x)
+        x = self.layer_list[-1](x)
 
         return x
 
