@@ -46,7 +46,8 @@ class CrossentropyPlanner:
             self._build_dist = self._build_categorical
 
     def plan(self,
-             rollout_fn: Callable[[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, Dict[str, torch.Tensor]]],
+             rollout_fn: Callable[[torch.Tensor, torch.Tensor],
+                                  Tuple[torch.Tensor, Union[torch.Tensor, None], Dict[str, torch.Tensor]]],
              start_states: torch.Tensor,
              d_dist: int,
              n_plan_steps: int,
@@ -71,10 +72,13 @@ class CrossentropyPlanner:
         actions, i_winners, rollout_data = None, None, None
         for i_ev in range(n_evolution_steps):
             actions = self._build_dist(act_dist_params).sample()
-            criterion, rollout_data = rollout_fn(start_states, actions)
+            criterion, rollout_disc_mat, rollout_data = rollout_fn(start_states, actions)
 
+            if rollout_disc_mat is not None:
+                disc_mat = rollout_disc_mat
             disc_ret = compute_episode_returns(criterion, disc_mat)
             disc_ret_sorted = torch.sort(disc_ret, dim=0, descending=True)
+
             i_winners, R_winners = disc_ret_sorted.indices[:n_winners], disc_ret_sorted.values[:n_winners]
 
             if i_ev == n_evolution_steps - 1:  # disable action noise for the last update
@@ -83,7 +87,7 @@ class CrossentropyPlanner:
             # update distribution parameters with MLE parameters of the winner samples
             act_dist_params = self._update_dist(actions, act_dist_params, i_winners, act_noise)
 
-        #print(disc_ret_sorted.values[:n_winners])
+        print(disc_ret_sorted.values[:n_winners])
 
         return actions, self._build_dist(act_dist_params), i_winners.tolist(), rollout_data
 
