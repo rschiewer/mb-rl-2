@@ -228,11 +228,37 @@ class TrajectoryMemoryTest(unittest.TestCase):
         traj_altered['s'][0] += 10
         self.assertFalse(self.mem.cmp_trajectories(traj, traj_altered))
 
-    def test_add(self):
+    def test_add_matching(self):
         for t in self.trajectories:
             self.mem.push(**t)
 
+        traj_new_second_mem = self._rand_traj(self.shapes, 10)
+        other = TrajectoryMemory([traj_new_second_mem])
+        added = self.mem + other
 
+        self.assertEqual(len(added), len(self.mem) + 1)
+
+        # modify samples from first memory and check if that affects added
+        traj_new_first_mem = self._rand_traj(self.shapes, 10)
+        self.mem[-1]['s'] = traj_new_first_mem['s']
+
+        self.assertTrue((added[-1]['s'] == traj_new_second_mem['s']).all())
+        self.assertTrue((added[-2]['s'] == traj_new_first_mem['s']).all())
+
+        # modify sample in second memory and check if that affects added
+        other[-1]['s'][:] = 0
+        self.assertTrue((added[-1]['s'] == 0).all())
+
+    def test_add_mismatching(self):
+        self.mem.push(**self.trajectories[0])
+
+        new_shapes = copy.deepcopy(self.mem.shapes)
+        new_shapes['s'] = tuple(np.array(new_shapes['s']) + 1)
+        traj_new = self._rand_traj(new_shapes, 10)
+        other = TrajectoryMemory([traj_new])
+
+        with self.assertRaises(ValueError):
+            added = self.mem + other
 
 
 if __name__ == '__main__':

@@ -59,6 +59,19 @@ class TrajectoryMemory:
     def __len__(self) -> int:
         return len(self._mem)
 
+    def __add__(self,
+                other: TrajectoryMemory) -> TrajectoryMemory:
+        shapes_match = TrajectoryMemory._shapes_match(self._shapes, other._shapes)
+        dtypes_match = TrajectoryMemory._dtypes_match(self._dtypes, other._dtypes)
+        if not shapes_match or not dtypes_match:
+                raise ValueError(f'Trajectory memory {self} and {other} can\'t be added because of shape or dtype '
+                                 f'mismatch')
+
+        ret = self.get_view()
+        ret._longest_trajectory = max(self._longest_trajectory, other._longest_trajectory)
+        ret._mem += other._mem
+        return ret
+
     def get_view(self) -> TrajectoryMemory:
         """
         Generates a new TrajectoryMemory object with an independent list of references to the original memory's samples.
