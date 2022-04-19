@@ -47,14 +47,6 @@ class TrajectoryMemory:
     def longest_trajectory(self):
         return self._longest_trajectory
 
-    def __copy__(self):
-        cls = self.__class__
-        result = cls.__new__(cls)
-        result.__dict__.update(self.__dict__)
-        result._shapes = deepcopy(self._shapes)
-        result._dtypes = deepcopy(self._dtypes)
-        return result
-
     def __getitem__(self,
                     index) -> Union[Dict, TrajectoryMemory]:
         if type(index) is slice:
@@ -68,8 +60,15 @@ class TrajectoryMemory:
         return len(self._mem)
 
     def get_view(self) -> TrajectoryMemory:
+        """
+        Generates a new TrajectoryMemory object with an independent list of references to the original memory's samples.
+        Adding content to this view will not change the original memory but add to the view's list of samples.
+        :return: the view
+        """
         view = copy(self)
         view._mem = self._mem[:]  # see https://docs.python.org/3/library/copy.html
+        view._shapes = deepcopy(self._shapes)
+        view._dtypes = deepcopy(self._dtypes)
         return view
 
     def shuffle(self) -> TrajectoryMemory:

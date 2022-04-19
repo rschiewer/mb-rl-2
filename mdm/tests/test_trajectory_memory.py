@@ -174,18 +174,6 @@ class TrajectoryMemoryTest(unittest.TestCase):
         self.mem.push(**self.trajectories[0])
         self.assertEqual(sub_mem[-1], self.mem[-2])
 
-    def test_copy(self):
-        for t in self.trajectories:
-            self.mem.push(**t)
-
-        mem_copy = copy.copy(self.mem)
-
-        self.assertTrue(mem_copy._mem, self.mem._mem)
-        self.assertIsNot(mem_copy._dtypes, self.mem._dtypes)
-        self.assertIsNot(mem_copy._shapes, self.mem._shapes)
-        self.assertEquals(mem_copy._dtypes, self.mem._dtypes)
-        self.assertEquals(mem_copy._shapes, self.mem._shapes)
-
     def test_get_view(self):
         empty_view = self.mem.get_view()
 
@@ -239,6 +227,12 @@ class TrajectoryMemoryTest(unittest.TestCase):
         traj_altered = copy.deepcopy(self.mem[0])
         traj_altered['s'][0] += 10
         self.assertFalse(self.mem.cmp_trajectories(traj, traj_altered))
+
+    def test_add(self):
+        for t in self.trajectories:
+            self.mem.push(**t)
+
+
 
 
 if __name__ == '__main__':
