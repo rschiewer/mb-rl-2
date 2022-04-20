@@ -51,7 +51,7 @@ class TrajectoryMemory:
                     index) -> Union[Dict, TrajectoryMemory]:
         if type(index) is slice:
             # note: this view will inherit the value of self.longest_trajectory even if it contains only shorter ones
-            view = copy(self)
+            view = self.get_view()
             view._mem = self._mem[index]
             return view
         return self._mem[index]
