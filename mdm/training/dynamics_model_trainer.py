@@ -4,6 +4,7 @@ from abc import ABC
 import torch
 from tqdm import tqdm
 import numpy as np
+from torch.profiler import profile, record_function, ProfilerActivity
 
 from mdm.logging.logger import Logger, Scope
 from mdm.models.dynamics_model import DynamicsModel
@@ -62,7 +63,10 @@ class DynamicsModelTrainer(ABC):
             if not compatible:
                 raise ValueError(msg)
 
+            #with profile(activities=[ProfilerActivity.CPU], record_shapes=True) as prof:
+            #    with record_function("model_training"):
             train_losses = self.model.train_step(s, a, r, term, self.optimizer, self.warmup_steps)
+            #print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
 
             if progress_bar:
                 self._update_progressbar_descr(last_eval_losses, train_losses, step_iter)
