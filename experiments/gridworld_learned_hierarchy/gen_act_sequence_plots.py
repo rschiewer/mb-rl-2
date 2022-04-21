@@ -149,7 +149,7 @@ if __name__ == '__main__':
     # generate data
     s_start = []
     for i_loc in range(n_locations):
-        traj = find_suitable_trajectory(mem, mdl.abstract_step_size, True)
+        traj = find_suitable_trajectory(mem, mdl.macro_step_size, True)
         s_start.append(traj['s'][0])
     s_start = np.stack(s_start, axis=0)
 
@@ -160,15 +160,17 @@ if __name__ == '__main__':
     for seq_descr, a_seq in action_sequences.items():
         a_seq_batch = torch.tile(a_seq, dims=(n_locations, 1))  # copy same starting observation along batch
         a_seq_batch = torch.nn.functional.one_hot(a_seq_batch, num_classes=mdl.d_action)
-        s, s_dist, r, r_dist, h = mdl.rollout_single_step(s_start, a_seq_batch)
-        h_history[seq_descr] = h#mdl.filter_single_step_model_history(h)
-        s_history[seq_descr] = torch.concat([s_start, s], dim=1)
+        #s, s_dist, r, r_dist, term, term_dist, h = mdl.rollout_single_step(s_start, a_seq_batch)
+        predictions_ss = mdl.rollout_single_step(s_start, a_seq_batch)
+        #h_history[seq_descr] = mdl.filter_single_step_model_history(predictions_ss['h'])
+        h_history[seq_descr] = predictions_ss['h']
+        s_history[seq_descr] = torch.concat([s_start, predictions_ss['s']], dim=1)
 
     for seq_descr, h in h_history.items():
         zero_macro_s = torch.zeros(n_locations, mdl.d_macro_state, device=mdl.device)
         zero_macro_a = torch.zeros(n_locations, mdl.d_macro_action, device=mdl.device)
-        predictions = mdl.macro_next_posterior(zero_macro_s, zero_macro_a, h)
-        macro_s_next_post, macro_s_next_post_dist, macro_r_next_post, macro_r_next_post_dist = predictions
+        predictions_ms = mdl.macro_next_posterior(zero_macro_s, zero_macro_a, h)
+        macro_s_next_post, macro_s_next_post_dist, macro_r_next_post, macro_r_next_post_dist = predictions_ms
         macro_s_start_history[seq_descr] = macro_s_next_post
 
     for seq_descr, a_seq in action_sequences.items():

@@ -23,7 +23,7 @@ if __name__ == '__main__':
 
     n_trials = 50
     available_actions = list(range(env.action_space.n))
-    action_sequences = list(product(available_actions, repeat=mdl.abstract_step_size)) * n_trials
+    action_sequences = list(product(available_actions, repeat=mdl.macro_step_size)) * n_trials
     #action_sequences = [[2, 2, 1], [2, 1, 2], [1, 2, 2]] * n_trials
     free_locations = env.find_cell_type(CellType.FREE)
     n_locations = len(free_locations)
@@ -41,11 +41,11 @@ if __name__ == '__main__':
     for a_seq in action_sequences:
         a_seq_batch = torch.tile(a_seq, dims=(n_locations, 1))  # copy same starting observation along batch
         a_seq_batch = torch.nn.functional.one_hot(a_seq_batch, num_classes=mdl.d_action)
-        s, s_dist, r, r_dist, h = mdl.rollout_single_step(s_start, a_seq_batch)
+        predictions_ss = mdl.rollout_single_step(s_start, a_seq_batch)
         zero_macro_s = torch.zeros(n_locations, mdl.d_macro_state, device=mdl.device)
         zero_macro_a = torch.zeros(n_locations, mdl.d_macro_action, device=mdl.device)
-        predictions = mdl.macro_next_posterior(zero_macro_s, zero_macro_a, h)
-        macro_s_next_post, macro_s_next_post_dist, macro_r_next_post, macro_r_next_post_dist = predictions
+        predictions_ms = mdl.macro_next_posterior(zero_macro_s, zero_macro_a, predictions_ss['h'])
+        macro_s_next_post, macro_s_next_post_dist, macro_r_next_post, macro_r_next_post_dist = predictions_ms
         macro_s_init_history.append(macro_s_next_post.detach().cpu().numpy())
 
     macro_s_init_history = np.stack(macro_s_init_history)

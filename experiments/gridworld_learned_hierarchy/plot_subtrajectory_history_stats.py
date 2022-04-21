@@ -86,10 +86,10 @@ if __name__ == '__main__':
     n_evals = 50
     n_locations = 10
     action_sequences = {
-        'UP': [0 for _ in range(mdl.abstract_step_size)],
-        'RIGHT': [1 for _ in range(mdl.abstract_step_size)],
-        'DOWN': [2 for _ in range(mdl.abstract_step_size)],
-        'LEFT': [3 for _ in range(mdl.abstract_step_size)],
+        'UP': [0 for _ in range(mdl.macro_step_size)],
+        'RIGHT': [1 for _ in range(mdl.macro_step_size)],
+        'DOWN': [2 for _ in range(mdl.macro_step_size)],
+        'LEFT': [3 for _ in range(mdl.macro_step_size)],
     }
 
     action_sequences = {k: torch.tensor(v,device=mdl.device) for k, v in action_sequences.items()}  # convert to tensor
@@ -98,7 +98,7 @@ if __name__ == '__main__':
 
     # generate data
     for i_loc in range(n_locations):
-        traj = find_suitable_trajectory(mem, mdl.abstract_step_size, True)
+        traj = find_suitable_trajectory(mem, mdl.macro_step_size, True)
         s_start = traj['s'][0]
         locations.append(s_start)
 
@@ -110,8 +110,8 @@ if __name__ == '__main__':
             s_start_batch = torch.tile(s_start, dims=(n_evals, 1, 1))  # copy same starting observation along batch
             a_seq_batch = torch.tile(a_seq, dims=(n_evals, 1))  # copy same starting observation along batch
             a_seq_batch = torch.nn.functional.one_hot(a_seq_batch, num_classes=mdl.d_action)
-            s, s_dist, r, r_dist, h = mdl.rollout_single_step(s_start_batch, a_seq_batch)
-            seq_histories[seq_descr].append(mdl.filter_single_step_model_history(h))
+            predictions_ss = mdl.rollout_single_step(s_start_batch, a_seq_batch)
+            seq_histories[seq_descr].append(mdl.filter_single_step_model_history(predictions_ss['h']))
 
     #plot_hidden_state_variation(n_locations, action_sequences, seq_histories, locations)
     plot_hidden_state_distances(n_locations, action_sequences, seq_histories, locations)

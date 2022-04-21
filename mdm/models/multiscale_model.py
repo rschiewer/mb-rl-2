@@ -28,29 +28,13 @@ class MacroActionModel(torch.nn.Module, DeviceMixin):
         return macro_action
 
 
-class MacroRewardModel(torch.nn.Module, DeviceMixin):
-
-    def __init__(self,
-                 d_reward: int,
-                 n_abstract_steps: int,
-                 d_macro_reward: int):
-        super(MacroRewardModel, self).__init__()
-
-        if d_reward != d_macro_reward:
-            raise NotImplementedError('Reward and macro reward must not differ in dimension')
-
-    def forward(self, rewards: torch.Tensor):
-        macro_reward = torch.mean(rewards, dim=1)  # mean over time dimension, keep batch and data dimensions
-        return macro_reward
-
-
 class SingleStepModel(torch.nn.Module, DeviceMixin):
 
     def __init__(self,
                  det_mdl: RecurrentBlock,
                  sampling_mdl_s: GaussianBlock,
                  sampling_mdl_r: GaussianBlock,
-                 sampling_mdl_term: BernoulliBlock):
+                 sampling_mdl_term: ContinuousBernoulliBlock):
         super(SingleStepModel, self).__init__()
 
         self.det_mdl = det_mdl
@@ -87,7 +71,9 @@ class AbstractModel(torch.nn.Module, DeviceMixin):
                  sampling_mdl_s_prior: GaussianBlock,
                  sampling_mdl_s_posterior: GaussianBlock,
                  sampling_mdl_r_prior: GaussianBlock,
-                 sampling_mdl_r_posterior: GaussianBlock):
+                 sampling_mdl_r_posterior: GaussianBlock,
+                 sampling_mdl_term_prior: ContinuousBernoulliBlock,
+                 sampling_mdl_term_posterior: ContinuousBernoulliBlock):
         super(AbstractModel, self).__init__()
 
         self.det_mdl = det_mdl  # same det_mdl is used for prior and posterior
@@ -95,25 +81,31 @@ class AbstractModel(torch.nn.Module, DeviceMixin):
         self.sampling_mdl_s_posterior = sampling_mdl_s_posterior
         self.sampling_mdl_r_prior = sampling_mdl_r_prior
         self.sampling_mdl_r_posterior = sampling_mdl_r_posterior
+        self.sampling_mdl_term_prior = sampling_mdl_term_prior
+        self.sampling_mdl_term_posterior = sampling_mdl_term_posterior
 
     def forward(self,
                 macro_s: torch.Tensor,
                 macro_a: torch.Tensor,
-                h: torch.Tensor = None):
-        if h is None:
+                single_step_model_history: torch.Tensor = None):
+        if single_step_model_history is None:
             d_batch = macro_s.shape[0]
             d_memory = self.det_mdl.d_inputs[-1]
-            h = torch.zeros(d_batch, d_memory, device=self.device)
+            single_step_model_history = torch.zeros(d_batch, d_memory, device=self.device)
 
-            macro_sr_next_det = self.det_mdl(macro_s, macro_a, h)
-            macro_s_next_dist = self.sampling_mdl_s_prior(macro_sr_next_det)
-            macro_r_next_dist = self.sampling_mdl_r_prior(macro_sr_next_det)
+            macro_det = self.det_mdl(macro_s, macro_a, single_step_model_history)
+            macro_s_next_dist = self.sampling_mdl_s_prior(macro_det)
+            macro_r_dist = self.sampling_mdl_r_prior(macro_det)
+            macro_term_dist = self.sampling_mdl_term_prior(macro_det)
         else:
-            macro_sr_next_det = self.det_mdl(macro_s, macro_a, h)
-            macro_s_next_dist = self.sampling_mdl_s_posterior(macro_sr_next_det)
-            macro_r_next_dist = self.sampling_mdl_r_posterior(macro_sr_next_det)
+            macro_det = self.det_mdl(macro_s, macro_a, single_step_model_history)
+            macro_s_next_dist = self.sampling_mdl_s_posterior(macro_det)
+            macro_r_dist = self.sampling_mdl_r_posterior(macro_det)
+            macro_term_dist = self.sampling_mdl_term_posterior(macro_det)
 
-        return macro_sr_next_det, macro_s_next_dist, macro_r_next_dist
+        return {'macro_s_next_dist': macro_s_next_dist,
+                'macro_r_dist': macro_r_dist,
+                'macro_term_dist': macro_term_dist}
 
 
 class MultiscaleDynamicsModel(DynamicsModel):
@@ -137,7 +129,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
         self.single_step_model = single_step_model
         self.abstract_model = abstract_model
         self.macro_action_model = macro_action_model
-        self.abstract_step_size = abstract_step_size
+        self.macro_step_size = abstract_step_size
         self.d_state = d_state
         self.d_action = d_action
         self.d_reward = d_reward
@@ -158,9 +150,9 @@ class MultiscaleDynamicsModel(DynamicsModel):
         return torch.mean(l)
 
     @staticmethod
-    def kl_loss(priors: List[torch.distributions.Normal],
-                posteriors: List[torch.distributions.Normal],
-                detach_posterior: bool = True):
+    def kl_loss_normal(priors: List[torch.distributions.Normal],
+                       posteriors: List[torch.distributions.Normal],
+                       detach_posterior: bool = True):
         l = torch.zeros_like(priors[0].loc)
         for prior, posterior in zip(priors, posteriors):
             if detach_posterior:
@@ -169,18 +161,22 @@ class MultiscaleDynamicsModel(DynamicsModel):
         return torch.mean(l)
 
     @staticmethod
-    def kl_loss_old(s_priors, s_posteriors, r_priors, r_posteriors):
-        l = torch.zeros_like(s_priors[0].loc)
-        for s_prior, s_posterior, r_prior, r_posterior in zip(s_priors, s_posteriors, r_priors, r_posteriors):
-            fixed_s_post = torch.distributions.Normal(loc=s_posterior.loc.detach(), scale=s_posterior.scale.detach())
-            fixed_r_post = torch.distributions.Normal(loc=r_posterior.loc.detach(), scale=r_posterior.scale.detach())
-            l += torch.distributions.kl.kl_divergence(fixed_s_post, s_prior)
-            l += torch.distributions.kl.kl_divergence(fixed_r_post, r_prior)
-        #l /= len(s_priors)  # normalize the loss w.r.t. the number of time steps explicitly
+    def kl_loss_bernolli(priors: List[torch.distributions.ContinuousBernoulli],
+                         posteriors: List[torch.distributions.ContinuousBernoulli],
+                         detach_posterior: bool = True):
+        if priors[0].probs is None:
+            l = torch.zeros_like(priors[0].logits)
+        else:
+            l = torch.zeros_like(priors[0].probs)
+
+        for prior, posterior in zip(priors, posteriors):
+            if detach_posterior:
+                posterior = torch.distributions.ContinuousBernoulli(logits=posterior.logits)  # todo: make if-else for logits vs probs
+            l += torch.distributions.kl.kl_divergence(posterior, prior)
         return torch.mean(l)
 
     @staticmethod
-    def kl_regularizer(priors: List[torch.distributions.Normal]):
+    def kl_regularizer_normal(priors: List[torch.distributions.Normal]):
         uniform_gauss = torch.distributions.Normal(loc=torch.zeros_like(priors[0].loc, requires_grad=False),
                                                    scale=torch.ones_like(priors[0].scale, requires_grad=False))
         l = torch.zeros_like(priors[0].loc)
@@ -189,28 +185,27 @@ class MultiscaleDynamicsModel(DynamicsModel):
         return torch.mean(l)
 
     @staticmethod
-    def kl_regularizer_old(s_priors, r_priors):
-        uniform_gauss = torch.distributions.Normal(loc=torch.zeros_like(s_priors[0].loc, requires_grad=False),
-                                                   scale=torch.ones_like(s_priors[0].scale, requires_grad=False))
-        l = torch.zeros_like(s_priors[0].loc)
-        for s_prior, r_prior in zip(s_priors, r_priors):
-            l += torch.distributions.kl.kl_divergence(s_prior, uniform_gauss)
-            l += torch.distributions.kl.kl_divergence(r_prior, uniform_gauss)
-        #l /= (len(s_priors) * len(s_priors[0].loc[-1]))  # normalize the loss
+    def kl_regularizer_bernoulli(priors: List[torch.distributions.ContinuousBernoulli]):
+        uniform_gauss = torch.distributions.ContinuousBernoulli(logits=priors[0].logits)
+        l = torch.zeros_like(priors[0].logits)
+        for prior in priors:
+            l += torch.distributions.kl.kl_divergence(prior, uniform_gauss)
         return torch.mean(l)
 
     @staticmethod
-    def macro_reward_loss(macro_r_pred, macro_r_true):
+    def macro_reward_loss(macro_r_pred,
+                          macro_r_true):
         l = torch.mean((macro_r_pred - macro_r_true) ** 2)
         return l
 
-    @staticmethod
-    def average_kstep_reward(rewards: torch.Tensor, k: int, device: torch.device):
+    def average_kstep_value(self,
+                            rewards: torch.Tensor,
+                            k: int):
         d_batch, d_time, d_data = rewards.shape
         n_macro_steps = ceil(d_time / k)
         d_padding = n_macro_steps * k - d_time
 
-        padding = torch.zeros(d_batch, d_padding, d_data, device=device)
+        padding = torch.zeros(d_batch, d_padding, d_data, device=self.device)
         rewards = torch.concat([rewards, padding], dim=1)
 
         avg = []
@@ -240,31 +235,39 @@ class MultiscaleDynamicsModel(DynamicsModel):
         s_mem, s_dist_mem = [], []
         r_mem, r_dist_mem = [], []
         term_mem, term_dist_mem = [], []
-        macro_r_mem = []
         macro_s_prior_mem, macro_s_post_mem = [], []
-        macro_r_prior_mem, macro_r_posterior_mem = [], []
+        macro_r_mem = []
+        macro_r_prior_mem, macro_r_post_mem = [], []
+        macro_term_mem = []
+        macro_term_prior_mem, macro_term_post_mem = [], []
 
         for t in range(n_steps):
-            if t % self.abstract_step_size == 0 and t > 0:  # invoke abstract model every k time steps
+            if t % self.macro_step_size == 0 and t > 0:  # invoke abstract model every k time steps
                 # TODO: think about this model more closely
                 macro_a = self.macro_action_model(self._next_single_step_actions(actions, t))
                 h_flat = self.filter_single_step_model_history(h)
                 macro_s = macro_s_next  # update current macro state to previously predicted one
 
                 # invoke models
-                _, macro_s_next_prior, macro_r_next_prior = self.abstract_model(macro_s, macro_a)
-                _, macro_s_next_posterior, macro_r_next_posterior = self.abstract_model(macro_s, macro_a, h_flat)
+                pred_macro_prior = self.abstract_model(macro_s, macro_a)
+                pred_macro_post = self.abstract_model(macro_s, macro_a, h_flat)
 
                 # sample from more informed posterior distributions to get inputs for single step model
-                macro_s_next = macro_s_next_posterior.rsample()
-                macro_r = macro_r_next_posterior.rsample()
+                macro_s_next = pred_macro_post['macro_s_next_dist'].rsample()
+                macro_r = pred_macro_post['macro_r_dist'].rsample()
+                macro_term = pred_macro_post['macro_term_dist'].rsample()
 
                 # store for loss calculation
+                macro_s_prior_mem.append(pred_macro_prior['macro_s_next_dist'])
+                macro_s_post_mem.append(pred_macro_post['macro_s_next_dist'])
+
                 macro_r_mem.append(macro_r)
-                macro_s_prior_mem.append(macro_s_next_prior)
-                macro_r_prior_mem.append(macro_r_next_prior)
-                macro_s_post_mem.append(macro_s_next_posterior)
-                macro_r_posterior_mem.append(macro_r_next_posterior)
+                macro_r_prior_mem.append(pred_macro_prior['macro_r_dist'])
+                macro_r_post_mem.append(pred_macro_post['macro_r_dist'])
+
+                macro_term_mem.append(macro_term)
+                macro_term_prior_mem.append(pred_macro_prior['macro_term_dist'])
+                macro_term_post_mem.append(pred_macro_post['macro_term_dist'])
 
                 # prevent memory leakage beyond macro steps
                 h = self.single_step_model.det_mdl.gen_h_placeholder(d_batch)
@@ -301,17 +304,20 @@ class MultiscaleDynamicsModel(DynamicsModel):
                 'macro_s_post': macro_s_post_mem,
                 'macro_r': macro_r_mem,
                 'macro_r_prior': macro_r_prior_mem,
-                'macro_r_post': macro_r_posterior_mem}
+                'macro_r_post': macro_r_post_mem,
+                'macro_term': macro_term_mem,
+                'macro_term_prior': macro_term_prior_mem,
+                'macro_term_post': macro_term_post_mem}
 
     def _next_single_step_actions(self, actions: torch.Tensor, t: int):
         n_steps = actions.shape[1]
-        if t + self.abstract_step_size > n_steps:
-            diff = t + self.abstract_step_size - n_steps
+        if t + self.macro_step_size > n_steps:
+            diff = t + self.macro_step_size - n_steps
             next_actions = actions[:, t:]
             next_actions = torch.concat([next_actions, torch.zeros(actions.shape[0], diff, actions.shape[2],
                                                                    device=self.device)], dim=1)
         else:
-            next_actions = actions[:, t: t + self.abstract_step_size]
+            next_actions = actions[:, t: t + self.macro_step_size]
         return next_actions
 
     def train_step(self,
@@ -338,46 +344,57 @@ class MultiscaleDynamicsModel(DynamicsModel):
                   n_warmup: int = 1) -> Dict:
         rec_loss = MultiscaleDynamicsModel.reconstruction_loss
         rec_loss_ml = MultiscaleDynamicsModel.maximum_likelihood_loss
-        kl_loss = MultiscaleDynamicsModel.kl_loss
-        kl_reg = MultiscaleDynamicsModel.kl_regularizer
-        macro_r_loss = MultiscaleDynamicsModel.macro_reward_loss
+        kl_loss_norm = MultiscaleDynamicsModel.kl_loss_normal
+        kl_loss_bern = MultiscaleDynamicsModel.kl_loss_bernolli
+        kl_reg_norm = MultiscaleDynamicsModel.kl_regularizer_normal
+        kl_reg_bern = MultiscaleDynamicsModel.kl_regularizer_bernoulli
+        macro_r_loss = MultiscaleDynamicsModel.reconstruction_loss
+        macro_term_loss = MultiscaleDynamicsModel.reconstruction_loss
 
         # target macro reward can be pre-computed from the single step rewards
-        macro_r_target = MultiscaleDynamicsModel.average_kstep_reward(r_ground_truth, self.abstract_step_size,
-                                                                      self.device)
+        macro_r_target = self.average_kstep_value(r_ground_truth, self.macro_step_size)
         macro_r_target = macro_r_target[:, 1:]  # exclude first chunk since macro model is inactive there
 
+        # target macro terminal transition probability can be pre-computed as well
+        macro_term_target = self.average_kstep_value(term_ground_truth, self.macro_step_size)
+        macro_term_target = macro_term_target[:, 1:]  # exclude first chunk since macro model is inactive there
+        
         warmup_states = s_ground_truth[:, :n_warmup, :]
-        predictions = self(warmup_states, a_ground_truth)
+        pred = self(warmup_states, a_ground_truth)
 
         # https://stats.stackexchange.com/questions/332179/how-to-weight-kld-loss-vs-reconstruction-loss-in-variational-auto-encoder
         # and beta VAE paper for further explanation
-        M = self.abstract_model.sampling_mdl_s_prior.lws[-1] / 2
-        N = self.abstract_model.sampling_mdl_s_prior.lws[0] 
-        beta = 10
-        beta_norm = M / N * beta
+        #M = self.abstract_model.sampling_mdl_s_prior.lws[-1] / 2
+        #N = self.abstract_model.sampling_mdl_s_prior.lws[0]
+        #beta = 10
+        #beta_norm = M / N * beta
 
-        rec_s = rec_loss(torch.stack(predictions['s'], dim=1), s_ground_truth)
-        rec_r = rec_loss(torch.stack(predictions['r'], dim=1), r_ground_truth)
-        rec_term = rec_loss(torch.stack(predictions['term'], dim=1), term_ground_truth)
-        #rec_s = rec_loss_ml(predictions['s_dist'], torch.transpose(s_ground_truth, 0, 1))
-        #rec_r = rec_loss_ml(predictions['r_dist'], torch.transpose(r_ground_truth, 0, 1))
-        if len(predictions['macro_s_prior']) > 0:
-            kl_s = 0.01 * kl_loss(predictions['macro_s_prior'], predictions['macro_s_posterior'], detach_posterior=True)
-            kl_r = 0.01 * kl_loss(predictions['macro_r_prior'], predictions['macro_r_posterior'], detach_posterior=True)
-            reg_s = 0.001 * kl_reg(predictions['macro_s_prior'])
-            reg_r = 0.001 * kl_reg(predictions['macro_r_prior'])
-            mr = macro_r_loss(torch.stack(predictions['macro_r'], dim=1), macro_r_target)
+        rec_s = rec_loss(torch.stack(pred['s'], dim=1), s_ground_truth)
+        rec_r = rec_loss(torch.stack(pred['r'], dim=1), r_ground_truth)
+        rec_term = rec_loss(torch.stack(pred['term'], dim=1), term_ground_truth)
+        #rec_s = rec_loss_ml(pred['s_dist'], torch.transpose(s_ground_truth, 0, 1))
+        #rec_r = rec_loss_ml(pred['r_dist'], torch.transpose(r_ground_truth, 0, 1))
+
+        if len(pred['macro_s_prior']) > 0:
+            kl_s = 0.001 * kl_loss_norm(pred['macro_s_prior'], pred['macro_s_post'], detach_posterior=True)
+            kl_r = 0.001 * kl_loss_norm(pred['macro_r_prior'], pred['macro_r_post'], detach_posterior=True)
+            kl_term = 0.001 * kl_loss_bern(pred['macro_term_prior'], pred['macro_term_post'], detach_posterior=True)
+            reg_s = 0.0001 * kl_reg_norm(pred['macro_s_post'])
+            reg_r = 0.0001 * kl_reg_norm(pred['macro_r_post'])
+            reg_term = 0.0001 * kl_reg_bern(pred['macro_term_post'])
+            mr = macro_r_loss(torch.stack(pred['macro_r'], dim=1), macro_r_target)
+            mt = macro_term_loss(torch.stack(pred['macro_term'], dim=1), macro_term_target)
         else:
-            kl_s, kl_r = torch.tensor(0), torch.tensor(0)
-            reg_s, reg_r = torch.tensor(0), torch.tensor(0)
-            mr = torch.tensor(0)
-        loss = rec_s + rec_r + rec_term + kl_s + kl_r + reg_s + reg_r + mr
+            kl_s, kl_r, kl_term = torch.tensor(0), torch.tensor(0), torch.tensor(0)
+            reg_s, reg_r, reg_term = torch.tensor(0), torch.tensor(0), torch.tensor(0)
+            mr, mt = torch.tensor(0), torch.tensor(0)
 
-        kl = kl_s + kl_r
-        reg = reg_s + reg_r
-        return {'total': loss, 'rec_s': rec_s, 'rec_r': rec_r, 'rec_term': rec_term, 'kl': kl, 'kl_reg': reg,
-                'macro_r': mr}
+        kl = kl_s + kl_r #+ kl_term
+        reg = reg_s + reg_r #+ reg_term
+        loss = rec_s + rec_r + rec_term + kl + reg + mr + mt
+
+        return {'total': loss, 'rec_s': rec_s, 'rec_r': rec_r, 'rec_term': rec_term, 'kl_s': kl_s, 'kl_r': kl_r, 'kl_reg': reg,
+                'macro_r': mr, 'macro_term': mt}
 
     def input_compatible(self,
                          s_ground_truth: torch.Tensor,
@@ -497,14 +514,17 @@ class MultiscaleDynamicsModel(DynamicsModel):
                 macro_s = macro_start_states[:, t]
             macro_a = macro_actions[:, t]
 
-            _, macro_s_next_prior, macro_r_next_prior = self.abstract_model(macro_s, macro_a)
-            macro_s_next = macro_s_next_prior.sample()
-            macro_r_next = macro_r_next_prior.sample()
+            #_, macro_s_next_prior, macro_r_next_prior = self.abstract_model(macro_s, macro_a)
+            #macro_s_next = macro_s_next_prior.sample()
+            #macro_r_next = macro_r_next_prior.sample()
+            pred_macro_prior = self.abstract_model(macro_s, macro_a)
+            macro_s_next = pred_macro_prior['macro_s_next_dist'].sample()
+            macro_r = pred_macro_prior['macro_r_dist'].sample()
 
             macro_s_prior_mem.append(macro_s_next)
-            macro_r_prior_mem.append(macro_r_next)
-            macro_s_prior_dist_mem.append(macro_s_next_prior)
-            macro_r_prior_dist_mem.append(macro_r_next_prior)
+            macro_r_prior_mem.append(macro_r)
+            macro_s_prior_dist_mem.append(pred_macro_prior['macro_s_next_dist'])
+            macro_r_prior_dist_mem.append(pred_macro_prior['macro_r_dist'])
 
             macro_s = macro_s_next
 
@@ -518,11 +538,16 @@ class MultiscaleDynamicsModel(DynamicsModel):
                              macro_a: torch.Tensor,
                              h: Tuple[torch.Tensor, torch.Tensor]):
         h_flat = self.filter_single_step_model_history(h)
-        _, macro_s_next_post_dist, macro_r_next_post_dist = self.abstract_model(macro_s, macro_a, h_flat)
-        macro_s_next_post = macro_s_next_post_dist.sample()
-        macro_r_next_post = macro_r_next_post_dist.sample()
+        #_, macro_s_next_post_dist, macro_r_next_post_dist = self.abstract_model(macro_s, macro_a, h_flat)
+        #macro_s_next = macro_s_next_post_dist.sample()
+        #macro_r_next_post = macro_r_next_post_dist.sample()
+        pred = self.abstract_model(macro_s, macro_a, h_flat)
+        macro_s_next = pred['macro_s_next_dist'].sample()
+        macro_s_next_dist = pred['macro_s_next_dist']
+        macro_r_dist = pred['macro_r_dist']
+        macro_r = pred['macro_r_dist'].sample()
 
-        return macro_s_next_post, macro_s_next_post_dist, macro_r_next_post, macro_r_next_post_dist
+        return macro_s_next, macro_s_next_dist, macro_r, macro_r_dist
 
     def filter_single_step_model_history(self, h: Tuple[torch.Tensor, torch.Tensor]):
         h = torch.concat(h, dim=0)  # concat h and c tensors of LSTM along the layer dimension, this is arbitrary
@@ -545,14 +570,14 @@ def build_single_step_model(d_macro_state: int,
                             batch_first: bool = True) -> SingleStepModel:
     # the deterministic model receives s, a, marco_s, macro_a, macro_s_next
     det_mdl = RecurrentBlock(d_state, d_action, d_macro_state, d_macro_action, d_macro_reward, d_macro_state,
-                             d_hidden=d_hidden, n_layers=n_rec_layers, batch_first=batch_first)
+                             d_hidden=d_hidden, n_layers=n_rec_layers, batch_first=batch_first, dropout=0.1)
     # the sampling model receives the output of the deterministic model and no additional input
     s_lws = (*s_lws, d_state)
     r_lws = (*r_lws, d_reward)
     term_lws = (*term_lws, 1)
     sampling_mdl_s = GaussianBlock(d_hidden, lws=s_lws)
     sampling_mdl_r = GaussianBlock(d_hidden, lws=r_lws)
-    sampling_mdl_term = BernoulliBlock(d_hidden, lws=term_lws)
+    sampling_mdl_term = ContinuousBernoulliBlock(d_hidden, lws=term_lws)
     single_step_mdl = SingleStepModel(det_mdl, sampling_mdl_s, sampling_mdl_r, sampling_mdl_term)
 
     return single_step_mdl
@@ -567,7 +592,8 @@ def build_abstract_model(d_macro_state: int,
                          s_prior_lws: Iterable[int],
                          s_post_lws: Iterable[int],
                          r_prior_lws: Iterable[int],
-                         r_post_lws: Iterable[int]) -> AbstractModel:
+                         r_post_lws: Iterable[int],
+                         term_lws: Iterable[int]) -> AbstractModel:
     # final hidden state info from single step model contains h and c of all LSTM layers
     d_hidden_final = d_memory * 2 * n_memory_layers
     # assume markovian dynamics at this level of abstraction, so no recurrency
@@ -582,7 +608,10 @@ def build_abstract_model(d_macro_state: int,
     s_posterior = GaussianBlock(ff_lws[-1], lws=s_post_lws)
     r_prior = GaussianBlock(ff_lws[-1], lws=r_prior_lws)
     r_posterior = GaussianBlock(ff_lws[-1], lws=r_post_lws)
+    term_prior = ContinuousBernoulliBlock(ff_lws[-1], lws=term_lws)
+    term_posterior = ContinuousBernoulliBlock(ff_lws[-1], lws=term_lws)
     abstract_model = AbstractModel(det_mdl=det_mdl, sampling_mdl_s_prior=s_prior, sampling_mdl_s_posterior=s_posterior,
-                                   sampling_mdl_r_prior=r_prior, sampling_mdl_r_posterior=r_posterior)
+                                   sampling_mdl_r_prior=r_prior, sampling_mdl_r_posterior=r_posterior,
+                                   sampling_mdl_term_prior=term_prior, sampling_mdl_term_posterior=term_posterior)
 
     return abstract_model
