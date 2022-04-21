@@ -89,12 +89,15 @@ class GaussianBlock(torch.nn.Module, DeviceMixin):
         x = torch.concat(xs, dim=-1)
         for l in self.layer_list[:-1]:  # only activations on inner layers
             x = l(x)
-            x = torch.nn.functional.relu(x)
+            x = torch.nn.functional.gelu(x)
         x = self.layer_list[-1](x)  # no activation on last layer
 
         mu, logvar = torch.tensor_split(x, 2, dim=-1)
-        #std = logvar.exp().pow(0.5) + 1e-5
-        std = torch.log(1 + logvar.exp()) + 1e-5
+        #std = logvar.exp().pow(0.5) + 1.0
+        #std = torch.log(1 + logvar.exp()) + 1e-1
+        #std = torch.nn.functional.relu(logvar) + 0.01
+        #std = torch.distributions.transform_to(torch.distributions.Normal.arg_constraints['scale'])(logvar) + 0.01
+        std = torch.abs(logvar) + 0.01
         x_dist = torch.distributions.Normal(mu, std)
 
         return x_dist
@@ -122,30 +125,28 @@ class FeedforwardBlock(torch.nn.Module, DeviceMixin):
         x = torch.concat(xs, dim=-1)
         for l in self.layer_list[:-1]:
             x = l(x)
-            x = torch.nn.functional.relu(x)
+            x = torch.nn.functional.gelu(x)
         x = self.layer_list[-1](x)
 
         return x
 
 
-class BernoulliBlock(FeedforwardBlock):
+class ContinuousBernoulliBlock(FeedforwardBlock):
 
     def __init__(self,
                  *d_inputs: int,
-                 lws: Union[Iterable[int], int] = None,
-                 temperature: float = 0.1):
-        super(BernoulliBlock, self).__init__(*d_inputs, lws=lws)
-        self.temperature = temperature
+                 lws: Union[Iterable[int], int] = None):
+        super(ContinuousBernoulliBlock, self).__init__(*d_inputs, lws=lws)
 
     def forward(self,
                 *xs: torch.Tensor):
         x = torch.concat(xs, dim=-1)
         for l in self.layer_list[:-1]:
             x = l(x)
-            x = torch.nn.functional.relu(x)
+            x = torch.nn.functional.gelu(x)
         x = self.layer_list[-1](x)
 
-        x_dist = torch.distributions.RelaxedBernoulli(logits=x, temperature=self.temperature)
+        x_dist = torch.distributions.ContinuousBernoulli(logits=x)
 
         return x_dist
 
