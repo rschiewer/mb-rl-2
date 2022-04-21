@@ -140,12 +140,8 @@ class ContinuousBernoulliBlock(FeedforwardBlock):
 
     def forward(self,
                 *xs: torch.Tensor):
-        x = torch.concat(xs, dim=-1)
-        for l in self.layer_list[:-1]:
-            x = l(x)
-            x = torch.nn.functional.gelu(x)
-        x = self.layer_list[-1](x)
-        x = torch.nn.functional.softmax(x)
+        x = super().forward(*xs)
+        x = torch.sigmoid(x)
 
         x_dist = torch.distributions.ContinuousBernoulli(probs=x)
 
