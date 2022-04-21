@@ -145,8 +145,9 @@ class ContinuousBernoulliBlock(FeedforwardBlock):
             x = l(x)
             x = torch.nn.functional.gelu(x)
         x = self.layer_list[-1](x)
+        x = torch.nn.functional.softmax(x)
 
-        x_dist = torch.distributions.ContinuousBernoulli(logits=x)
+        x_dist = torch.distributions.ContinuousBernoulli(probs=x)
 
         return x_dist
 
