@@ -302,6 +302,12 @@ class MultiscaleDynamicsModel(DynamicsModel):
             # set next state to upcoming time step's current state
             s = s_next
 
+        s_mem = torch.stack(s_mem, dim=1)
+        r_mem = torch.stack(r_mem, dim=1)
+        term_mem = torch.stack(term_mem, dim=1)
+        macro_r_mem = torch.stack(macro_r_mem, dim=1)
+        macro_term_mem = torch.stack(macro_term_mem, dim=1)
+
         return {'s': s_mem,
                 's_dist': s_dist_mem,
                 'r': r_mem,
@@ -377,9 +383,9 @@ class MultiscaleDynamicsModel(DynamicsModel):
         #beta = 10
         #beta_norm = M / N * beta
 
-        rec_s = rec_loss(torch.stack(pred['s'], dim=1), s_ground_truth)
-        rec_r = rec_loss(torch.stack(pred['r'], dim=1), r_ground_truth)
-        rec_term = rec_loss(torch.stack(pred['term'], dim=1), term_ground_truth)
+        rec_s = rec_loss(pred['s'], s_ground_truth)
+        rec_r = rec_loss(pred['r'], r_ground_truth)
+        rec_term = rec_loss(pred['term'], term_ground_truth)
         #rec_s = rec_loss_ml(pred['s_dist'], torch.transpose(s_ground_truth, 0, 1))
         #rec_r = rec_loss_ml(pred['r_dist'], torch.transpose(r_ground_truth, 0, 1))
 
@@ -390,8 +396,8 @@ class MultiscaleDynamicsModel(DynamicsModel):
             reg_s = 0.0001 * kl_reg_norm(pred['macro_s_post'])
             reg_r = 0.0001 * kl_reg_norm(pred['macro_r_post'])
             reg_term = 0.0001 * kl_reg_bern(pred['macro_term_post'])
-            mr = macro_r_loss(torch.stack(pred['macro_r'], dim=1), macro_r_target)
-            mt = macro_term_loss(torch.stack(pred['macro_term'], dim=1), macro_term_target)
+            mr = macro_r_loss(pred['macro_r'], macro_r_target)
+            mt = macro_term_loss(pred['macro_term'], macro_term_target)
         else:
             kl_s, kl_r, kl_term = torch.tensor(0), torch.tensor(0), torch.tensor(0)
             reg_s, reg_r, reg_term = torch.tensor(0), torch.tensor(0), torch.tensor(0)
