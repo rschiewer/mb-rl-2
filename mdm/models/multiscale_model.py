@@ -139,7 +139,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
 
     @staticmethod
     def reconstruction_loss(x_pred: torch.Tensor, x_true: torch.Tensor):
-        l = torch.mean((x_pred - x_true) ** 2)
+        l = torch.mean(torch.abs(x_pred - x_true))
         return l
 
     @staticmethod
@@ -305,8 +305,12 @@ class MultiscaleDynamicsModel(DynamicsModel):
         s_mem = torch.stack(s_mem, dim=1)
         r_mem = torch.stack(r_mem, dim=1)
         term_mem = torch.stack(term_mem, dim=1)
-        macro_r_mem = torch.stack(macro_r_mem, dim=1)
-        macro_term_mem = torch.stack(macro_term_mem, dim=1)
+        if len(macro_r_mem):
+            macro_r_mem = torch.stack(macro_r_mem, dim=1)
+            macro_term_mem = torch.stack(macro_term_mem, dim=1)
+        else:
+            macro_r_mem = 0
+            macro_term_mem = 0
 
         return {'s': s_mem,
                 's_dist': s_dist_mem,
