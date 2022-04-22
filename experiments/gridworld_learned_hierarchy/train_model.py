@@ -3,14 +3,14 @@ import time
 
 import numpy as np
 
-from mdm.training.dynamics_model_trainer import DynamicsModelTrainer, np_one_hot
+from mdm.training.dynamics_model_trainer import DynamicsModelTrainer
 from mdm.memory.trajectory_memory import flatten_and_unsqueeze
 from mdm.training.gym_driver import GymEpisodeDriver
 from mdm.training.offline_rl_driver import OfflineRLDriver
 from mdm.memory.trajectory_memory import TrajectoryMemory
 from mdm.models.multiscale_model import *
 from mdm.gridworld.gridworld import Gridworld
-from mdm.utils.utils import here, load_yaml
+from mdm.utils.utils import here, load_yaml, np_one_hot
 from mdm.logging.neptune_logger import NeptuneLogger
 
 
@@ -21,27 +21,28 @@ if __name__ == '__main__':
     mdl_d_state = env.observation_space.shape[0]
     mdl_d_action = env.action_space.n
     mdl_d_reward = 1
-    mdl_d_macro_state = 10
-    mdl_d_macro_action = 8
+    mdl_d_macro_state = 4
+    mdl_d_macro_action = 20
     mdl_d_macro_reward = 1
     mdl_n_abstract_steps = 3
     ss_mdl_n_rec_layers = 2
     ss_mdl_d_hidden = 64
     ss_mdl_s_lws = (64, 64)
-    ss_mdl_r_lws = (64,)
-    ss_mdl_term_lws = (64,)
+    ss_mdl_r_lws = (64, 32)
+    ss_mdl_term_lws = (64, 32)
     a_mdl_ff_lws = (64, 64)
-    a_mdl_s_prior_lws = (64,)
-    a_mdl_s_post_lws = (64,)
-    a_mdl_r_prior_lws = (64,)
-    a_mdl_r_post_lws = (64,)
-    a_mdl_term_lws = (64,)
+    a_mdl_s_prior_lws = (64, 64)
+    a_mdl_s_post_lws = (64, 64)
+    a_mdl_r_prior_lws = (64, 32)
+    a_mdl_r_post_lws = (64, 32)
+    a_mdl_term_prior_lws = (64, 32)
+    a_mdl_term_post_lws = (64, 32)
 
     trainer_d_batch = 4096
     trainer_n_warmup_steps = 1
-    trainer_n_train_steps = 3000 #15000
+    trainer_n_train_steps = 10000
     trainer_n_eval_interval = 100
-    trainer_lr = 0.0001
+    trainer_lr = 0.001
     trainer_betas = (0.90, 0.999)
     trainer_weight_decay = 0.00
 
@@ -59,7 +60,7 @@ if __name__ == '__main__':
                                               ss_mdl_s_lws, ss_mdl_r_lws, ss_mdl_term_lws)
     abstract_mdl = build_abstract_model(mdl_d_macro_state, mdl_d_macro_action, mdl_d_macro_reward, ss_mdl_d_hidden,
                                         ss_mdl_n_rec_layers, a_mdl_ff_lws, a_mdl_s_prior_lws, a_mdl_s_post_lws,
-                                        a_mdl_r_prior_lws, a_mdl_r_post_lws, a_mdl_term_lws)
+                                        a_mdl_r_prior_lws, a_mdl_r_post_lws, a_mdl_term_prior_lws, a_mdl_term_post_lws)
     macro_action_mdl = MacroActionModel(mdl_d_action, mdl_n_abstract_steps, mdl_d_macro_action)
     multiscale_mdl = MultiscaleDynamicsModel(single_step_mdl, abstract_mdl, macro_action_mdl, mdl_n_abstract_steps,
                                              mdl_d_state, mdl_d_action, mdl_d_reward, mdl_d_macro_state,

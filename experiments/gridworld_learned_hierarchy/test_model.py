@@ -90,10 +90,10 @@ if __name__ == '__main__':
                                                                   start_states=s_batch,
                                                                   d_dist=env.action_space.n,
                                                                   n_plan_steps=mdl.macro_step_size,
-                                                                  n_evolution_steps=1,
+                                                                  n_evolution_steps=10,
                                                                   winning_perc=pln_winning_perc,
                                                                   discount=1.0,
-                                                                  act_noise=0.000)
+                                                                  act_noise=0.001)
         i_best = i_winners[0]
         best_a = torch.nn.functional.one_hot(actions[i_best], num_classes=mdl.d_action).float()
         best_s = rollout_data['s'][i_best]
