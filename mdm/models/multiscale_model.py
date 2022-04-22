@@ -1,4 +1,4 @@
-from typing import Tuple, Dict
+from typing import Tuple, Dict, Sequence
 from collections import deque
 from math import ceil
 
@@ -52,9 +52,9 @@ class SingleStepModel(torch.nn.Module, DeviceMixin):
                 h: torch.Tensor):
         s, a, macro_s, macro_a, macro_r, macro_s_next = add_time_dim(s, a, macro_s, macro_a, macro_r, macro_s_next,
                                                                      batch_first=self.det_mdl.batch_first)
-
         x_det, h = self.det_mdl(s, a, macro_s, macro_a, macro_r, macro_s_next, h=h)
         x_det = remove_time_dim(x_det, batch_first=self.det_mdl.batch_first)
+
         s_next_dist = self.sampling_mdl_s(x_det)
         r_dist = self.sampling_mdl_r(x_det)
         term_dist = self.sampling_mdl_term(x_det)
@@ -93,15 +93,15 @@ class AbstractModel(torch.nn.Module, DeviceMixin):
             d_memory = self.det_mdl.d_inputs[-1]
             single_step_model_history = torch.zeros(d_batch, d_memory, device=self.device)
 
-            macro_det = self.det_mdl(macro_s, macro_a, single_step_model_history)
+            macro_det = self.det_mdl(macro_s, macro_a)
             macro_s_next_dist = self.sampling_mdl_s_prior(macro_det)
             macro_r_dist = self.sampling_mdl_r_prior(macro_det)
             macro_term_dist = self.sampling_mdl_term_prior(macro_det)
         else:
-            macro_det = self.det_mdl(macro_s, macro_a, single_step_model_history)
-            macro_s_next_dist = self.sampling_mdl_s_posterior(macro_det)
-            macro_r_dist = self.sampling_mdl_r_posterior(macro_det)
-            macro_term_dist = self.sampling_mdl_term_posterior(macro_det)
+            macro_det = self.det_mdl(macro_s, macro_a)
+            macro_s_next_dist = self.sampling_mdl_s_posterior(macro_det, single_step_model_history)
+            macro_r_dist = self.sampling_mdl_r_posterior(macro_det, single_step_model_history)
+            macro_term_dist = self.sampling_mdl_term_posterior(macro_det, single_step_model_history)
 
         return {'macro_s_next_dist': macro_s_next_dist,
                 'macro_r_dist': macro_r_dist,
@@ -171,7 +171,10 @@ class MultiscaleDynamicsModel(DynamicsModel):
 
         for prior, posterior in zip(priors, posteriors):
             if detach_posterior:
-                posterior = torch.distributions.ContinuousBernoulli(logits=posterior.logits)  # todo: make if-else for logits vs probs
+                if posterior.probs is None:
+                    posterior = torch.distributions.ContinuousBernoulli(logits=posterior.logits)
+                else:
+                    posterior = torch.distributions.ContinuousBernoulli(probs=posterior.probs)
             l += torch.distributions.kl.kl_divergence(posterior, prior)
         return torch.mean(l)
 
@@ -186,10 +189,15 @@ class MultiscaleDynamicsModel(DynamicsModel):
 
     @staticmethod
     def kl_regularizer_bernoulli(priors: List[torch.distributions.ContinuousBernoulli]):
-        uniform_gauss = torch.distributions.ContinuousBernoulli(logits=priors[0].logits)
-        l = torch.zeros_like(priors[0].logits)
+        if priors[0].probs is None:
+            uniform_bernoulli = torch.distributions.ContinuousBernoulli(logits=torch.ones_like(priors[0].logits))
+            l = torch.zeros_like(priors[0].logits)
+        else:
+            uniform_bernoulli = torch.distributions.ContinuousBernoulli(logits=torch.ones_like(priors[0].probs))
+            l = torch.zeros_like(priors[0].probs)
+
         for prior in priors:
-            l += torch.distributions.kl.kl_divergence(prior, uniform_gauss)
+            l += torch.distributions.kl.kl_divergence(prior, uniform_bernoulli)
         return torch.mean(l)
 
     @staticmethod
@@ -389,12 +397,12 @@ class MultiscaleDynamicsModel(DynamicsModel):
             reg_s, reg_r, reg_term = torch.tensor(0), torch.tensor(0), torch.tensor(0)
             mr, mt = torch.tensor(0), torch.tensor(0)
 
-        kl = kl_s + kl_r #+ kl_term
-        reg = reg_s + reg_r #+ reg_term
+        kl = kl_s + kl_r + kl_term
+        reg = reg_s + reg_r + reg_term
         loss = rec_s + rec_r + rec_term + kl + reg + mr + mt
 
-        return {'total': loss, 'rec_s': rec_s, 'rec_r': rec_r, 'rec_term': rec_term, 'kl_s': kl_s, 'kl_r': kl_r, 'kl_reg': reg,
-                'macro_r': mr, 'macro_term': mt}
+        return {'total': loss, 'rec_s': rec_s, 'rec_r': rec_r, 'rec_term': rec_term, 'kl_s': kl_s, 'kl_r': kl_r,
+                'kl_term':kl_term, 'kl_reg': reg, 'macro_r': mr, 'macro_term': mt}
 
     def input_compatible(self,
                          s_ground_truth: torch.Tensor,
@@ -564,9 +572,9 @@ def build_single_step_model(d_macro_state: int,
                             d_reward: int,
                             d_hidden: int,
                             n_rec_layers: int,
-                            s_lws: Iterable[int],
-                            r_lws: Iterable[int],
-                            term_lws: Iterable[int],
+                            s_lws: Sequence[int],
+                            r_lws: Sequence[int],
+                            term_lws: Sequence[int],
                             batch_first: bool = True) -> SingleStepModel:
     # the deterministic model receives s, a, marco_s, macro_a, macro_s_next
     det_mdl = RecurrentBlock(d_state, d_action, d_macro_state, d_macro_action, d_macro_reward, d_macro_state,
@@ -588,28 +596,30 @@ def build_abstract_model(d_macro_state: int,
                          d_macro_reward: int,
                          d_memory: int,
                          n_memory_layers: int,
-                         ff_lws: Iterable[int],
-                         s_prior_lws: Iterable[int],
-                         s_post_lws: Iterable[int],
-                         r_prior_lws: Iterable[int],
-                         r_post_lws: Iterable[int],
-                         term_lws: Iterable[int]) -> AbstractModel:
+                         ff_lws: Sequence[int],
+                         s_prior_lws: Sequence[int],
+                         s_post_lws: Sequence[int],
+                         r_prior_lws: Sequence[int],
+                         r_post_lws: Sequence[int],
+                         term_prior_lws: Sequence[int],
+                         term_post_lws: Sequence[int]) -> AbstractModel:
     # final hidden state info from single step model contains h and c of all LSTM layers
     d_hidden_final = d_memory * 2 * n_memory_layers
     # assume markovian dynamics at this level of abstraction, so no recurrency
-    ff_lws = tuple(ff_lws)
-    det_mdl = FeedforwardBlock(d_macro_state, d_macro_action, d_hidden_final, lws=ff_lws)
+    det_mdl = FeedforwardBlock(d_macro_state, d_macro_action, lws=ff_lws)
     # the sampling model receives the output of the deterministic model and no additional input
     s_prior_lws = (*s_prior_lws, d_macro_state)
     s_post_lws = (*s_post_lws, d_macro_state)
     r_prior_lws = (*r_prior_lws, d_macro_reward)
     r_post_lws = (*r_post_lws, d_macro_reward)
+    term_prior_lws = (*term_prior_lws, 1)
+    term_post_lws = (*term_post_lws, 1)
     s_prior = GaussianBlock(ff_lws[-1], lws=s_prior_lws)
-    s_posterior = GaussianBlock(ff_lws[-1], lws=s_post_lws)
+    s_posterior = GaussianBlock(ff_lws[-1], d_hidden_final, lws=s_post_lws)
     r_prior = GaussianBlock(ff_lws[-1], lws=r_prior_lws)
-    r_posterior = GaussianBlock(ff_lws[-1], lws=r_post_lws)
-    term_prior = ContinuousBernoulliBlock(ff_lws[-1], lws=term_lws)
-    term_posterior = ContinuousBernoulliBlock(ff_lws[-1], lws=term_lws)
+    r_posterior = GaussianBlock(ff_lws[-1], d_hidden_final, lws=r_post_lws)
+    term_prior = ContinuousBernoulliBlock(ff_lws[-1], lws=term_prior_lws)
+    term_posterior = ContinuousBernoulliBlock(ff_lws[-1], d_hidden_final, lws=term_post_lws)
     abstract_model = AbstractModel(det_mdl=det_mdl, sampling_mdl_s_prior=s_prior, sampling_mdl_s_posterior=s_posterior,
                                    sampling_mdl_r_prior=r_prior, sampling_mdl_r_posterior=r_posterior,
                                    sampling_mdl_term_prior=term_prior, sampling_mdl_term_posterior=term_posterior)
