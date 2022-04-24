@@ -18,13 +18,15 @@ class MacroActionModel(torch.nn.Module, DeviceMixin):
         super(MacroActionModel, self).__init__()
 
         self.flatten_layer = torch.nn.Flatten(start_dim=1)
-        self.det_mdl = FeedforwardBlock(d_action * n_abstract_steps, lws=(64, d_macro_action))
+        self.det_mdl = FeedforwardBlock(d_action * n_abstract_steps, lws=(64, 64, d_macro_action))
 
     def forward(self, actions: torch.Tensor):
         # actions.shape = (d_batch, n_abstract_steps, d_action)
         macro_action = self.flatten_layer(actions)
         macro_action = self.det_mdl(macro_action)
-        macro_action = F.gumbel_softmax(macro_action, hard=True)
+        macro_action = torch.tanh(macro_action)
+        #macro_action = torch.softmax(macro_action, dim=-1)
+        #macro_action = F.gumbel_softmax(macro_action, hard=True)
         return macro_action
 
 
@@ -139,7 +141,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
 
     @staticmethod
     def reconstruction_loss(x_pred: torch.Tensor, x_true: torch.Tensor):
-        l = torch.mean(torch.abs(x_pred - x_true))
+        l = torch.mean((x_pred - x_true) ** 2)
         return l
 
     @staticmethod
@@ -199,12 +201,6 @@ class MultiscaleDynamicsModel(DynamicsModel):
         for prior in priors:
             l += torch.distributions.kl.kl_divergence(prior, uniform_bernoulli)
         return torch.mean(l)
-
-    @staticmethod
-    def macro_reward_loss(macro_r_pred,
-                          macro_r_true):
-        l = torch.mean((macro_r_pred - macro_r_true) ** 2)
-        return l
 
     def average_kstep_value(self,
                             rewards: torch.Tensor,
@@ -394,9 +390,9 @@ class MultiscaleDynamicsModel(DynamicsModel):
         #rec_r = rec_loss_ml(pred['r_dist'], torch.transpose(r_ground_truth, 0, 1))
 
         if len(pred['macro_s_prior']) > 0:
-            kl_s = 0.001 * kl_loss_norm(pred['macro_s_prior'], pred['macro_s_post'], detach_posterior=True)
-            kl_r = 0.001 * kl_loss_norm(pred['macro_r_prior'], pred['macro_r_post'], detach_posterior=True)
-            kl_term = 0.001 * kl_loss_bern(pred['macro_term_prior'], pred['macro_term_post'], detach_posterior=True)
+            kl_s = 1.0 * kl_loss_norm(pred['macro_s_prior'], pred['macro_s_post'], detach_posterior=False)
+            kl_r = 1.0 * kl_loss_norm(pred['macro_r_prior'], pred['macro_r_post'], detach_posterior=False)
+            kl_term = 1.0 * kl_loss_bern(pred['macro_term_prior'], pred['macro_term_post'], detach_posterior=False)
             reg_s = 0.0001 * kl_reg_norm(pred['macro_s_post'])
             reg_r = 0.0001 * kl_reg_norm(pred['macro_r_post'])
             reg_term = 0.0001 * kl_reg_bern(pred['macro_term_post'])
@@ -491,9 +487,9 @@ class MultiscaleDynamicsModel(DynamicsModel):
             a = actions[:, t]
 
             pred_ss, h = self.single_step_model(s, a, macro_s, macro_a, macro_r, macro_s_next, h)
-            s_next = pred_ss['s_next_dist'].sample()
-            r = pred_ss['r_dist'].sample()
-            term = pred_ss['term_dist'].sample()
+            s_next = pred_ss['s_next_dist'].loc
+            r = pred_ss['r_dist'].loc
+            term = pred_ss['term_dist'].probs
 
             s_mem.append(s_next)
             r_mem.append(r)
@@ -532,12 +528,11 @@ class MultiscaleDynamicsModel(DynamicsModel):
                 macro_s = macro_start_states[:, t]
             macro_a = macro_actions[:, t]
 
-            #_, macro_s_next_prior, macro_r_next_prior = self.abstract_model(macro_s, macro_a)
             #macro_s_next = macro_s_next_prior.sample()
             #macro_r_next = macro_r_next_prior.sample()
             pred_macro_prior = self.abstract_model(macro_s, macro_a)
-            macro_s_next = pred_macro_prior['macro_s_next_dist'].sample()
-            macro_r = pred_macro_prior['macro_r_dist'].sample()
+            macro_s_next = pred_macro_prior['macro_s_next_dist'].loc
+            macro_r = pred_macro_prior['macro_r_dist'].loc
 
             macro_s_prior_mem.append(macro_s_next)
             macro_r_prior_mem.append(macro_r)
@@ -560,10 +555,10 @@ class MultiscaleDynamicsModel(DynamicsModel):
         #macro_s_next = macro_s_next_post_dist.sample()
         #macro_r_next_post = macro_r_next_post_dist.sample()
         pred = self.abstract_model(macro_s, macro_a, h_flat)
-        macro_s_next = pred['macro_s_next_dist'].sample()
+        macro_s_next = pred['macro_s_next_dist'].loc
         macro_s_next_dist = pred['macro_s_next_dist']
+        macro_r = pred['macro_r_dist'].loc
         macro_r_dist = pred['macro_r_dist']
-        macro_r = pred['macro_r_dist'].sample()
 
         return macro_s_next, macro_s_next_dist, macro_r, macro_r_dist
 
