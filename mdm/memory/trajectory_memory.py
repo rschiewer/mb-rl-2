@@ -1,7 +1,7 @@
 from __future__ import annotations
 from collections import deque
 from pathlib import Path
-from typing import Dict, List, Iterable, Sequence, Union
+from typing import Dict, List, Iterable, Sequence, Union, Tuple
 from copy import copy, deepcopy
 import random
 import pickle
@@ -192,7 +192,7 @@ class TrajectoryMemory:
         return lengths['a'] == lengths['r'] and lengths['a'] == lengths['terminal'] and lengths['s'] == lengths['a'] + 1
 
 
-def flatten_and_unsqueeze(*xs: Union[torch.Tensor, np.ndarray]):
+def flatten_and_unsqueeze(*xs: Union[torch.Tensor, np.ndarray]) -> Union[Tuple[torch.Tensor], Tuple[np.ndarray]]:
     reshaped = []
     for x in xs:
         d_x = np.prod(x.shape[2:]) if len(x.shape) >= 3 else 1
