@@ -3,6 +3,7 @@ import unittest
 from time import sleep
 from copy import deepcopy
 
+import gym
 import numpy as np
 
 from mdm.gridworld.gridworld import Gridworld, CellType
@@ -20,6 +21,16 @@ class GridworldTest(unittest.TestCase):
         self.world.add_object(self.agent_start_pos, CellType.AGENT)
         self.world.add_object(self.reward_pos, CellType.REWARD)
         self.world.add_object(self.wall_pos, CellType.WALL)
+
+    def test_action_space(self):
+        self.assertEqual(self.world.action_space.__class__, gym.spaces.Discrete)
+        self.assertEqual(self.world.action_space.n, 4)
+
+    def test_observation_space(self):
+        self.assertEqual(self.world.observation_space.__class__, gym.spaces.Box)
+        self.assertTrue(np.all(self.world.observation_space.low == np.array([0, 0])))
+        self.assertTrue(np.all(self.world.observation_space.high ==
+                               np.array([self.world.grid_h - 1, self.world.grid_w - 1])))
 
     def test_from_cleartext(self):
         world = Gridworld.from_cleartext(Path(__file__).parent / 'testmap.mapdata')

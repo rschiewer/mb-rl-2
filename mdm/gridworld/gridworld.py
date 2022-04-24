@@ -49,7 +49,8 @@ class Gridworld(gym.Env):
         self._current_ep_time = 0
 
         self.action_space = gym.spaces.Discrete(n=4)
-        self.observation_space = gym.spaces.Box(low=0, high=255, shape=(2,), dtype=np.int64)
+        self.observation_space = gym.spaces.Box(low=np.array([0, 0]), high=np.array([grid_h - 1, grid_w - 1]),
+                                                shape=(2,), dtype=np.int64)
 
         self.canvas = None
         self._tk_master = None
