@@ -216,6 +216,22 @@ class Gridworld(gym.Env):
         return cells
 
 
+class NormalizedObsGridworld(gym.ObservationWrapper):
+
+    def __init__(self, env: gym.Env):
+        super(NormalizedObsGridworld, self).__init__(env)
+
+        low = np.array([-1, -1], dtype=np.float32)
+        high = np.array([1, 1], dtype=np.float32)
+        self.observation_space = gym.spaces.Box(low=low, high=high, dtype=np.float32)
+
+        self._orig_high = env.observation_space.high
+        self._orig_low = env.observation_space.low
+
+    def observation(self, observation):
+        raise NotImplementedError('TODO')
+
+
 class GridworldGUI(Toplevel):
 
     colors = {
