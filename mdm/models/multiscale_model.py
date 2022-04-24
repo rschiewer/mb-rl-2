@@ -89,11 +89,11 @@ class AbstractModel(torch.nn.Module, DeviceMixin):
     def forward(self,
                 macro_s: torch.Tensor,
                 macro_a: torch.Tensor,
-                single_step_model_history: torch.Tensor = None):
-        if single_step_model_history is None:
+                primitive_trajectory_hist: torch.Tensor = None):
+        if primitive_trajectory_hist is None:
             d_batch = macro_s.shape[0]
             d_memory = self.det_mdl.d_inputs[-1]
-            single_step_model_history = torch.zeros(d_batch, d_memory, device=self.device)
+            primitive_trajectory_hist = torch.zeros(d_batch, d_memory, device=self.device)
 
             macro_det = self.det_mdl(macro_s, macro_a)
             macro_s_next_dist = self.sampling_mdl_s_prior(macro_det)
@@ -101,9 +101,9 @@ class AbstractModel(torch.nn.Module, DeviceMixin):
             macro_term_dist = self.sampling_mdl_term_prior(macro_det)
         else:
             macro_det = self.det_mdl(macro_s, macro_a)
-            macro_s_next_dist = self.sampling_mdl_s_posterior(macro_det, single_step_model_history)
-            macro_r_dist = self.sampling_mdl_r_posterior(macro_det, single_step_model_history)
-            macro_term_dist = self.sampling_mdl_term_posterior(macro_det, single_step_model_history)
+            macro_s_next_dist = self.sampling_mdl_s_posterior(macro_det, primitive_trajectory_hist)
+            macro_r_dist = self.sampling_mdl_r_posterior(macro_det, primitive_trajectory_hist)
+            macro_term_dist = self.sampling_mdl_term_posterior(macro_det, primitive_trajectory_hist)
 
         return {'macro_s_next_dist': macro_s_next_dist,
                 'macro_r_dist': macro_r_dist,
@@ -248,7 +248,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
         for t in range(n_steps):
             if t % self.macro_step_size == 0 and t > 0:  # invoke abstract model every k time steps
                 # TODO: think about this model more closely
-                macro_a = self.macro_action_model(self._next_single_step_actions(actions, t))
+                macro_a = self.macro_action_model(self._next_primitive_actions(actions, t))
                 h_flat = self.filter_single_step_model_history(h)
                 macro_s = macro_s_next  # update current macro state to previously predicted one
 
@@ -323,7 +323,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
                 'macro_term_prior': macro_term_prior_mem,
                 'macro_term_post': macro_term_post_mem}
 
-    def _next_single_step_actions(self, actions: torch.Tensor, t: int):
+    def _next_primitive_actions(self, actions: torch.Tensor, t: int):
         n_steps = actions.shape[1]
         if t + self.macro_step_size > n_steps:
             diff = t + self.macro_step_size - n_steps
