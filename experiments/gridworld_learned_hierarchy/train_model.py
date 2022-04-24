@@ -22,11 +22,11 @@ if __name__ == '__main__':
     mdl_d_action = env.action_space.n
     mdl_d_reward = 1
     mdl_d_macro_state = 4
-    mdl_d_macro_action = 20
+    mdl_d_macro_action = 2
     mdl_d_macro_reward = 1
     mdl_n_abstract_steps = 3
     ss_mdl_n_rec_layers = 2
-    ss_mdl_d_hidden = 64
+    ss_mdl_d_hidden = 32
     ss_mdl_s_lws = (64, 64)
     ss_mdl_r_lws = (64, 32)
     ss_mdl_term_lws = (64, 32)
@@ -38,9 +38,9 @@ if __name__ == '__main__':
     a_mdl_term_prior_lws = (64, 32)
     a_mdl_term_post_lws = (64, 32)
 
-    trainer_d_batch = 4096
+    trainer_d_batch = 6000
     trainer_n_warmup_steps = 1
-    trainer_n_train_steps = 10000
+    trainer_n_train_steps = 8000
     trainer_n_eval_interval = 100
     trainer_lr = 0.001
     trainer_betas = (0.90, 0.999)
@@ -73,16 +73,16 @@ if __name__ == '__main__':
 
     # train model
     def get_batch_train():
-        s, a, r, terminal = train_driver.interact(trainer_d_batch).to_np_arrays(dtype=np.float32, pad_last_terminal_flag=False)
+        s, a, r, terminal = train_driver.interact(trainer_d_batch).to_np_arrays(dtype=np.float32, pad_last_terminal_flag=True)
         s, a, r, terminal = flatten_and_unsqueeze(s, a, r, terminal)
-        s /= (env.grid_h - 1, env.grid_w - 1)
+        s = s / (env.grid_h - 1, env.grid_w - 1) - 0.5
         a = np_one_hot(a.astype(np.int64), n_categories=mdl_d_action)
         return s, a, r, terminal
 
     def get_batch_test():
-        s, a, r, terminal = test_driver.interact(trainer_d_batch).to_np_arrays(dtype=np.float32, pad_last_terminal_flag=False)
+        s, a, r, terminal = test_driver.interact(trainer_d_batch).to_np_arrays(dtype=np.float32, pad_last_terminal_flag=True)
         s, a, r, terminal = flatten_and_unsqueeze(s, a, r, terminal)
-        s /= (env.grid_h - 1, env.grid_w - 1)
+        s = s / (env.grid_h - 1, env.grid_w - 1) - 0.5
         a = np_one_hot(a.astype(np.int64), n_categories=mdl_d_action)
         return s, a, r, terminal
 

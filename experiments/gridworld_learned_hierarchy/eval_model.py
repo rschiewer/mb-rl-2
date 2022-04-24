@@ -14,6 +14,7 @@ if __name__ == '__main__':
     env = Gridworld.from_cleartext(here() / '../../mdm/gridworld/8x8_v0.mapdata')
     mdl: MultiscaleDynamicsModel = torch.load(here() / 'model.ptmdl')
     planner = CrossentropyPlanner(DistributionType.CATEGORICAL, device=mdl.device)
+    planner_abstract = CrossentropyPlanner(DistributionType.NORMAL, device=mdl.device)
 
     n_episodes = 10
     store_result_trajectories = False
@@ -21,18 +22,18 @@ if __name__ == '__main__':
     pln_n_optim_steps_macro = 30
     pln_winning_perc = 0.1
     pln_discount = 0.99
-    pln_act_noise = 0.000
+    pln_act_noise = 0.1
     pln_n_abstract_steps = 100
 
     def _rollout_init_fn(start_states: torch.Tensor, actions: torch.Tensor):
         start_states = flatten_and_unsqueeze(start_states)
-        start_states = start_states.float() / torch.tensor((env.grid_h - 1, env.grid_w - 1), device=mdl.device)
+        start_states = start_states.float() / torch.tensor((env.grid_h - 1, env.grid_w - 1), device=mdl.device ) - 0.5
         actions = torch.nn.functional.one_hot(actions, num_classes=mdl.d_action)
         predictions_ss = mdl.rollout_single_step(start_states, actions)
         return predictions_ss['r'].squeeze(), predictions_ss['term'].squeeze(), predictions_ss
 
     def _rollout_abstract_fn(macro_start_state: torch.Tensor, macro_actions: torch.Tensor):
-        macro_actions = torch.nn.functional.one_hot(macro_actions, num_classes=mdl.d_macro_action)
+        #macro_actions = torch.nn.functional.one_hot(macro_actions, num_classes=mdl.d_macro_action)
         predictions = mdl.rollout_abstract(macro_start_state, macro_actions)
         macro_s_prior, macro_s_prior_dist, macro_r_prior, macro_r_prior_dist = predictions
         return macro_r_prior.squeeze(), None, {'macro_s': macro_s_prior, 'macro_s_dist': macro_s_prior_dist,
@@ -73,7 +74,7 @@ if __name__ == '__main__':
         # use closure to bind macro_x arguments inside the function to the above defined ones
         def _rollout_detailed_fn(start_states: torch.Tensor, actions: torch.Tensor):
             start_states = flatten_and_unsqueeze(start_states)
-            start_states = start_states.float() / torch.tensor((env.grid_h - 1, env.grid_w - 1), device=mdl.device)
+            start_states = start_states.float() / torch.tensor((env.grid_h - 1, env.grid_w - 1), device=mdl.device) - 0.5
             actions = torch.nn.functional.one_hot(actions, num_classes=mdl.d_action)
             predictions_ss = mdl.rollout_single_step(start_states, actions, macro_s_batch, macro_a_batch,
                                                      macro_r_batch, macro_s_next_batch)
@@ -121,7 +122,7 @@ if __name__ == '__main__':
         #macro_s_batch = torch.tile(macro_s_1.loc, dims=(pln_d_batch, 1))  # time dim required
         #macro_s_batch = torch.tile(macro_s_1, dims=(pln_d_batch, 1))  # time dim required
         macro_s_batch = macro_s_batch.unsqueeze(1)  # add time dimension of 1
-        macro_actions, act_dist, i_winners, rollout_data = planner.plan(rollout_fn=_rollout_abstract_fn,
+        macro_actions, act_dist, i_winners, rollout_data = planner_abstract.plan(rollout_fn=_rollout_abstract_fn,
                                                                         start_states=macro_s_batch,
                                                                         d_dist=mdl.d_macro_action,
                                                                         n_plan_steps=pln_n_abstract_steps,
@@ -130,7 +131,8 @@ if __name__ == '__main__':
                                                                         discount=pln_discount,
                                                                         act_noise=pln_act_noise)
         i_top_cand = i_winners[0]
-        best_macro_as = torch.nn.functional.one_hot(macro_actions[i_top_cand], num_classes=mdl.d_macro_action).float()
+        #best_macro_as = torch.nn.functional.one_hot(macro_actions[i_top_cand], num_classes=mdl.d_macro_action).float()
+        best_macro_as = macro_actions[i_top_cand]
         # extract best performer for each time step
         #best_macro_ss = [extract_sub_distribution(d, i_top_cand) for d in rollout_data['macro_s']]
         #best_macro_rs = [extract_sub_distribution(d, i_top_cand) for d in rollout_data['macro_r']]
