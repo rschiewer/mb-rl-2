@@ -213,6 +213,19 @@ class GridworldTest(unittest.TestCase):
                 world.enact_sequence(s_mem, a_mem, r_mem, terminal_mem_cp, False, 0)
 
 
+    def test_teleport_agent(self):
+        world = Gridworld.from_cleartext(here() / 'testmap_multi_start_pos.mapdata')
+        world.reset()
+        world.teleport_agent((1, 0))
+        world.teleport_agent((1, 0))
+
+        self.assertTrue(np.all(world.find_cell_type(CellType.AGENT) == (1, 0)))
+        world.step(2)
+        self.assertTrue(np.all(world.find_cell_type(CellType.AGENT) == (2, 0)))
+
+        # TODO: further testing
+
+
     @unittest.skip
     def test_render(self):
         world = self.world

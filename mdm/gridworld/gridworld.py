@@ -134,6 +134,22 @@ class Gridworld(gym.Env):
 
         return self.find_cell_type(CellType.AGENT), reward, done, info
 
+    def teleport_agent(self, pos: Sequence[int]):
+        if len(pos) != 2:
+            raise ValueError('pos should be sequence of length 2')
+
+        agent_pos = self.find_cell_type(CellType.AGENT)
+        if len(agent_pos) != 2:
+            raise RuntimeError('Agent position is ambiguous or unknown, did you call reset() first?')
+
+        if self._grid[tuple(pos)] != CellType.FREE and self._grid[tuple(pos)] != CellType.AGENT:
+            raise ValueError('Destination position must be unoccupied')
+
+        self._grid.flags.writeable = True
+        self._grid[tuple(agent_pos)] = CellType.FREE
+        self._grid[tuple(pos)] = CellType.AGENT
+        self._grid.flags.writeable = False
+
     def reset(self):
         self._grid.flags.writeable = True
         self._grid[:] = self._init_grid[:]
