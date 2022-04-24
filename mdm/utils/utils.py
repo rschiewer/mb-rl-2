@@ -12,6 +12,7 @@ import torch
 from mdm.gridworld.gridworld import Gridworld, CellType
 from mdm.models.multiscale_model import MultiscaleDynamicsModel
 from mdm.memory.trajectory_memory import flatten_and_unsqueeze
+from mdm.training.gym_driver import GymStepDriver
 
 
 def here() -> Path:
@@ -55,11 +56,21 @@ def gen_macro_state_map(env: Gridworld,
     free_locations = env.find_cell_type(CellType.FREE)
     n_locations = len(free_locations)
 
+    groundtruth_s_final = []
+    for a_seq in action_sequences:
+        for loc in free_locations:
+            env.reset()
+            env.teleport_agent(loc)
+            for a in a_seq:
+                s_, r, done, _ = env.step(a)
+            groundtruth_s_final.append(s_)
+    groundtruth_s_final = np.stack(groundtruth_s_final)
+
     # convert to tensors
     action_sequences = [torch.tensor(s).to(mdl.device) for s in action_sequences]
     s_start = torch.from_numpy(free_locations).to(mdl.device)
     s_start = s_start.unsqueeze(1)  # add time dimension
-    s_start = s_start.float() / torch.tensor((env.grid_h - 1, env.grid_w - 1), device=mdl.device) - 0.5  # normalize
+    s_start = normalize_obs(s_start, env)
 
     macro_s_init_history = []
     for a_seq in action_sequences:
@@ -73,10 +84,24 @@ def gen_macro_state_map(env: Gridworld,
         macro_s_init_history.append(macro_s_next_post.detach().cpu().numpy())
 
     macro_s_init_history = np.stack(macro_s_init_history)
-    macro_s_init_mean = macro_s_init_history.mean(axis=0)
-    macro_s_init_mean = (macro_s_init_mean + np.abs(macro_s_init_mean.min(axis=0))) / (macro_s_init_mean.max(axis=0)
-                                                                                       - macro_s_init_mean.min(axis=0))
-    return free_locations, macro_s_init_mean
+    macro_s_init_history = macro_s_init_history.reshape(len(action_sequences) * n_locations, mdl.d_macro_state)
+    #macro_s_init_mean = macro_s_init_history.mean(axis=0)
+    #macro_s_init_mean = (macro_s_init_mean + np.abs(macro_s_init_mean.min(axis=0))) / (macro_s_init_mean.max(axis=0)
+    #                                                                                   - macro_s_init_mean.min(axis=0))
+    #return free_locations, macro_s_init_mean
+
+    macro_s_init_mean = {tuple(pos): [] for pos in free_locations}
+    macro_s_init_std = {tuple(pos): [] for pos in free_locations}
+    for s_final, macro_s_init in zip(groundtruth_s_final, macro_s_init_history):
+        macro_s_init_mean[tuple(s_final)].append(macro_s_init)
+    for k, v in macro_s_init_mean.items():
+        macro_s_init_mean[k] = np.mean(v, axis=0)
+        macro_s_init_std[k] = np.std(v, axis=0)
+
+    macro_s_init_mean = np.stack([macro_s_init_mean[tuple(loc)] for loc in free_locations])
+    macro_s_init_std = np.stack([macro_s_init_std[tuple(loc)] for loc in free_locations])
+
+    return free_locations, macro_s_init_mean, macro_s_init_std
 
 
 def normalize_obs(obs: Union[torch.Tensor, np.ndarray],

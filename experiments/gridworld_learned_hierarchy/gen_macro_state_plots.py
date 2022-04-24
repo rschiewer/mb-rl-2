@@ -11,48 +11,18 @@ from sklearn.manifold import TSNE
 
 from mdm.gridworld.gridworld import Gridworld, CellType
 from mdm.models.multiscale_model import MultiscaleDynamicsModel
-from mdm.utils.utils import here
+from mdm.utils.utils import here, gen_macro_state_map
 from mdm.memory.trajectory_memory import TrajectoryMemory
 from mdm.training.offline_rl_driver import OfflineRLDriver
 from mdm.memory.trajectory_memory import flatten_and_unsqueeze
 
-
-def gen_macro_state_map(env: Gridworld, mdl: MultiscaleDynamicsModel, n_trials: int):
-    available_actions = list(range(env.action_space.n))
-    action_sequences = list(product(available_actions, repeat=mdl.macro_step_size)) * n_trials
-    free_locations = env.find_cell_type(CellType.FREE)
-    n_locations = len(free_locations)
-
-    # convert to tensors
-    action_sequences = [torch.tensor(s).to(mdl.device) for s in action_sequences]
-    s_start = torch.from_numpy(free_locations).to(mdl.device)
-    s_start = s_start.unsqueeze(1)  # add time dimension
-    s_start = s_start.float() / torch.tensor((env.grid_h - 1, env.grid_w - 1), device=mdl.device)  # normalize
-
-    macro_s_init_history = []
-    for a_seq in action_sequences:
-        a_seq_batch = torch.tile(a_seq, dims=(n_locations, 1))  # copy same starting observation along batch
-        a_seq_batch = torch.nn.functional.one_hot(a_seq_batch, num_classes=mdl.d_action)
-        predictions_ss = mdl.rollout_single_step(s_start, a_seq_batch)
-        zero_macro_s = torch.zeros(n_locations, mdl.d_macro_state, device=mdl.device)
-        zero_macro_a = torch.zeros(n_locations, mdl.d_macro_action, device=mdl.device)
-        predictions_ms = mdl.macro_next_posterior(zero_macro_s, zero_macro_a, predictions_ss['h'])
-        macro_s_next_post, macro_s_next_post_dist, macro_r_next_post, macro_r_next_post_dist = predictions_ms
-        macro_s_init_history.append(macro_s_next_post.detach().cpu().numpy())
-
-    macro_s_init_history = np.stack(macro_s_init_history)
-    macro_s_init_mean = macro_s_init_history.mean(axis=0)
-    macro_s_init_mean = (macro_s_init_mean + np.abs(macro_s_init_mean.min(axis=0))) / (macro_s_init_mean.max(axis=0)
-                                                                                       - macro_s_init_mean.min(axis=0))
-    return free_locations, macro_s_init_mean
-
-
 if __name__ == '__main__':
     env = Gridworld.from_cleartext(here() / '../../mdm/gridworld/8x8_v1.mapdata')
     mdl: MultiscaleDynamicsModel = torch.load(here() / 'model.ptmdl')
-    n_trials = 50
+    n_trials = 10
 
-    free_locations, macro_s_init_mean = gen_macro_state_map(env, mdl, n_trials)
+    free_locations, macro_s_init_mean, macro_s_init_std = gen_macro_state_map(env, mdl, n_trials)
+    #macro_s_init_mean = macro_s_init_std
 
     plot_mats = np.ones((env.grid_h, env.grid_w, mdl.d_macro_state)) * macro_s_init_mean.min(axis=0)
     for loc, data in zip(free_locations, macro_s_init_mean):
