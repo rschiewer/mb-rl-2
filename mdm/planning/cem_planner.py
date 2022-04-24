@@ -87,7 +87,7 @@ class CrossentropyPlanner:
             # update distribution parameters with MLE parameters of the winner samples
             act_dist_params = self._update_dist(actions, act_dist_params, i_winners, act_noise)
 
-        print(disc_ret_sorted.values[:n_winners])
+        #print(disc_ret_sorted.values[:n_winners])
 
         return actions, self._build_dist(act_dist_params), i_winners.tolist(), rollout_data
 
