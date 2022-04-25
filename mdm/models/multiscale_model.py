@@ -203,22 +203,34 @@ class MultiscaleDynamicsModel(DynamicsModel):
         return torch.mean(l)
 
     def average_kstep_value(self,
-                            rewards: torch.Tensor,
+                            data: torch.Tensor,
                             k: int):
-        d_batch, d_time, d_data = rewards.shape
+        d_batch, d_time, d_data = data.shape
         n_macro_steps = ceil(d_time / k)
         d_padding = n_macro_steps * k - d_time
 
         padding = torch.zeros(d_batch, d_padding, d_data, device=self.device)
-        rewards = torch.concat([rewards, padding], dim=1)
+        data = torch.concat([data, padding], dim=1)
 
-        avg = []
-        for i in range(n_macro_steps):
-            i_start = i * k
-            i_stop = (i + 1) * k
-            avg.append(torch.mean(rewards[:, i_start:i_stop], dim=1, keepdim=True))
+        avg = data.reshape(d_batch, (d_time + d_padding) // k, k, d_data)
+        avg = avg.mean(dim=2)
 
-        return torch.concat(avg, dim=1)
+        return avg
+
+    def max_kstep_value(self,
+                        data: torch.Tensor,
+                        k: int):
+        d_batch, d_time, d_data = data.shape
+        n_macro_steps = ceil(d_time / k)
+        d_padding = n_macro_steps * k - d_time
+
+        padding = torch.zeros(d_batch, d_padding, d_data, device=self.device)
+        data = torch.concat([data, padding], dim=1)
+
+        max = data.reshape(d_batch, (d_time + d_padding) // k, k, d_data)
+        max = max.max(dim=2).values
+
+        return max
 
     def forward(self,
                 start_states: torch.Tensor,
@@ -370,7 +382,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
         macro_r_target = macro_r_target[:, 1:]  # exclude first chunk since macro model is inactive there
 
         # target macro terminal transition probability can be pre-computed as well
-        macro_term_target = self.average_kstep_value(term_ground_truth, self.macro_step_size)
+        macro_term_target = self.max_kstep_value(term_ground_truth, self.macro_step_size)
         macro_term_target = macro_term_target[:, 1:]  # exclude first chunk since macro model is inactive there
         
         warmup_states = s_ground_truth[:, :n_warmup, :]
@@ -390,12 +402,12 @@ class MultiscaleDynamicsModel(DynamicsModel):
         #rec_r = rec_loss_ml(pred['r_dist'], torch.transpose(r_ground_truth, 0, 1))
 
         if len(pred['macro_s_prior']) > 0:
-            kl_s = 1.0 * kl_loss_norm(pred['macro_s_prior'], pred['macro_s_post'], detach_posterior=False)
-            kl_r = 1.0 * kl_loss_norm(pred['macro_r_prior'], pred['macro_r_post'], detach_posterior=False)
-            kl_term = 1.0 * kl_loss_bern(pred['macro_term_prior'], pred['macro_term_post'], detach_posterior=False)
-            reg_s = 0.0001 * kl_reg_norm(pred['macro_s_post'])
-            reg_r = 0.0001 * kl_reg_norm(pred['macro_r_post'])
-            reg_term = 0.0001 * kl_reg_bern(pred['macro_term_post'])
+            kl_s = 0.1 * kl_loss_norm(pred['macro_s_prior'], pred['macro_s_post'], detach_posterior=False)
+            kl_r = 0.1 * kl_loss_norm(pred['macro_r_prior'], pred['macro_r_post'], detach_posterior=False)
+            kl_term = 0.1 * kl_loss_bern(pred['macro_term_prior'], pred['macro_term_post'], detach_posterior=False)
+            reg_s = 0.001 * kl_reg_norm(pred['macro_s_post'])
+            reg_r = 0.001 * kl_reg_norm(pred['macro_r_post'])
+            reg_term = 0.001 * kl_reg_bern(pred['macro_term_post'])
             mr = macro_r_loss(pred['macro_r'], macro_r_target)
             mt = macro_term_loss(pred['macro_term'], macro_term_target)
         else:
