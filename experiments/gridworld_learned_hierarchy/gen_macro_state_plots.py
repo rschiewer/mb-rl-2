@@ -22,15 +22,23 @@ if __name__ == '__main__':
     env = Gridworld.from_cleartext(here() / '../../mdm/gridworld/8x8_v1.mapdata')
     mdl: MultiscaleDynamicsModel = torch.load(here() / 'model.ptmdl')
     n_trials = 10
+    normalize = False
 
     available_actions = [1]
     macro_s_init_mean, macro_s_init_std = gen_macro_state_map(env, mdl, n_trials)
     #macro_s_init_mean = macro_s_init_std
 
+    valid_positions = np.full((env.grid_h, env.grid_w), False)
+    positions = np.array(list(macro_s_init_mean.keys()))
+    valid_positions[tuple(positions.transpose())] = True
+
     plot_mats = np.zeros((env.grid_h, env.grid_w, mdl.d_macro_state))
     for loc, data in macro_s_init_mean.items():
         plot_mats[tuple(loc)] = data
     plot_mats = np.transpose(plot_mats, [2, 0, 1])
+    if normalize:
+        normalized = (plot_mats + np.abs(np.amin(plot_mats))) / (np.amax(plot_mats) + np.abs(np.amin(plot_mats)))
+        plot_mats = np.where(valid_positions, normalized, 0)
     min_val, max_val = np.amin(plot_mats), np.amax(plot_mats)
 
     max_n_cols = 2
