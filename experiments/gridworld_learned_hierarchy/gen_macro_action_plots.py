@@ -1,4 +1,5 @@
 from itertools import product
+from math import ceil
 
 import gym
 import numpy as np
@@ -19,7 +20,7 @@ if __name__ == '__main__':
     mem = TrajectoryMemory.load(here() / 'gridworld_train.samples')
     driver = OfflineRLDriver(mem)
 
-    n_trials = 50
+    n_trials = 20
 
     available_actions = list(range(env.action_space.n))
     action_sequences = list(product(available_actions, repeat=mdl.macro_step_size))
@@ -30,15 +31,38 @@ if __name__ == '__main__':
     action_sequences = torch.nn.functional.one_hot(action_sequences, num_classes=mdl.d_action).to(dtype=torch.float32)
 
     macro_actions = mdl.macro_action_model(action_sequences)
-    macro_actions = macro_actions.detach().cpu().numpy().argmax(axis=-1)
-    histogram_x, histogram_y = np.unique(macro_actions, return_counts=True)
+    macro_actions = macro_actions.detach().cpu().numpy()
+    #histogram_x, histogram_y = np.unique(macro_actions, return_counts=True)
 
-    macro_actions = macro_actions.reshape(n_trials, n_unique_sequences)
-    macro_actions = macro_actions.transpose(1, 0)
+    macro_actions = macro_actions.reshape(n_trials, n_unique_sequences, mdl.d_macro_action)
+    macro_actions = macro_actions.transpose(1, 0, 2)  # bring sequence index to front
+    macro_actions_mean = macro_actions.mean(axis=1)
     macro_actions_var = macro_actions.std(axis=1)
 
-    plt.bar(histogram_x, histogram_y)
+    max_cols = 5
+    n_rows = ceil(n_unique_sequences / max_cols)
+    fig, axes = plt.subplots(n_rows, max_cols, figsize=(20, 14))
+    for ax, macro_a_mean, macro_a_std in zip(axes.flat, macro_actions_mean, macro_actions_var):
+        ax.bar(list(range(mdl.d_macro_action)), macro_a_mean, yerr=macro_a_std)
+    plt.tight_layout()
     plt.show()
 
-    plt.scatter(list(range(len(macro_actions))), macro_actions_var)
+    mse = np.zeros((len(macro_actions_mean), len(macro_actions_mean)))
+    for i in range(len(macro_actions_mean)):
+        for j in range(i, len(macro_actions_mean)):
+            diff = np.sum((macro_actions_mean[i] - macro_actions_mean[j]) ** 2)
+            mse[i, j] = diff
+
+    mse /= mse.max()
+
+    plt.matshow(mse)
     plt.show()
+
+    #plt.bar(histogram_x, histogram_y)
+    #plt.show()
+
+    #plt.scatter(list(range(len(macro_actions))), macro_actions_mean)
+    #plt.show()
+
+    #plt.scatter(list(range(len(macro_actions))), macro_actions_var)
+    #plt.show()

@@ -49,12 +49,9 @@ class SingleStepModel(torch.nn.Module, DeviceMixin):
                 a: torch.Tensor,
                 macro_s: torch.Tensor,
                 macro_a: torch.Tensor,
-                macro_r: torch.Tensor,
-                macro_s_next: torch.Tensor,
                 h: torch.Tensor):
-        s, a, macro_s, macro_a, macro_r, macro_s_next = add_time_dim(s, a, macro_s, macro_a, macro_r, macro_s_next,
-                                                                     batch_first=self.det_mdl.batch_first)
-        x_det, h = self.det_mdl(s, a, macro_s, macro_a, macro_r, macro_s_next, h=h)
+        s, a, macro_s, macro_a = add_time_dim(s, a, macro_s, macro_a, batch_first=self.det_mdl.batch_first)
+        x_det, h = self.det_mdl(s, a, macro_s, macro_a, h=h)
         x_det = remove_time_dim(x_det, batch_first=self.det_mdl.batch_first)
 
         s_next_dist = self.sampling_mdl_s(x_det)
@@ -202,6 +199,20 @@ class MultiscaleDynamicsModel(DynamicsModel):
             l += torch.distributions.kl.kl_divergence(prior, uniform_bernoulli)
         return torch.mean(l)
 
+    def bin_every_k_steps(self,
+                          data: torch.Tensor,
+                          k: int,
+                          padding_val: Union[int, float] = 0.0):
+        d_batch, d_time, d_data = data.shape
+        n_macro_steps = ceil(d_time / k)
+        d_padding = n_macro_steps * k - d_time
+
+        padding = torch.full((d_batch, d_padding, d_data), fill_value=padding_val, dtype=data.dtype, device=self.device)
+        data_padded = torch.concat([data, padding], dim=1)
+        binned = data_padded.reshape(d_batch, (d_time + d_padding) // k, k, d_data)
+
+        return binned
+
     def average_kstep_value(self,
                             data: torch.Tensor,
                             k: int):
@@ -243,10 +254,8 @@ class MultiscaleDynamicsModel(DynamicsModel):
         s = torch.zeros(d_batch, self.d_state, device=device)
         h = self.single_step_model.det_mdl.gen_h_placeholder(d_batch)
         macro_s = torch.zeros(d_batch, self.d_macro_state, device=device)
-        #macro_a = self.macro_action_model(self._next_single_step_actions(actions, 0))
         macro_a = torch.zeros(d_batch, self.d_macro_action, device=device)
-        macro_r = torch.zeros(d_batch, self.d_macro_reward, device=device)
-        macro_s_next = torch.zeros_like(macro_s, device=device)
+        actions_binned = self.bin_every_k_steps(actions, self.macro_step_size)
 
         s_mem, s_dist_mem = [], []
         r_mem, r_dist_mem = [], []
@@ -259,31 +268,10 @@ class MultiscaleDynamicsModel(DynamicsModel):
 
         for t in range(n_steps):
             if t % self.macro_step_size == 0 and t > 0:  # invoke abstract model every k time steps
-                # TODO: think about this model more closely
-                macro_a = self.macro_action_model(self._next_primitive_actions(actions, t))
-                h_flat = self.filter_single_step_model_history(h)
-                macro_s = macro_s_next  # update current macro state to previously predicted one
-
-                # invoke models
-                pred_macro_prior = self.abstract_model(macro_s, macro_a)
-                pred_macro_post = self.abstract_model(macro_s, macro_a, h_flat)
-
-                # sample from more informed posterior distributions to get inputs for single step model
-                macro_s_next = pred_macro_post['macro_s_next_dist'].rsample()
-                macro_r = pred_macro_post['macro_r_dist'].rsample()
-                macro_term = pred_macro_post['macro_term_dist'].rsample()
-
-                # store for loss calculation
-                macro_s_prior_mem.append(pred_macro_prior['macro_s_next_dist'])
-                macro_s_post_mem.append(pred_macro_post['macro_s_next_dist'])
-
-                macro_r_mem.append(macro_r)
-                macro_r_prior_mem.append(pred_macro_prior['macro_r_dist'])
-                macro_r_post_mem.append(pred_macro_post['macro_r_dist'])
-
-                macro_term_mem.append(macro_term)
-                macro_term_prior_mem.append(pred_macro_prior['macro_term_dist'])
-                macro_term_post_mem.append(pred_macro_post['macro_term_dist'])
+                macro_a, macro_s = self.invoke_abstract_model(macro_s, macro_a, h, actions_binned, macro_r_mem,
+                                                              macro_r_prior_mem, macro_r_post_mem, macro_s_prior_mem,
+                                                              macro_s_post_mem, macro_term_mem, macro_term_prior_mem,
+                                                              macro_term_post_mem, t)
 
                 # prevent memory leakage beyond macro steps
                 h = self.single_step_model.det_mdl.gen_h_placeholder(d_batch)
@@ -293,8 +281,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
                 s = start_states[:, t]
             a = actions[:, t]
 
-            #h = (torch.zeros_like(h[0], device=device), torch.zeros_like(h[1], device=device))
-            pred_ss, h = self.single_step_model(s, a, macro_s, macro_a, macro_r, macro_s_next, h)
+            pred_ss, h = self.single_step_model(s, a, macro_s, macro_a, h)
             s_next = pred_ss['s_next_dist'].rsample()
             r = pred_ss['r_dist'].rsample()
             term = pred_ss['term_dist'].rsample()
@@ -309,6 +296,12 @@ class MultiscaleDynamicsModel(DynamicsModel):
 
             # set next state to upcoming time step's current state
             s = s_next
+
+        # invoke abstract model one more time
+        if n_steps % self.macro_step_size != 0:
+            _ = self.invoke_abstract_model(macro_s, macro_a, h, actions_binned, macro_r_mem, macro_r_prior_mem,
+                                           macro_r_post_mem, macro_s_prior_mem, macro_s_post_mem, macro_term_mem,
+                                           macro_term_prior_mem, macro_term_post_mem, t=0)  # t doesn't matter as A is not used afterwards
 
         s_mem = torch.stack(s_mem, dim=1)
         r_mem = torch.stack(r_mem, dim=1)
@@ -334,6 +327,44 @@ class MultiscaleDynamicsModel(DynamicsModel):
                 'macro_term': macro_term_mem,
                 'macro_term_prior': macro_term_prior_mem,
                 'macro_term_post': macro_term_post_mem}
+
+    def invoke_abstract_model(self,
+                              macro_s: torch.Tensor,
+                              macro_a: torch.Tensor,
+                              h_primitive: Tuple[torch.Tensor, torch.Tensor],
+                              actions_binned: torch.Tensor,
+                              macro_r_mem: List[torch.Tensor],
+                              macro_r_prior_mem: List[torch.distributions.Distribution],
+                              macro_r_post_mem: List[torch.distributions.Distribution],
+                              macro_s_prior_mem: List[torch.distributions.Distribution],
+                              macro_s_post_mem: List[torch.distributions.Distribution],
+                              macro_term_mem: List[torch.Tensor],
+                              macro_term_prior_mem: List[torch.distributions.Distribution],
+                              macro_term_post_mem: List[torch.distributions.Distribution],
+                              t: int):
+        # TODO: think about this model more closely
+        # macro_a = self.macro_action_model(self._next_primitive_actions(actions, t))
+        h_flat = self.filter_single_step_model_history(h_primitive)
+        # invoke models
+        pred_macro_prior = self.abstract_model(macro_s, macro_a)
+        pred_macro_post = self.abstract_model(macro_s, macro_a, h_flat)
+        # sample from more informed posterior distributions to get inputs for single step model
+        macro_s_next = pred_macro_post['macro_s_next_dist'].rsample()
+        macro_r = pred_macro_post['macro_r_dist'].rsample()
+        macro_term = pred_macro_post['macro_term_dist'].rsample()
+        # store for loss calculation
+        macro_s_prior_mem.append(pred_macro_prior['macro_s_next_dist'])
+        macro_s_post_mem.append(pred_macro_post['macro_s_next_dist'])
+        macro_r_mem.append(macro_r)
+        macro_r_prior_mem.append(pred_macro_prior['macro_r_dist'])
+        macro_r_post_mem.append(pred_macro_post['macro_r_dist'])
+        macro_term_mem.append(macro_term)
+        macro_term_prior_mem.append(pred_macro_prior['macro_term_dist'])
+        macro_term_post_mem.append(pred_macro_post['macro_term_dist'])
+        macro_s = macro_s_next  # update S = S' for next time step
+        # update A for next sequence chunk so primitive model has the correct one
+        macro_a = self.macro_action_model(actions_binned[:, t // self.macro_step_size])
+        return macro_a, macro_s
 
     def _next_primitive_actions(self, actions: torch.Tensor, t: int):
         n_steps = actions.shape[1]
@@ -378,12 +409,12 @@ class MultiscaleDynamicsModel(DynamicsModel):
         macro_term_loss = MultiscaleDynamicsModel.reconstruction_loss
 
         # target macro reward can be pre-computed from the single step rewards
-        macro_r_target = self.average_kstep_value(r_ground_truth, self.macro_step_size)
-        macro_r_target = macro_r_target[:, 1:]  # exclude first chunk since macro model is inactive there
+        macro_r_target = self.bin_every_k_steps(r_ground_truth, self.macro_step_size).mean(dim=2)
+        #macro_r_target = macro_r_target[:, 1:]  # exclude first chunk since macro model is inactive there
 
         # target macro terminal transition probability can be pre-computed as well
-        macro_term_target = self.max_kstep_value(term_ground_truth, self.macro_step_size)
-        macro_term_target = macro_term_target[:, 1:]  # exclude first chunk since macro model is inactive there
+        macro_term_target = self.bin_every_k_steps(term_ground_truth, self.macro_step_size).max(dim=2).values
+        #macro_term_target = macro_term_target[:, 1:]  # exclude first chunk since macro model is inactive there
         
         warmup_states = s_ground_truth[:, :n_warmup, :]
         pred = self(warmup_states, a_ground_truth)
@@ -475,8 +506,6 @@ class MultiscaleDynamicsModel(DynamicsModel):
                             actions: torch.Tensor,
                             macro_s: torch.Tensor = None,
                             macro_a: torch.Tensor = None,
-                            macro_r: torch.Tensor = None,
-                            macro_s_next: torch.Tensor = None,
                             h: Tuple[torch.Tensor, torch.Tensor] = None):
         d_batch, n_steps = actions.shape[:2]
         n_start_states = start_states.shape[1]
@@ -487,8 +516,6 @@ class MultiscaleDynamicsModel(DynamicsModel):
         h = self.single_step_model.det_mdl.gen_h_placeholder(d_batch) if h is None else h
         macro_s = torch.zeros(d_batch, self.d_macro_state, device=device) if macro_s is None else macro_s
         macro_a = torch.zeros(d_batch, self.d_macro_action, device=device) if macro_a is None else macro_a
-        macro_r = torch.zeros(d_batch, self.d_macro_reward, device=device) if macro_r is None else macro_r
-        macro_s_next = torch.zeros_like(macro_s, device=device) if macro_s_next is None else macro_s_next
 
         s_mem, s_dist_mem = [], []
         r_mem, r_dist_mem = [], []
@@ -498,7 +525,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
                 s = start_states[:, t]
             a = actions[:, t]
 
-            pred_ss, h = self.single_step_model(s, a, macro_s, macro_a, macro_r, macro_s_next, h)
+            pred_ss, h = self.single_step_model(s, a, macro_s, macro_a, h)
             s_next = pred_ss['s_next_dist'].loc
             r = pred_ss['r_dist'].loc
             term = pred_ss['term_dist'].probs
@@ -583,7 +610,6 @@ class MultiscaleDynamicsModel(DynamicsModel):
 
 def build_single_step_model(d_macro_state: int,
                             d_macro_action: int,
-                            d_macro_reward: int,
                             d_state: int,
                             d_action: int,
                             d_reward: int,
@@ -594,7 +620,7 @@ def build_single_step_model(d_macro_state: int,
                             term_lws: Sequence[int],
                             batch_first: bool = True) -> SingleStepModel:
     # the deterministic model receives s, a, marco_s, macro_a, macro_s_next
-    det_mdl = RecurrentBlock(d_state, d_action, d_macro_state, d_macro_action, d_macro_reward, d_macro_state,
+    det_mdl = RecurrentBlock(d_state, d_action, d_macro_state, d_macro_action,
                              d_hidden=d_hidden, n_layers=n_rec_layers, batch_first=batch_first, dropout=0.1)
     # the sampling model receives the output of the deterministic model and no additional input
     s_lws = (*s_lws, d_state)

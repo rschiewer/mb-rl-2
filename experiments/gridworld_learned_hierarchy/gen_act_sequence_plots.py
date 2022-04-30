@@ -155,7 +155,7 @@ if __name__ == '__main__':
 
     s_start = torch.from_numpy(s_start).to(mdl.device)  # to torch tensor
     s_start = s_start.unsqueeze(1)  # add time dimension
-    s_start = s_start.float() / torch.tensor((env.grid_h - 1, env.grid_w - 1), device=mdl.device)  # normalize
+    s_start = s_start.float() / torch.tensor((env.grid_h - 1, env.grid_w - 1), device=mdl.device) - 0.5  # normalize
 
     for seq_descr, a_seq in action_sequences.items():
         a_seq_batch = torch.tile(a_seq, dims=(n_locations, 1))  # copy same starting observation along batch

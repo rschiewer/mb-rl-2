@@ -29,7 +29,7 @@ if __name__ == '__main__':
         plot_mats[tuple(loc)] = data
     plot_mats = np.transpose(plot_mats, [2, 0, 1])
 
-    max_n_cols = 5
+    max_n_cols = 4
     n_rows = ceil(len(plot_mats) / max_n_cols)
     fig, axes = plt.subplots(n_rows, max_n_cols, figsize=(16, 10))
     for i_comp, (mat, ax) in enumerate(zip(plot_mats, axes.flat)):

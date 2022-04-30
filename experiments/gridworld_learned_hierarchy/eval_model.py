@@ -5,7 +5,7 @@ from tqdm import tqdm
 from mdm.gridworld.gridworld import Gridworld
 from mdm.models.multiscale_model import MultiscaleDynamicsModel
 from mdm.planning.cem_planner import CrossentropyPlanner, DistributionType
-from mdm.utils.utils import here
+from mdm.utils.utils import here, normalize_obs, one_hot_actions
 from mdm.utils.torch_tools import extract_sub_distribution
 from mdm.memory.trajectory_memory import flatten_and_unsqueeze, TrajectoryMemory
 
@@ -19,16 +19,18 @@ if __name__ == '__main__':
     n_episodes = 10
     store_result_trajectories = False
     pln_d_batch = 8000
-    pln_n_optim_steps_macro = 30
-    pln_winning_perc = 0.1
+    pln_n_optim_steps_macro = 20
+    pln_winning_perc = 0.05
     pln_discount = 0.99
-    pln_act_noise = 0.1
+    pln_act_noise = 0.01
     pln_n_abstract_steps = 100
 
     def _rollout_init_fn(start_states: torch.Tensor, actions: torch.Tensor):
-        start_states = flatten_and_unsqueeze(start_states)
-        start_states = start_states.float() / torch.tensor((env.grid_h - 1, env.grid_w - 1), device=mdl.device ) - 0.5
-        actions = torch.nn.functional.one_hot(actions, num_classes=mdl.d_action)
+        start_states = normalize_obs(start_states, env)
+        actions = one_hot_actions(actions, n_classes=mdl.d_action)
+        #start_states = flatten_and_unsqueeze(start_states)
+        #start_states = start_states.float() / torch.tensor((env.grid_h - 1, env.grid_w - 1), device=mdl.device ) - 0.5
+        #actions = torch.nn.functional.one_hot(actions, num_classes=mdl.d_action)
         predictions_ss = mdl.rollout_single_step(start_states, actions)
         return predictions_ss['r'].squeeze(), predictions_ss['term'].squeeze(), predictions_ss
 
@@ -76,8 +78,7 @@ if __name__ == '__main__':
             start_states = flatten_and_unsqueeze(start_states)
             start_states = start_states.float() / torch.tensor((env.grid_h - 1, env.grid_w - 1), device=mdl.device) - 0.5
             actions = torch.nn.functional.one_hot(actions, num_classes=mdl.d_action)
-            predictions_ss = mdl.rollout_single_step(start_states, actions, macro_s_batch, macro_a_batch,
-                                                     macro_r_batch, macro_s_next_batch)
+            predictions_ss = mdl.rollout_single_step(start_states, actions, macro_s_batch, macro_a_batch)
             predictons_ms = mdl.macro_next_posterior(macro_s_batch, macro_a_batch, predictions_ss['h'])
             macro_s_next_post, macro_s_next_post_dist, macro_r_next_post, macro_r_next_post_dist = predictons_ms
             #overlap = torch.distributions.kl_divergence(macro_s_next_post_dist,
