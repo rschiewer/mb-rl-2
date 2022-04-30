@@ -1,8 +1,9 @@
 from inspect import stack
 from pathlib import Path
-from typing import Union, Dict, Tuple
+from typing import Union, Dict, Tuple, List
 from itertools import product
 import sys
+import time
 
 import gym
 import numpy as np
@@ -50,8 +51,9 @@ def np_one_hot(x: np.array,
 
 def gen_macro_state_map(env: Gridworld,
                         mdl: MultiscaleDynamicsModel,
-                        n_trials: int):
-    available_actions = list(range(env.action_space.n))
+                        n_trials: int,
+                        available_actions: List[int] = None):
+    available_actions = list(range(env.action_space.n)) if available_actions is None else available_actions
     action_sequences = list(product(available_actions, repeat=mdl.macro_step_size)) * n_trials
     free_locations = env.find_cell_type(CellType.FREE)
     n_locations = len(free_locations)
@@ -63,8 +65,12 @@ def gen_macro_state_map(env: Gridworld,
             env.teleport_agent(loc)
             for a in a_seq:
                 s_, r, done, _ = env.step(a)
+                if done: break
             groundtruth_s_final.append(s_)
     groundtruth_s_final = np.stack(groundtruth_s_final)
+
+    for s_final in groundtruth_s_final:
+        assert(tuple(s_final) in free_locations)
 
     # convert to tensors
     action_sequences = [torch.tensor(s).to(mdl.device) for s in action_sequences]
@@ -95,8 +101,13 @@ def gen_macro_state_map(env: Gridworld,
     for s_final, macro_s_init in zip(groundtruth_s_final, macro_s_init_history):
         macro_s_init_mean[tuple(s_final)].append(macro_s_init)
     for k, v in macro_s_init_mean.items():
-        macro_s_init_mean[k] = np.mean(v, axis=0)
-        macro_s_init_std[k] = np.std(v, axis=0)
+        if len(v):
+            macro_s_init_mean[k] = np.mean(v, axis=0)
+            macro_s_init_std[k] = np.std(v, axis=0)
+        else:
+            macro_s_init_mean[k] = np.zeros(mdl.d_macro_state)
+            macro_s_init_std[k] = np.zeros(mdl.d_macro_state)
+
 
     macro_s_init_mean = np.stack([macro_s_init_mean[tuple(loc)] for loc in free_locations])
     macro_s_init_std = np.stack([macro_s_init_std[tuple(loc)] for loc in free_locations])
