@@ -109,10 +109,10 @@ def gen_macro_state_map(env: Gridworld,
             macro_s_init_std[k] = np.zeros(mdl.d_macro_state)
 
 
-    macro_s_init_mean = np.stack([macro_s_init_mean[tuple(loc)] for loc in free_locations])
-    macro_s_init_std = np.stack([macro_s_init_std[tuple(loc)] for loc in free_locations])
+    #macro_s_init_mean = np.stack([macro_s_init_mean[tuple(loc)] for loc in free_locations])
+    #macro_s_init_std = np.stack([macro_s_init_std[tuple(loc)] for loc in free_locations])
 
-    return free_locations, macro_s_init_mean, macro_s_init_std
+    return macro_s_init_mean, macro_s_init_std
 
 
 def normalize_obs(obs: Union[torch.Tensor, np.ndarray],
