@@ -181,8 +181,7 @@ if __name__ == '__main__':
 
         # prior
         predictions = mdl.rollout_abstract(macro_s_start, macro_a)
-        macro_s_prior, macro_s_prior_dist, macro_r_prior, macro_r_prior_dist = predictions
-        macro_s_prior_history[seq_descr] = macro_s_prior.squeeze(1)
+        macro_s_prior_history[seq_descr] = predictions['macro_s_prior'].squeeze(1)
 
         # posterior
         predictions = mdl.macro_next_posterior(macro_s_start.squeeze(1), macro_a.squeeze(1), h_history[seq_descr])

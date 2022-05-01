@@ -560,8 +560,8 @@ class MultiscaleDynamicsModel(DynamicsModel):
 
         macro_s = torch.zeros(d_batch, self.d_macro_state, device=device)
 
-        macro_s_prior_mem, macro_s_prior_dist_mem = [], []
-        macro_r_prior_mem, macro_r_prior_dist_mem = [], []
+        macro_s_mem, macro_s_prior_mem = [], []
+        macro_r_mem, macro_r_prior_mem = [], []
         for t in range(n_steps):
             if t < n_start_states:
                 macro_s = macro_start_states[:, t]
@@ -573,17 +573,20 @@ class MultiscaleDynamicsModel(DynamicsModel):
             macro_s_next = pred_macro_prior['macro_s_next_dist'].loc
             macro_r = pred_macro_prior['macro_r_dist'].loc
 
-            macro_s_prior_mem.append(macro_s_next)
-            macro_r_prior_mem.append(macro_r)
-            macro_s_prior_dist_mem.append(pred_macro_prior['macro_s_next_dist'])
-            macro_r_prior_dist_mem.append(pred_macro_prior['macro_r_dist'])
+            macro_s_mem.append(macro_s_next)
+            macro_r_mem.append(macro_r)
+            macro_s_prior_mem.append(pred_macro_prior['macro_s_next_dist'])
+            macro_r_prior_mem.append(pred_macro_prior['macro_r_dist'])
 
             macro_s = macro_s_next
 
-        macro_s_prior_mem = torch.stack(macro_s_prior_mem, dim=1)
-        macro_r_prior_mem = torch.stack(macro_r_prior_mem, dim=1)
+        macro_s_mem = torch.stack(macro_s_mem, dim=1)
+        macro_r_mem = torch.stack(macro_r_mem, dim=1)
 
-        return macro_s_prior_mem, macro_s_prior_dist_mem, macro_r_prior_mem, macro_r_prior_dist_mem
+        return {'macro_s': macro_s_mem,
+                'macro_s_prior': macro_s_prior_mem,
+                'macro_r': macro_r_mem,
+                'macro_r_prior': macro_r_prior_mem}
 
     def macro_next_posterior(self,
                              macro_s: torch.Tensor,

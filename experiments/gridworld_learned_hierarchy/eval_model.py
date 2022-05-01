@@ -28,18 +28,13 @@ if __name__ == '__main__':
     def _rollout_init_fn(start_states: torch.Tensor, actions: torch.Tensor):
         start_states = normalize_obs(start_states, env)
         actions = one_hot_actions(actions, n_classes=mdl.d_action)
-        #start_states = flatten_and_unsqueeze(start_states)
-        #start_states = start_states.float() / torch.tensor((env.grid_h - 1, env.grid_w - 1), device=mdl.device ) - 0.5
-        #actions = torch.nn.functional.one_hot(actions, num_classes=mdl.d_action)
         predictions_ss = mdl.rollout_single_step(start_states, actions)
         return predictions_ss['r'].squeeze(), predictions_ss['term'].squeeze(), predictions_ss
 
     def _rollout_abstract_fn(macro_start_state: torch.Tensor, macro_actions: torch.Tensor):
         #macro_actions = torch.nn.functional.one_hot(macro_actions, num_classes=mdl.d_macro_action)
         predictions = mdl.rollout_abstract(macro_start_state, macro_actions)
-        macro_s_prior, macro_s_prior_dist, macro_r_prior, macro_r_prior_dist = predictions
-        return macro_r_prior.squeeze(), None, {'macro_s': macro_s_prior, 'macro_s_dist': macro_s_prior_dist,
-                                               'macro_r': macro_r_prior, 'macro_r_dist': macro_r_prior_dist}
+        return predictions['macro_r'].squeeze(), None, predictions
 
     def init_macro_s(s: torch.Tensor):
         s_batch = torch.tile(s, dims=(pln_d_batch, 1))  # copy same starting observation along batch
