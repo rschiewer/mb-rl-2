@@ -593,16 +593,16 @@ class MultiscaleDynamicsModel(DynamicsModel):
                              macro_a: torch.Tensor,
                              h: Tuple[torch.Tensor, torch.Tensor]):
         h_flat = self.filter_single_step_model_history(h)
-        #_, macro_s_next_post_dist, macro_r_next_post_dist = self.abstract_model(macro_s, macro_a, h_flat)
-        #macro_s_next = macro_s_next_post_dist.sample()
-        #macro_r_next_post = macro_r_next_post_dist.sample()
         pred = self.abstract_model(macro_s, macro_a, h_flat)
         macro_s_next = pred['macro_s_next_dist'].loc
         macro_s_next_dist = pred['macro_s_next_dist']
         macro_r = pred['macro_r_dist'].loc
         macro_r_dist = pred['macro_r_dist']
 
-        return macro_s_next, macro_s_next_dist, macro_r, macro_r_dist
+        return {'macro_s_next': macro_s_next,
+                'macro_s_next_post': macro_s_next_dist,
+                'macro_r': macro_r,
+                'macro_r_post': macro_r_dist}
 
     def filter_single_step_model_history(self, h: Tuple[torch.Tensor, torch.Tensor]):
         h = torch.concat(h, dim=0)  # concat h and c tensors of LSTM along the layer dimension, this is arbitrary

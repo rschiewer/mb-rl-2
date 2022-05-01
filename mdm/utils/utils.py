@@ -86,8 +86,7 @@ def gen_macro_state_map(env: Gridworld,
         zero_macro_s = torch.zeros(n_locations, mdl.d_macro_state, device=mdl.device)
         zero_macro_a = torch.zeros(n_locations, mdl.d_macro_action, device=mdl.device)
         predictions_ms = mdl.macro_next_posterior(zero_macro_s, zero_macro_a, predictions_ss['h'])
-        macro_s_next_post, macro_s_next_post_dist, macro_r_next_post, macro_r_next_post_dist = predictions_ms
-        macro_s_init_history.append(macro_s_next_post.detach().cpu().numpy())
+        macro_s_init_history.append(predictions_ms['macro_s_next'].detach().cpu().numpy())
 
     macro_s_init_history = np.stack(macro_s_init_history)
     macro_s_init_history = macro_s_init_history.reshape(len(action_sequences) * n_locations, mdl.d_macro_state)
