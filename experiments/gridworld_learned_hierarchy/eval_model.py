@@ -5,94 +5,27 @@ from tqdm import tqdm
 from mdm.gridworld.gridworld import Gridworld
 from mdm.models.multiscale_model import MultiscaleDynamicsModel
 from mdm.planning.cem_planner import CrossentropyPlanner, DistributionType
-from mdm.utils.utils import here, normalize_obs, one_hot_actions
-from mdm.utils.torch_tools import extract_sub_distribution
-from mdm.memory.trajectory_memory import flatten_and_unsqueeze, TrajectoryMemory
+from mdm.utils.utils import here
+from mdm.utils.planning_tools import init_macro_s, plan_section, plan_abstract
+from mdm.memory.trajectory_memory import TrajectoryMemory
 
 
 if __name__ == '__main__':
     env = Gridworld.from_cleartext(here() / '../../mdm/gridworld/8x8_v0.mapdata')
     mdl: MultiscaleDynamicsModel = torch.load(here() / 'model.ptmdl')
     planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, device=mdl.device)
-    planner_abst = CrossentropyPlanner(DistributionType.NORMAL, device=mdl.device)
+    planner_abstr = CrossentropyPlanner(DistributionType.NORMAL, device=mdl.device)
 
     n_episodes = 10
     store_result_trajectories = False
     pln_d_batch = 8000
-    pln_n_optim_steps_macro = 20
-    pln_winning_perc = 0.05
-    pln_discount = 0.99
-    pln_act_noise = 0.01
+    pln_n_optim_steps_abstr = 30
+    pln_n_optim_steps_prim = 10
+    pln_winning_perc = 0.01
+    pln_discount = 0.90
+    pln_act_noise_abstr = 0.01
+    pln_act_noise_prim = 0.001
     pln_n_abstract_steps = 100
-
-    def _rollout_abstract_fn(macro_start_state: torch.Tensor, macro_actions: torch.Tensor):
-        #macro_actions = torch.nn.functional.one_hot(macro_actions, num_classes=mdl.d_macro_action)
-        predictions = mdl.rollout_abstract(macro_start_state, macro_actions)
-        return predictions['macro_r'].squeeze(), None, predictions
-
-    def init_macro_s(s: torch.Tensor):
-        s = normalize_obs(s, env)
-        s_batch = torch.tile(s, dims=(pln_d_batch, 1))  # copy same starting observation along batch
-        s_batch = s_batch.unsqueeze(1)  # add time dimension of 1
-
-        def _rollout_init_fn(start_states: torch.Tensor, actions: torch.Tensor):
-            actions = one_hot_actions(actions, n_classes=mdl.d_action)
-            predictions_ss = mdl.rollout_single_step(start_states, actions)
-            return predictions_ss['r'].squeeze(), predictions_ss['term'].squeeze(), predictions_ss
-
-        actions, act_dist, i_winners, rollout_data = planner_prim.plan(rollout_fn=_rollout_init_fn,
-                                                                       start_states=s_batch,
-                                                                       d_dist=env.action_space.n,
-                                                                       n_plan_steps=mdl.macro_step_size,
-                                                                       n_evolution_steps=pln_n_optim_steps_macro,
-                                                                       winning_perc=pln_winning_perc,
-                                                                       discount=pln_discount,
-                                                                       act_noise=pln_act_noise)
-        i_best = i_winners[0]
-        best_h = rollout_data['h'][0][:, i_best].unsqueeze(1), rollout_data['h'][1][:, i_best].unsqueeze(1)
-        best_a = torch.nn.functional.one_hot(actions[i_best], num_classes=mdl.d_action).float()
-        best_s = rollout_data['s'][i_best]
-        zero_macro_s = torch.zeros(1, mdl.d_macro_state, device=mdl.device)
-        zero_macro_a = torch.zeros(1, mdl.d_macro_action, device=mdl.device)
-        pred = mdl.macro_next_posterior(zero_macro_s, zero_macro_a, best_h)
-
-        return pred['macro_s_next'], pred['macro_s_next_post'], pred['macro_r'], pred['macro_r_post'], best_a, best_s
-
-    def plan_section(s: torch.Tensor, macro_s: torch.Tensor, macro_a: torch.Tensor, macro_s_next: torch.Tensor):
-        s = normalize_obs(s, env)
-        s_batch = torch.tile(s, dims=(pln_d_batch, 1))  # copy same starting observation along batch
-        s_batch = s_batch.unsqueeze(1)  # add time dimension of 1
-        macro_s_batch = torch.tile(macro_s, dims=(pln_d_batch, 1))
-        macro_a_batch = torch.tile(macro_a, dims=(pln_d_batch, 1))
-        macro_s_next_batch = torch.tile(macro_s_next, dims=(pln_d_batch, 1))
-
-        # use closure to bind macro_x arguments inside the function to the above defined ones
-        def _rollout_detailed_fn(start_states: torch.Tensor, actions: torch.Tensor):
-            actions = one_hot_actions(actions, n_classes=mdl.d_action)
-            pred_prim = mdl.rollout_single_step(start_states, actions, macro_s_batch, macro_a_batch)
-            pred_abstr = mdl.macro_next_posterior(macro_s_batch, macro_a_batch, pred_prim['h'])
-            #overlap = torch.distributions.kl_divergence(macro_s_next_post_dist,
-            #                                            macro_s_next.expand((pln_d_batch, mdl.d_macro_state)))
-            #overlap = - overlap.abs().sum(dim=1, keepdim=True)
-            overlap = pred_abstr['macro_s_next_post'].log_prob(macro_s_next_batch).sum(dim=1)
-            #overlap = -torch.sum(torch.abs(macro_s_next_post - macro_s_next_batch), dim=1)
-            return overlap, None, pred_prim
-
-        actions, act_dist, i_winners, rollout_data = planner_prim.plan(rollout_fn=_rollout_detailed_fn,
-                                                                       start_states=s_batch,
-                                                                       d_dist=env.action_space.n,
-                                                                       n_plan_steps=mdl.macro_step_size,
-                                                                       n_evolution_steps=30,
-                                                                       winning_perc=pln_winning_perc,
-                                                                       discount=1.0,
-                                                                       act_noise=0.001)
-        i_best = i_winners[0]
-        best_a = torch.nn.functional.one_hot(actions[i_best], num_classes=mdl.d_action).float()
-        best_s = rollout_data['s'][i_best]
-
-        return best_s, best_a
-
-    ### use model for planning ###
 
     mem = TrajectoryMemory()
     succeeded = 0
@@ -104,42 +37,25 @@ if __name__ == '__main__':
         s = env.reset()
         s_mem.append(s)
 
-        s_torch = torch.from_numpy(s).to(mdl.device)
-        macro_s_1, macro_s_1_dist, macro_r_0, macro_r_0_dist, as_, ss = init_macro_s(s_torch)  # macro_s_0 is always 0
-        macro_s_1_dist = extract_sub_distribution(macro_s_1_dist, 0)  # remove time dim
+        s_start = torch.from_numpy(s).to(mdl.device)
+        plan_init = init_macro_s(model=mdl, planner=planner_prim, env=env, s_start=s_start, n_rollouts=pln_d_batch,
+                                 n_evolution_steps=pln_n_optim_steps_abstr, winning_perc=pln_winning_perc,
+                                 discount=pln_discount, act_noise=pln_act_noise_abstr)  # macro_s_0 is always 0
 
-        # abstract level rollout
-        #macro_s_batch = macro_s_1_dist.sample(sample_shape=(pln_d_batch,))  # sample some possible start states
-        macro_s_batch = torch.tile(macro_s_1, dims=(pln_d_batch, 1))  # time dim required
-        macro_s_batch = macro_s_batch.unsqueeze(1)  # add time dimension of 1
-        macro_actions, act_dist, i_winners, rollout_data = planner_abst.plan(rollout_fn=_rollout_abstract_fn,
-                                                                             start_states=macro_s_batch,
-                                                                             d_dist=mdl.d_macro_action,
-                                                                             n_plan_steps=pln_n_abstract_steps,
-                                                                             n_evolution_steps=pln_n_optim_steps_macro,
-                                                                             winning_perc=pln_winning_perc,
-                                                                             discount=pln_discount,
-                                                                             act_noise=pln_act_noise)
-        i_top_cand = i_winners[0]
-        #best_macro_as = torch.nn.functional.one_hot(macro_actions[i_top_cand], num_classes=mdl.d_macro_action).float()
-        best_macro_as = macro_actions[i_top_cand]
-        # extract best performer for each time step
-        #best_macro_ss = [extract_sub_distribution(d, i_top_cand) for d in rollout_data['macro_s']]
-        #best_macro_rs = [extract_sub_distribution(d, i_top_cand) for d in rollout_data['macro_r']]
-        best_macro_ss = rollout_data['macro_s'][i_top_cand]
-        best_macro_rs = rollout_data['macro_r'][i_top_cand]
+        plan_abstr = plan_abstract(model=mdl, planner=planner_abstr, macro_s_start=plan_init['macro_s_next'],
+                                   macro_s_start_dist=plan_init['macro_s_next_post'],
+                                   n_plan_steps=pln_n_abstract_steps, n_rollouts=pln_d_batch,
+                                   n_evolution_steps=pln_n_optim_steps_abstr, winning_perc=pln_winning_perc,
+                                   discount=pln_discount, act_noise=pln_act_noise_abstr)
 
-        # assemble macro trajectories out of initial data and rollout results
-        macro_s_traj = torch.concat([macro_s_1, best_macro_ss], dim=0)
-        macro_a_traj = best_macro_as
-        macro_r_traj = best_macro_rs
-
-        # act out the details
-        actions = as_
+        actions = plan_init['as']
         for t in range(pln_n_abstract_steps):
-            s_torch = torch.zeros_like(ss[-1])
-            new_ss, new_as = plan_section(s_torch, macro_s_traj[t], macro_a_traj[t], macro_s_traj[t + 1])
-            actions = torch.concat([actions, new_as], dim=0)
+            plan_detail = plan_section(model=mdl, planner=planner_prim, env=env, macro_s=plan_abstr['macro_ss'][t],
+                                       macro_a=plan_abstr['macro_as'][t], macro_s_next=plan_abstr['macro_ss'][t+1],
+                                       n_rollouts=pln_d_batch, n_evolution_steps=pln_n_optim_steps_prim,
+                                       winning_perc=pln_winning_perc, discount=pln_discount,
+                                       act_noise=pln_act_noise_prim)
+            actions = torch.concat([actions, plan_detail['as']], dim=0)
 
         action_iter = iter(actions.detach().cpu().numpy())
         terminal = False
