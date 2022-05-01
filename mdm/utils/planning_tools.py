@@ -4,7 +4,7 @@ import numpy as np
 
 from mdm.models.multiscale_model import MultiscaleDynamicsModel
 from mdm.planning.cem_planner import CrossentropyPlanner
-from mdm.utils.utils import normalize_obs, one_hot_actions
+from mdm.utils.utils import normalize_obs, to_onehot
 
 
 def init_macro_s(model: MultiscaleDynamicsModel,
@@ -22,7 +22,7 @@ def init_macro_s(model: MultiscaleDynamicsModel,
     s_start = s_start.unsqueeze(1)  # add time dimension of 1
 
     def _rollout_init_fn(start_states: torch.Tensor, actions: torch.Tensor):
-        actions = one_hot_actions(actions, n_classes=model.d_action)
+        actions = to_onehot(actions, n_classes=model.d_action)
         predictions_ss = model.rollout_single_step(start_states, actions)
         return predictions_ss['r'].squeeze(), predictions_ss['term'].squeeze(), predictions_ss
 
@@ -107,7 +107,7 @@ def plan_section(model: MultiscaleDynamicsModel,
 
     # use closure to bind macro_x arguments inside the function to the above defined ones
     def _rollout_detailed_fn(start_states: torch.Tensor, actions: torch.Tensor):
-        actions = one_hot_actions(actions, n_classes=model.d_action)
+        actions = to_onehot(actions, n_classes=model.d_action)
         pred_prim = model.rollout_single_step(start_states, actions, macro_s_batch, macro_a_batch)
         pred_abstr = model.macro_next_posterior(macro_s_batch, macro_a_batch, pred_prim['h'])
         #overlap = torch.distributions.kl_divergence(macro_s_next_post_dist,

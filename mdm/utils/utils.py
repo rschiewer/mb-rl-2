@@ -126,8 +126,8 @@ def normalize_obs(obs: Union[torch.Tensor, np.ndarray],
     return obs / denom - 0.5
 
 
-def one_hot_actions(actions: Union[torch.Tensor, np.ndarray],
-                    n_classes: int) -> Union[torch.Tensor, np.ndarray]:
+def to_onehot(actions: Union[torch.Tensor, np.ndarray],
+              n_classes: int) -> Union[torch.Tensor, np.ndarray]:
     if (actions % 1 != 0).any():
         raise ValueError('All elements in actions must be ints or castable to int without loss of precision')
 
@@ -150,5 +150,5 @@ def prepare_data(s: Union[np.ndarray, torch.Tensor],
                                         Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray]]:
     s, a, r, terminal = flatten_and_unsqueeze(s, a, r, terminal)
     s = normalize_obs(s, env)
-    a = one_hot_actions(a, env.action_space.n)
+    a = to_onehot(a, env.action_space.n)
     return s, a, r, terminal
