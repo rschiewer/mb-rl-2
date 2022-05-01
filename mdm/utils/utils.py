@@ -56,6 +56,10 @@ def gen_macro_state_map(env: Gridworld,
     available_actions = list(range(env.action_space.n)) if available_actions is None else available_actions
     action_sequences = list(product(available_actions, repeat=mdl.macro_step_size)) * n_trials
     free_locations = env.find_cell_type(CellType.FREE)
+    agent_locations = env.find_cell_type(CellType.AGENT)
+    if agent_locations.size == 2:
+        agent_locations = agent_locations[np.newaxis, ...]
+    free_locations = np.concatenate([free_locations, agent_locations], axis=0)
     n_locations = len(free_locations)
 
     groundtruth_s_final = []
@@ -112,6 +116,13 @@ def gen_macro_state_map(env: Gridworld,
     #macro_s_init_std = np.stack([macro_s_init_std[tuple(loc)] for loc in free_locations])
 
     return macro_s_init_mean, macro_s_init_std
+
+
+def infer_position(macro_s: np.ndarray, macro_ss_lookup: np.ndarray, positions_lookup: np.ndarray):
+    n_macro_ss, d_macro_s = macro_ss_lookup.shape
+    diff = np.mean(np.abs(np.tile(macro_s, (n_macro_ss, d_macro_s)) - macro_ss_lookup), axis=-1)
+    return diff
+
 
 
 def normalize_obs(obs: Union[torch.Tensor, np.ndarray],
