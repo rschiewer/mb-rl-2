@@ -268,10 +268,27 @@ class MultiscaleDynamicsModel(DynamicsModel):
 
         for t in range(n_steps):
             if t % self.macro_step_size == 0 and t > 0:  # invoke abstract model every k time steps
-                macro_a, macro_s = self.invoke_abstract_model(macro_s, macro_a, h, actions_binned, macro_r_mem,
-                                                              macro_r_prior_mem, macro_r_post_mem, macro_s_prior_mem,
-                                                              macro_s_post_mem, macro_term_mem, macro_term_prior_mem,
-                                                              macro_term_post_mem, t)
+                h_flat = self.filter_single_step_model_history(h)
+                # invoke models
+                pred_macro_prior = self.abstract_model(macro_s, macro_a)
+                pred_macro_post = self.abstract_model(macro_s, macro_a, h_flat)
+                # sample from more informed posterior distributions to get inputs for single step model
+                macro_s_next = pred_macro_post['macro_s_next_dist'].rsample()
+                macro_r = pred_macro_post['macro_r_dist'].rsample()
+                macro_term = pred_macro_post['macro_term_dist'].rsample()
+
+                # store for loss calculation
+                macro_s_prior_mem.append(pred_macro_prior['macro_s_next_dist'])
+                macro_s_post_mem.append(pred_macro_post['macro_s_next_dist'])
+                macro_r_mem.append(macro_r)
+                macro_r_prior_mem.append(pred_macro_prior['macro_r_dist'])
+                macro_r_post_mem.append(pred_macro_post['macro_r_dist'])
+                macro_term_mem.append(macro_term)
+                macro_term_prior_mem.append(pred_macro_prior['macro_term_dist'])
+                macro_term_post_mem.append(pred_macro_post['macro_term_dist'])
+                macro_s = macro_s_next  # update S = S' for next time step
+                # update A for next sequence chunk so primitive model has the correct one
+                macro_a = self.macro_action_model(actions_binned[:, t // self.macro_step_size])
 
                 # prevent memory leakage beyond macro steps
                 h = self.single_step_model.det_mdl.gen_h_placeholder(d_batch)
@@ -297,11 +314,16 @@ class MultiscaleDynamicsModel(DynamicsModel):
             # set next state to upcoming time step's current state
             s = s_next
 
-        # invoke abstract model one more time
-        if n_steps % self.macro_step_size != 0:
-            _ = self.invoke_abstract_model(macro_s, macro_a, h, actions_binned, macro_r_mem, macro_r_prior_mem,
-                                           macro_r_post_mem, macro_s_prior_mem, macro_s_post_mem, macro_term_mem,
-                                           macro_term_prior_mem, macro_term_post_mem, t=0)  # t doesn't matter as A is not used afterwards
+        # invoke abstract model one more time for macro_r and macro_term but not for macro_s_t+1
+        h_flat = self.filter_single_step_model_history(h)
+        pred_macro_prior = self.abstract_model(macro_s, macro_a)
+        pred_macro_post = self.abstract_model(macro_s, macro_a, h_flat)
+        macro_r_mem.append(pred_macro_post['macro_r_dist'].rsample())
+        macro_r_prior_mem.append(pred_macro_prior['macro_r_dist'])
+        macro_r_post_mem.append(pred_macro_post['macro_r_dist'])
+        macro_term_mem.append(pred_macro_post['macro_term_dist'].rsample())
+        macro_term_prior_mem.append(pred_macro_prior['macro_term_dist'])
+        macro_term_post_mem.append(pred_macro_post['macro_term_dist'])
 
         s_mem = torch.stack(s_mem, dim=1)
         r_mem = torch.stack(r_mem, dim=1)
