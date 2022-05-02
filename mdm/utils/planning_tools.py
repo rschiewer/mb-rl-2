@@ -83,9 +83,6 @@ def plan_abstract(model: MultiscaleDynamicsModel,
     best_macro_ss = rollout_data['macro_s'][i_top_cand]
     best_macro_rs = rollout_data['macro_r'][i_top_cand]
 
-    # assemble macro trajectory out of initial data and rollout results
-    best_macro_ss = torch.concat([macro_s_start, best_macro_ss], dim=0)
-
     return {'macro_ss': best_macro_ss, 'macro_as': best_macro_as, 'macro_rs': best_macro_rs}
 
 

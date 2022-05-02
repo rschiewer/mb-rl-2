@@ -5,7 +5,7 @@ from tqdm import tqdm
 from mdm.gridworld.gridworld import Gridworld
 from mdm.models.multiscale_model import MultiscaleDynamicsModel
 from mdm.planning.cem_planner import CrossentropyPlanner, DistributionType
-from mdm.utils.utils import here
+from mdm.utils.utils import here, gen_macro_state_map, infer_position
 from mdm.utils.planning_tools import init_macro_s, plan_section, plan_abstract
 from mdm.memory.trajectory_memory import TrajectoryMemory
 
@@ -26,6 +26,10 @@ if __name__ == '__main__':
     pln_act_noise_abstr = 0.01
     pln_act_noise_prim = 0.001
     pln_n_abstract_steps = 100
+
+    macro_s_init_mean, macro_s_init_std, macro_s_init_per_state_per_action = gen_macro_state_map(env, mdl, 3)
+    macro_s_lookup = np.stack([v for k, v in macro_s_init_mean.items()])
+    positions_lookup = np.stack([k for k, v in macro_s_init_mean.items()])
 
     mem = TrajectoryMemory()
     succeeded = 0
@@ -48,10 +52,20 @@ if __name__ == '__main__':
                                    n_evolution_steps=pln_n_optim_steps_abstr, winning_perc=pln_winning_perc,
                                    discount=pln_discount, act_noise=pln_act_noise_abstr)
 
+        # assemble macro trajectory out of initial data and rollout results
+        best_macro_ss = torch.concat([plan_init['macro_s_next'], plan_abstr['macro_ss']], dim=0)
+
+        primitive_states = []
+        for t in range(pln_n_abstract_steps):
+            positions, diffs = infer_position(best_macro_ss[t].detach().cpu().numpy(), macro_s_lookup, positions_lookup)
+            primitive_states.append(positions)
+        print(primitive_states)
+        quit()
+
         actions = plan_init['as']
         for t in range(pln_n_abstract_steps):
-            plan_detail = plan_section(model=mdl, planner=planner_prim, env=env, macro_s=plan_abstr['macro_ss'][t],
-                                       macro_a=plan_abstr['macro_as'][t], macro_s_next=plan_abstr['macro_ss'][t+1],
+            plan_detail = plan_section(model=mdl, planner=planner_prim, env=env, macro_s=best_macro_ss[t],
+                                       macro_a=plan_abstr['macro_as'][t], macro_s_next=best_macro_ss[t+1],
                                        n_rollouts=pln_d_batch, n_evolution_steps=pln_n_optim_steps_prim,
                                        winning_perc=pln_winning_perc, discount=pln_discount,
                                        act_noise=pln_act_noise_prim)
