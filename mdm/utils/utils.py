@@ -1,7 +1,7 @@
 from inspect import stack
 from pathlib import Path
 from typing import Union, Dict, Tuple, List
-from itertools import product
+from itertools import product, chain, repeat
 import sys
 import time
 
@@ -53,75 +53,81 @@ def gen_macro_state_map(env: Gridworld,
                         mdl: MultiscaleDynamicsModel,
                         n_trials: int,
                         available_actions: List[int] = None):
+    # find all possible action sequences
     available_actions = list(range(env.action_space.n)) if available_actions is None else available_actions
-    action_sequences = list(product(available_actions, repeat=mdl.macro_step_size)) * n_trials
+    action_sequences = list(product(available_actions, repeat=mdl.macro_step_size))
+    n_unique_sequences = len(action_sequences)
+
+    # find all possible starting locations
     free_locations = env.find_cell_type(CellType.FREE)
     agent_locations = env.find_cell_type(CellType.AGENT)
     if agent_locations.size == 2:
         agent_locations = agent_locations[np.newaxis, ...]
     free_locations = np.concatenate([free_locations, agent_locations], axis=0)
-    n_locations = len(free_locations)
+    free_locations = [tuple(loc) for loc in free_locations]
 
-    groundtruth_s_final = []
-    for a_seq in action_sequences:
-        for loc in free_locations:
-            env.reset()
+    # find all possible destination locations
+    groundtruth_s_final = {}
+    for loc in free_locations:
+        groundtruth_s_final[loc] = {}
+        for a_seq in action_sequences:
+            s_ = env.reset()  # TODO: check!
             env.teleport_agent(loc)
             for a in a_seq:
                 s_, r, done, _ = env.step(a)
                 if done: break
-            groundtruth_s_final.append(s_)
-    groundtruth_s_final = np.stack(groundtruth_s_final)
+            groundtruth_s_final[loc][a_seq] = tuple(s_)
 
-    for s_final in groundtruth_s_final:
-        assert(tuple(s_final) in free_locations)
+    #for s_final in groundtruth_s_final:
+    #    assert(tuple(s_final) in free_locations)
 
     # convert to tensors
-    action_sequences = [torch.tensor(s).to(mdl.device) for s in action_sequences]
-    s_start = torch.from_numpy(free_locations).to(mdl.device)
-    s_start = s_start.unsqueeze(1)  # add time dimension
-    s_start = normalize_obs(s_start, env)
+    action_sequences_torch = [torch.tensor(s).to(mdl.device) for s in action_sequences]
+    action_sequences_torch = torch.stack(action_sequences_torch)
+    action_sequences_torch = torch.nn.functional.one_hot(action_sequences_torch, num_classes=mdl.d_action)
+    ss_start = torch.tensor(free_locations).to(mdl.device)
+    ss_start = normalize_obs(ss_start, env)
 
-    macro_s_init_history = []
-    for a_seq in action_sequences:
-        a_seq_batch = torch.tile(a_seq, dims=(n_locations, 1))  # copy same starting observation along batch
-        a_seq_batch = torch.nn.functional.one_hot(a_seq_batch, num_classes=mdl.d_action)
-        predictions_ss = mdl.rollout_single_step(s_start, a_seq_batch)
-        zero_macro_s = torch.zeros(n_locations, mdl.d_macro_state, device=mdl.device)
-        zero_macro_a = torch.zeros(n_locations, mdl.d_macro_action, device=mdl.device)
-        predictions_ms = mdl.macro_next_posterior(zero_macro_s, zero_macro_a, predictions_ss['h'])
-        macro_s_init_history.append(predictions_ms['macro_s_next'].detach().cpu().numpy())
+    # do rollouts
+    macro_s_init_history = {}
+    for n in range(n_trials):
+        for s_start, loc in zip(ss_start, free_locations):
+            # prepare
+            s_start = torch.tile(s_start, dims=(n_unique_sequences, 1))
+            s_start = s_start.unsqueeze(1)
+            zero_macro_s = torch.zeros(n_unique_sequences, mdl.d_macro_state, device=mdl.device)
+            zero_macro_a = torch.zeros(n_unique_sequences, mdl.d_macro_action, device=mdl.device)
 
-    macro_s_init_history = np.stack(macro_s_init_history)
-    macro_s_init_history = macro_s_init_history.reshape(len(action_sequences) * n_locations, mdl.d_macro_state)
-    #macro_s_init_mean = macro_s_init_history.mean(axis=0)
-    #macro_s_init_mean = (macro_s_init_mean + np.abs(macro_s_init_mean.min(axis=0))) / (macro_s_init_mean.max(axis=0)
-    #                                                                                   - macro_s_init_mean.min(axis=0))
-    #return free_locations, macro_s_init_mean
+            # predict
+            pred_prim = mdl.rollout_single_step(s_start, action_sequences_torch)
+            pred_abstr = mdl.macro_next_posterior(zero_macro_s, zero_macro_a, pred_prim['h'])
+            macro_ss_next = pred_abstr['macro_s_next'].detach().cpu().numpy()
 
-    macro_s_init_mean = {tuple(pos): [] for pos in free_locations}
-    macro_s_init_std = {tuple(pos): [] for pos in free_locations}
-    for s_final, macro_s_init in zip(groundtruth_s_final, macro_s_init_history):
-        macro_s_init_mean[tuple(s_final)].append(macro_s_init)
-    for k, v in macro_s_init_mean.items():
-        if len(v):
-            macro_s_init_mean[k] = np.mean(v, axis=0)
-            macro_s_init_std[k] = np.std(v, axis=0)
-        else:
-            macro_s_init_mean[k] = np.zeros(mdl.d_macro_state)
-            macro_s_init_std[k] = np.zeros(mdl.d_macro_state)
+            # store
+            loc_hash = macro_s_init_history.get(loc, {})
+            for a_seq, macro_s_next in zip(action_sequences, macro_ss_next):
+                macro_s_next_list = loc_hash.get(a_seq, [])
+                macro_s_next_list.append(macro_s_next)
+                loc_hash[a_seq] = macro_s_next_list
+            macro_s_init_history[loc] = loc_hash
 
+    # compute statistics
+    macro_s_init_mean = {pos: 0 for pos in free_locations}
+    macro_s_init_std = {pos: 0 for pos in free_locations}
+    for pos in free_locations:
+        macro_s_all_actions = np.concatenate([np.stack(trials) for trials in macro_s_init_history[pos].values()])
+        macro_s_init_mean[pos] = np.mean(macro_s_all_actions, axis=0)
+        macro_s_init_std[pos] = np.std(macro_s_all_actions, axis=0)
 
-    #macro_s_init_mean = np.stack([macro_s_init_mean[tuple(loc)] for loc in free_locations])
-    #macro_s_init_std = np.stack([macro_s_init_std[tuple(loc)] for loc in free_locations])
-
-    return macro_s_init_mean, macro_s_init_std
+    return macro_s_init_mean, macro_s_init_std, macro_s_init_history
 
 
 def infer_position(macro_s: np.ndarray, macro_ss_lookup: np.ndarray, positions_lookup: np.ndarray):
     n_macro_ss, d_macro_s = macro_ss_lookup.shape
-    diff = np.mean(np.abs(np.tile(macro_s, (n_macro_ss, d_macro_s)) - macro_ss_lookup), axis=-1)
-    return diff
+    target = np.tile(macro_s, (n_macro_ss, 1))
+    diff = np.mean(np.abs(target - macro_ss_lookup), axis=-1)
+    idxs = np.argsort(diff)
+    return positions_lookup[idxs], diff[idxs]
 
 
 
