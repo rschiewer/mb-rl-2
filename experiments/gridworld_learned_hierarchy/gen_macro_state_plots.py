@@ -22,11 +22,11 @@ from mdm.memory.trajectory_memory import flatten_and_unsqueeze
 if __name__ == '__main__':
     env = Gridworld.from_cleartext(here() / '../../mdm/gridworld/8x8_v1.mapdata')
     mdl: MultiscaleDynamicsModel = torch.load(here() / 'model.ptmdl')
-    n_trials = 1
+    n_trials = 10
     normalize = 'per_dim'
 
     available_actions = [1]
-    macro_s_init_mean, macro_s_init_std = gen_macro_state_map(env, mdl, n_trials)
+    macro_s_init_mean, macro_s_init_std, macro_s_init_per_state_per_action = gen_macro_state_map(env, mdl, n_trials)
     #macro_s_init_mean = macro_s_init_std
 
     valid_positions = np.full((env.grid_h, env.grid_w), False)
@@ -40,10 +40,11 @@ if __name__ == '__main__':
     plot_mats = np.transpose(plot_mats, [2, 0, 1])
 
     if normalize == 'global':
-        min = np.amin(plot_mats[valid_positions])
-        max = np.amax(plot_mats[valid_positions])
+        valid_positions_tiled = np.tile(valid_positions, reps=(4, 1, 1))
+        min = np.amin(plot_mats[valid_positions_tiled])
+        max = np.amax(plot_mats[valid_positions_tiled])
         normalized = (plot_mats - min) / (max - min)
-        plot_mats = np.where(valid_positions, normalized, 0)
+        plot_mats = np.where(valid_positions_tiled, normalized, 0)
     elif normalize == 'per_dim':
         for dim, plot_mat in enumerate(plot_mats):
             min = np.amin(plot_mat[valid_positions])
