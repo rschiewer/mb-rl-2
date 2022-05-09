@@ -82,8 +82,12 @@ def plan_abstract(model: MultiscaleDynamicsModel,
     # best_macro_rs = [extract_sub_distribution(d, i_top_cand) for d in rollout_data['macro_r']]
     best_macro_ss = rollout_data['macro_s'][i_top_cand]
     best_macro_rs = rollout_data['macro_r'][i_top_cand]
+    best_macro_terms = rollout_data['macro_term'][i_top_cand]
 
-    return {'macro_ss': best_macro_ss, 'macro_as': best_macro_as, 'macro_rs': best_macro_rs}
+    return {'macro_ss': best_macro_ss,
+            'macro_as': best_macro_as,
+            'macro_rs': best_macro_rs,
+            'macro_terms': best_macro_terms}
 
 
 def plan_section(model: MultiscaleDynamicsModel,
@@ -101,12 +105,13 @@ def plan_section(model: MultiscaleDynamicsModel,
     macro_s_batch = torch.tile(macro_s, dims=(n_rollouts, 1))
     macro_a_batch = torch.tile(macro_a, dims=(n_rollouts, 1))
     macro_s_next_batch = torch.tile(macro_s_next, dims=(n_rollouts, 1))
+    macro_a_batch_post = torch.zeros_like(macro_a_batch)
 
     # use closure to bind macro_x arguments inside the function to the above defined ones
     def _rollout_detailed_fn(start_states: torch.Tensor, actions: torch.Tensor):
         actions = to_onehot(actions, n_classes=model.d_action)
         pred_prim = model.rollout_single_step(start_states, actions, macro_s_batch, macro_a_batch)
-        pred_abstr = model.macro_next_posterior(macro_s_batch, macro_a_batch, pred_prim['h'])
+        pred_abstr = model.macro_next_posterior(macro_s_batch, macro_a_batch_post, pred_prim['h'])
         #overlap = torch.distributions.kl_divergence(macro_s_next_post_dist,
         #                                            macro_s_next.expand((pln_d_batch, mdl.d_macro_state)))
         #overlap = - overlap.abs().sum(dim=1, keepdim=True)

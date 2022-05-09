@@ -9,6 +9,8 @@ import gym
 import numpy as np
 import yaml
 import torch
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
 
 from mdm.gridworld.gridworld import Gridworld, CellType
 from mdm.models.multiscale_model import MultiscaleDynamicsModel
@@ -122,13 +124,53 @@ def gen_macro_state_map(env: Gridworld,
     return macro_s_init_mean, macro_s_init_std, macro_s_init_history
 
 
-def infer_position(macro_s: np.ndarray, macro_ss_lookup: np.ndarray, positions_lookup: np.ndarray):
-    n_macro_ss, d_macro_s = macro_ss_lookup.shape
-    target = np.tile(macro_s, (n_macro_ss, 1))
-    diff = np.mean(np.abs(target - macro_ss_lookup), axis=-1)
-    idxs = np.argsort(diff)
-    return positions_lookup[idxs], diff[idxs]
+def transform_macro_s_init_history(macro_s_init_history):
+    result_macro_ss, result_locs, result_act_sequences = [], [], []
+    for loc, data in macro_s_init_history.items():
+        for a_seq in data.keys():
+            macro_s = macro_s_init_history[loc][a_seq]
+            if len(macro_s) > 1:
+                macro_s = np.mean(macro_s, axis=0)
+            result_macro_ss.append(macro_s)
+            result_locs.append(loc)
+            result_act_sequences.append(a_seq)
 
+    return np.stack(result_macro_ss), np.stack(result_locs), np.stack(result_act_sequences)
+
+
+def infer_position(env: Gridworld,
+                   macro_ss: torch.Tensor,
+                   macro_terms: torch.Tensor,
+                   macro_ss_list: np.ndarray,
+                   loc_list: np.ndarray,
+                   act_seq_list: np.ndarray):
+    plot_mats = []
+
+    for t in range(len(macro_ss)):
+        macro_s = macro_ss[t].detach().cpu().numpy()
+        target = np.tile(macro_s, (len(macro_ss_list), 1))
+        diffs = np.mean((target - macro_ss_list) ** 2, axis=1)
+        i_sorted = np.argsort(diffs)
+        intensities = (- diffs[i_sorted] + diffs.max()) / np.abs(diffs.max() - diffs.min())
+        loc_list_sorted = loc_list[i_sorted]
+        act_sequences = act_seq_list[i_sorted]
+        plot_mat = np.zeros((env.grid_h, env.grid_w))
+        for loc, intensity in zip(loc_list_sorted, intensities):
+            plot_mat[tuple(loc)] = intensity
+        plot_mats.append(plot_mat)
+
+    return np.stack(plot_mats)
+
+
+def gen_video(frames: np.ndarray, interval: int, repeat_delay: int):
+    fig = plt.figure()
+    ims = []
+    for frame in frames:
+        im = plt.imshow(frame, animated=True)
+        ims.append([im])
+    ani = animation.ArtistAnimation(fig, ims, interval=interval, blit=True, repeat_delay=repeat_delay)
+    plt.show()
+    return ani
 
 
 def normalize_obs(obs: Union[torch.Tensor, np.ndarray],

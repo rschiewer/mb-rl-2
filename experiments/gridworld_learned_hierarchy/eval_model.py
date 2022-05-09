@@ -5,7 +5,7 @@ from tqdm import tqdm
 from mdm.gridworld.gridworld import Gridworld
 from mdm.models.multiscale_model import MultiscaleDynamicsModel
 from mdm.planning.cem_planner import CrossentropyPlanner, DistributionType
-from mdm.utils.utils import here, gen_macro_state_map, infer_position
+from mdm.utils.utils import here, gen_macro_state_map, infer_position, transform_macro_s_init_history, gen_video
 from mdm.utils.planning_tools import init_macro_s, plan_section, plan_abstract
 from mdm.memory.trajectory_memory import TrajectoryMemory
 
@@ -18,9 +18,9 @@ if __name__ == '__main__':
 
     n_episodes = 10
     store_result_trajectories = False
-    pln_d_batch = 8000
+    pln_d_batch = 5000
     pln_n_optim_steps_abstr = 30
-    pln_n_optim_steps_prim = 10
+    pln_n_optim_steps_prim = 20
     pln_winning_perc = 0.01
     pln_discount = 0.90
     pln_act_noise_abstr = 0.01
@@ -28,8 +28,9 @@ if __name__ == '__main__':
     pln_n_abstract_steps = 100
 
     macro_s_init_mean, macro_s_init_std, macro_s_init_per_state_per_action = gen_macro_state_map(env, mdl, 3)
-    macro_s_lookup = np.stack([v for k, v in macro_s_init_mean.items()])
-    positions_lookup = np.stack([k for k, v in macro_s_init_mean.items()])
+    macro_ss_list, loc_list, act_seq_list = transform_macro_s_init_history(macro_s_init_per_state_per_action)
+    #macro_s_lookup = np.stack([v for k, v in macro_s_init_mean.items()])
+    #positions_lookup = np.stack([k for k, v in macro_s_init_mean.items()])
 
     mem = TrajectoryMemory()
     succeeded = 0
@@ -51,16 +52,8 @@ if __name__ == '__main__':
                                    n_plan_steps=pln_n_abstract_steps, n_rollouts=pln_d_batch,
                                    n_evolution_steps=pln_n_optim_steps_abstr, winning_perc=pln_winning_perc,
                                    discount=pln_discount, act_noise=pln_act_noise_abstr)
-
         # assemble macro trajectory out of initial data and rollout results
         best_macro_ss = torch.concat([plan_init['macro_s_next'], plan_abstr['macro_ss']], dim=0)
-
-        primitive_states = []
-        for t in range(pln_n_abstract_steps):
-            positions, diffs = infer_position(best_macro_ss[t].detach().cpu().numpy(), macro_s_lookup, positions_lookup)
-            primitive_states.append(positions)
-        print(primitive_states)
-        quit()
 
         actions = plan_init['as']
         for t in range(pln_n_abstract_steps):
@@ -96,6 +89,12 @@ if __name__ == '__main__':
 
         n_steps.append(i_step)
         mem.push(s_mem, a_mem, r_mem, term_mem)
+
+        n_macro_steps = np.ceil(i_step  / mdl.macro_step_size).astype(np.int)
+        best_macro_terms = plan_abstr['macro_terms']
+        #plot_mats = infer_position(env, best_macro_ss[:n_macro_steps], best_macro_terms[:n_macro_steps], macro_ss_list, loc_list, act_seq_list)
+        #ani = gen_video(plot_mats, 1000, 2000)
+        #ani.save(f'animation_{i_ep}.mp4')
 
     if store_result_trajectories:
         TrajectoryMemory.store(mem, 'test_rollouts.samples.samples')
