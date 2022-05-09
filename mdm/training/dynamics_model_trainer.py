@@ -1,9 +1,10 @@
-from typing import Callable, Tuple, Dict
+from typing import Callable, Tuple, Dict, Union
 from abc import ABC
 
 import torch
 from tqdm import tqdm
 import numpy as np
+from pathlib import Path
 
 from mdm.logging.logger import Logger, Scope
 from mdm.models.dynamics_model import DynamicsModel
@@ -31,7 +32,8 @@ class DynamicsModelTrainer(ABC):
 
     def train(self,
               n_train_steps: int,
-              progress_bar: bool = False):
+              progress_bar: bool = False,
+              checkpoint_path: Union[str, Path] = None):
         device = self.model.device
         step_iter = range(n_train_steps)
         last_eval_losses = {'N/A': torch.tensor(0, device=self.model.device)}
@@ -75,6 +77,11 @@ class DynamicsModelTrainer(ABC):
                     raise ValueError(msg)
 
                 eval_losses = self.model.eval_step(s, a, r, term, self.warmup_steps)
+
+                last_total_loss = last_eval_losses.get('total', np.inf)
+                if checkpoint_path and eval_losses['total'] < last_total_loss:
+                    torch.save(self.model, Path(checkpoint_path).parent / 'checkpoint.ptmdl')
+
                 last_eval_losses = eval_losses
 
                 if self.logger:

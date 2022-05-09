@@ -24,7 +24,7 @@ if __name__ == '__main__':
     mdl_d_macro_state = 4
     mdl_d_macro_action = 4
     mdl_d_macro_reward = 1
-    mdl_n_abstract_steps = 3
+    mdl_n_abstract_steps = 2
     ss_mdl_n_rec_layers = 2
     ss_mdl_d_hidden = 64
     ss_mdl_s_lws = (128, 64)
@@ -38,11 +38,11 @@ if __name__ == '__main__':
     a_mdl_term_prior_lws = (128, 64)
     a_mdl_term_post_lws = (128, 64)
 
-    trainer_d_batch = 4000
+    trainer_d_batch = 2000
     trainer_n_warmup_steps = 1
-    trainer_n_train_steps = 15000
+    trainer_n_train_steps = 6000
     trainer_n_eval_interval = 100
-    trainer_lr = 0.001
+    trainer_lr = 0.003
     trainer_betas = (0.90, 0.999)
     trainer_weight_decay = 0.02
 
@@ -87,7 +87,7 @@ if __name__ == '__main__':
     trainer = DynamicsModelTrainer(multiscale_mdl, optimizer, get_batch_train, get_batch_test, trainer_n_warmup_steps,
                                    trainer_n_eval_interval, logger=neptune_logger)
 
-    trainer.train(trainer_n_train_steps, progress_bar=True)
+    trainer.train(trainer_n_train_steps, progress_bar=True, checkpoint_path=here() /'checkpoints/')
 
     torch.save(multiscale_mdl, Path(__file__).parent / 'model.ptmdl')
 
