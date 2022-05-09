@@ -21,7 +21,7 @@ from mdm.memory.trajectory_memory import flatten_and_unsqueeze
 
 if __name__ == '__main__':
     env = Gridworld.from_cleartext(here() / '../../mdm/gridworld/8x8_v1.mapdata')
-    mdl: MultiscaleDynamicsModel = torch.load(here() / 'model.ptmdl')
+    mdl: MultiscaleDynamicsModel = torch.load(here() / 'checkpoint.ptmdl')
     n_trials = 10
     normalize = 'per_dim'
 
