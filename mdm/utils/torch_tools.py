@@ -99,12 +99,20 @@ class GaussianBlock(FeedforwardBlock):
 
     def __init__(self,
                  *d_inputs: int,
-                 lws: Union[Iterable[int], int]):
+                 lws: Union[Iterable[int], int],
+                 epsilon: float = 0.01):
         if type(lws) is int:
             lws = [lws]
         lws = (*lws[:-1], lws[-1] * 2)  # double last layer to have params for loc and scale
 
         super(GaussianBlock, self).__init__(*d_inputs, lws=lws)
+        self.epsilon = epsilon
+
+        min_var = torch.pow(torch.tensor(epsilon, dtype=torch.float32), lws[-1])
+        log_min_var = torch.log(min_var)
+        if torch.isinf(log_min_var):
+            raise ValueError(f'The minimal covariance matrix determinant of a {lws[-1]}d independent gaussian with '
+                             f'epsilon={epsilon} is prone to numerical underflow, choose a larger epsilon.')
 
     def forward(self,
                 *xs: torch.Tensor):
@@ -114,41 +122,7 @@ class GaussianBlock(FeedforwardBlock):
         #std = torch.log(1 + logvar.exp()) + 1e-1
         #std = torch.nn.functional.relu(logvar) + 0.01
         #std = torch.distributions.transform_to(torch.distributions.Normal.arg_constraints['scale'])(logvar) + 0.01
-        std = torch.abs(logvar) + 0.01
-        x_dist = torch.distributions.Normal(mu, std)
-
-        return x_dist
-
-
-class GaussianBlock_old(torch.nn.Module, DeviceMixin):
-
-    def __init__(self,
-                 *d_inputs: int,
-                 lws: Union[Iterable[int], int]):
-        super(GaussianBlock_old, self).__init__()
-
-        if type(lws) is int:
-            lws = [lws]
-
-        self.d_inputs = d_inputs
-        self.lws = (sum(d_inputs), *lws[:-1], lws[-1] * 2)  # double last layer width to have params for loc and scale
-        self.layer_list = torch.nn.ModuleList([torch.nn.Linear(lw_in, lw_out)
-                                               for lw_in, lw_out in zip(self.lws, self.lws[1:])])
-
-    def forward(self,
-                *xs: torch.Tensor):
-        x = torch.concat(xs, dim=-1)
-        for l in self.layer_list[:-1]:  # only activations on inner layers
-            x = l(x)
-            x = torch.nn.functional.gelu(x)
-        x = self.layer_list[-1](x)  # no activation on last layer
-
-        mu, logvar = torch.tensor_split(x, 2, dim=-1)
-        #std = logvar.exp().pow(0.5) + 1.0
-        #std = torch.log(1 + logvar.exp()) + 1e-1
-        #std = torch.nn.functional.relu(logvar) + 0.01
-        #std = torch.distributions.transform_to(torch.distributions.Normal.arg_constraints['scale'])(logvar) + 0.01
-        std = torch.abs(logvar) + 0.01
+        std = torch.abs(logvar) + self.epsilon
         x_dist = torch.distributions.Normal(mu, std)
 
         return x_dist
