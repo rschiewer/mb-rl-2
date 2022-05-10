@@ -16,13 +16,6 @@ class DynamicsModel(torch.nn.Module, DeviceMixin, ABC):
         super(DynamicsModel, self).__init__()
 
     @abstractmethod
-    def forward(self,
-                start_states: torch.Tensor,
-                actions: torch.Tensor,
-                context: torch.Tensor = None) -> Any:
-        pass
-
-    @abstractmethod
     def train_step(self,
                    s_ground_truth: torch.Tensor,
                    a_ground_truth: torch.Tensor,
