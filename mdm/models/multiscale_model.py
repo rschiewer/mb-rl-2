@@ -399,7 +399,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
         return macro_a, macro_s
 
     def train_step(self,
-                   s_ground_truth: torch.Tensor,
+                   o_ground_truth: torch.Tensor,
                    a_ground_truth: torch.Tensor,
                    r_ground_truth: torch.Tensor,
                    term_ground_truth: torch.Tensor,
@@ -407,7 +407,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
                    n_warmup: int = 1):
         optimizer.zero_grad(set_to_none=True)
 
-        losses = self.eval_step(s_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, n_warmup)
+        losses = self.eval_step(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, n_warmup)
         losses['total'].backward()
         #torch.nn.utils.clip_grad_value_(self.parameters(), 1.0)
         optimizer.step()
@@ -415,7 +415,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
         return losses
 
     def eval_step(self,
-                  s_ground_truth: torch.Tensor,
+                  o_ground_truth: torch.Tensor,
                   a_ground_truth: torch.Tensor,
                   r_ground_truth: torch.Tensor,
                   term_ground_truth: torch.Tensor,
@@ -434,7 +434,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
         # target macro terminal transition probability can be pre-computed as well
         macro_term_target = self.bin_every_k_steps(term_ground_truth, self.macro_step_size).max(dim=2).values
 
-        warmup_states = s_ground_truth[:, :n_warmup, :]
+        warmup_states = o_ground_truth[:, :n_warmup, :]
         pred = self(warmup_states, a_ground_truth)
 
         # https://stats.stackexchange.com/questions/332179/how-to-weight-kld-loss-vs-reconstruction-loss-in-variational-auto-encoder
@@ -444,7 +444,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
         #beta = 10
         #beta_norm = M / N * beta
 
-        rec_s = rec_loss(pred['s'], s_ground_truth)
+        rec_s = rec_loss(pred['s'], o_ground_truth)
         rec_r = rec_loss(pred['r'], r_ground_truth)
         rec_term = rec_loss(pred['term'], term_ground_truth)
         #rec_s = rec_loss_ml(pred['s_dist'], torch.transpose(s_ground_truth, 0, 1))
@@ -472,7 +472,7 @@ class MultiscaleDynamicsModel(DynamicsModel):
                 'kl_term':kl_term, 'kl_reg': reg, 'macro_r': mr, 'macro_term': mt}
 
     def input_compatible(self,
-                         s_ground_truth: torch.Tensor,
+                         o_ground_truth: torch.Tensor,
                          a_ground_truth: torch.Tensor,
                          r_ground_truth: torch.Tensor) -> Tuple[bool, str]:
         compatible = True
@@ -480,10 +480,10 @@ class MultiscaleDynamicsModel(DynamicsModel):
         shape = None
 
         # test lengths of shapes first
-        if len(s_ground_truth.shape) != 3:
+        if len(o_ground_truth.shape) != 3:
             compatible = False
             tens_name = 'state'
-            shape = s_ground_truth.shape
+            shape = o_ground_truth.shape
         elif len(a_ground_truth.shape) != 3:
             compatible = False
             tens_name = 'action'
@@ -499,10 +499,10 @@ class MultiscaleDynamicsModel(DynamicsModel):
             return compatible, msg
 
         # test data shapes
-        if s_ground_truth.shape[2] != self.d_state:
+        if o_ground_truth.shape[2] != self.d_state:
             compatible = False
             tens_name = 'state'
-            shape = (s_ground_truth.shape[2], self.d_state)
+            shape = (o_ground_truth.shape[2], self.d_state)
         elif a_ground_truth.shape[2] != self.d_action:
             compatible = False
             tens_name = 'action'

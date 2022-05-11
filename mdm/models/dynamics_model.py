@@ -17,7 +17,7 @@ class DynamicsModel(torch.nn.Module, DeviceMixin, ABC):
 
     @abstractmethod
     def train_step(self,
-                   s_ground_truth: torch.Tensor,
+                   o_ground_truth: torch.Tensor,
                    a_ground_truth: torch.Tensor,
                    r_ground_truth: torch.Tensor,
                    term_ground_truth: torch.Tensor,
@@ -27,7 +27,7 @@ class DynamicsModel(torch.nn.Module, DeviceMixin, ABC):
 
     @abstractmethod
     def eval_step(self,
-                  s_ground_truth: torch.Tensor,
+                  o_ground_truth: torch.Tensor,
                   a_ground_truth: torch.Tensor,
                   r_ground_truth: torch.Tensor,
                   term_ground_truth: torch.Tensor,
@@ -36,7 +36,7 @@ class DynamicsModel(torch.nn.Module, DeviceMixin, ABC):
 
     @abstractmethod
     def input_compatible(self,
-                         s_ground_truth: torch.Tensor,
+                         o_ground_truth: torch.Tensor,
                          a_ground_truth: torch.Tensor,
                          r_ground_truth: torch.Tensor) -> Tuple[bool, str]:
         # TODO: add term_ground_truth here as well
