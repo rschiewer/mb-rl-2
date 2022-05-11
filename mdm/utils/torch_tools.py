@@ -4,6 +4,7 @@ from collections import namedtuple
 from functools import reduce
 
 import torch
+import torch.jit as jit
 
 
 _Placeholder = namedtuple('placeholder', 'device')
@@ -63,7 +64,7 @@ class RecurrentBlock(torch.nn.Module, DeviceMixin):
 
         return x, h
 
-    def gen_h_placeholder(self, d_batch: int):
+    def gen_h_placeholder(self, d_batch: int) -> Tuple[torch.Tensor, torch.Tensor]:
         d = self.device
         return (torch.zeros(self.n_layers, d_batch, self.d_hidden, device=d),
                 torch.zeros(self.n_layers, d_batch, self.d_hidden, device=d))
@@ -83,6 +84,7 @@ class FeedforwardBlock(torch.nn.Module, DeviceMixin):
         self.lws = (sum(d_inputs), *lws)
         self.layer_list = torch.nn.ModuleList([torch.nn.Linear(lw_in, lw_out)
                                                for lw_in, lw_out in zip(self.lws, self.lws[1:])])
+        self.d_output = lws[-1]
 
     def forward(self,
                 *xs: torch.Tensor):
@@ -106,6 +108,8 @@ class GaussianBlock(FeedforwardBlock):
         lws = (*lws[:-1], lws[-1] * 2)  # double last layer to have params for loc and scale
 
         super(GaussianBlock, self).__init__(*d_inputs, lws=lws)
+
+        self.d_output = lws[-1] // 2
         self.epsilon = epsilon
 
         min_var = torch.pow(torch.tensor(epsilon, dtype=torch.float32), lws[-1])
