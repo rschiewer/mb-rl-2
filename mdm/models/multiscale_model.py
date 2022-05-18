@@ -257,13 +257,14 @@ class MultiscaleDynamicsModel(DynamicsModel):
         d_batch, n_steps = actions.shape[:2]
         n_start_states = start_states.shape[1]
         device = self.device
+        actions_binned = self.bin_every_k_steps(actions, self.macro_step_size)
 
         s = torch.zeros(d_batch, self.d_state, device=device)
         h = self.single_step_model.det_mdl.gen_h_placeholder(d_batch)
         macro_s = torch.zeros(d_batch, self.d_macro_state, device=device)
-        macro_a = torch.zeros(d_batch, self.d_macro_action, device=device)
+        #macro_a = torch.zeros(d_batch, self.d_macro_action, device=device)
+        macro_a = self.macro_action_model(actions_binned[:, 0])
         zero_macro_a = torch.zeros(d_batch, self.d_macro_action, device=device)
-        actions_binned = self.bin_every_k_steps(actions, self.macro_step_size)
 
         s_mem, s_dist_mem = [], []
         r_mem, r_dist_mem = [], []
