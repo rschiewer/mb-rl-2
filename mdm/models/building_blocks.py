@@ -36,6 +36,7 @@ class RSSM(torch.nn.Module):
                  d_state: int,
                  d_action: int,
                  d_observation: int,
+                 d_reward: int,
                  d_high_level_context: int,
                  d_low_level_context: int,
                  d_hidden: int,
@@ -53,6 +54,7 @@ class RSSM(torch.nn.Module):
         self.d_state = d_state
         self.d_action = d_action
         self.d_observation = d_observation
+        self.d_reward = d_reward
         self.d_high_level_context = d_high_level_context
         self.d_low_level_context = d_low_level_context
         self.d_hidden = d_hidden
@@ -62,7 +64,7 @@ class RSSM(torch.nn.Module):
         s_prior_lws = (d_hidden, *s_prior_lws, d_state * 2)
         s_post_lws = (d_hidden, *s_post_lws, d_state * 2)
         o_lws = (d_hidden, *o_lws, d_observation * 2)
-        r_lws = (d_hidden, *r_lws, 2)
+        r_lws = (d_hidden, *r_lws, d_reward * 2)
         term_lws = (d_hidden, *term_lws, 1)
 
         self.det_core = torch.nn.LSTM(d_state + d_action + d_high_level_context, hidden_size=d_hidden,
@@ -110,8 +112,16 @@ class RSSM(torch.nn.Module):
         term_dist = self._terminal(x_det, s_post_smpl)
         term_smpl = term_dist.rsample()
 
-        return ({'s': s_post_smpl, 's_prior': s_prior, 's_post': s_post, 'o': o_smpl, 'r': r_smpl, 'term': term_smpl},
-                new_cell_state)
+        return {'s': s_post_smpl, 's_prior': s_prior, 's_post': s_post, 'o': o_smpl, 'r': r_smpl,
+                'term': term_smpl}, new_cell_state
+
+    def predict_with_posterior(self,
+                               s: torch.Tensor,
+                               a: torch.Tensor,
+                               ctx_low_level: torch.Tensor,
+                               ctx_high_level: torch.Tensor = None,
+                               cell_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None):
+        return self(s, a, ctx_low_level, ctx_high_level, cell_state)
 
     def predict_with_prior(self,
                            s: torch.Tensor,
