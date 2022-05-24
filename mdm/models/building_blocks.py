@@ -90,6 +90,12 @@ class RSSM(torch.nn.Module):
 
         self._det_core_fwd = det_core_forward_fn
 
+    def gen_init_values(self, d_batch: int,  device: torch.device):
+        s = torch.zeros(d_batch, self.d_state, device=device)
+        o = torch.zeros(d_batch, self.d_observation, device=device)
+        h = torch.zeros(self.n_hidden_layers, d_batch, self.d_hidden)
+        return {'s': s, 'o': o, 'h': (h, h)}
+
     def forward(self,
                 s: torch.Tensor,
                 a: torch.Tensor,
