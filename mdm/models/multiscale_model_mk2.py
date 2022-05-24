@@ -48,7 +48,7 @@ class RSSMBase(torch.nn.Module, DeviceMixin, ABC):
         pass
 
 
-class RSSM(RSSMBase):
+class RSSM_(RSSMBase):
 
     def __init__(self,
                  det_core: RecurrentBlock,
@@ -124,7 +124,7 @@ class RSSM(RSSMBase):
         return out_internals, out_heads, loss
 
 
-class HiddenRSSM(RSSMBase):
+class HiddenRSSM_(RSSMBase):
 
     def forward(self,
                 s: torch.Tensor,
@@ -161,17 +161,18 @@ class MultiscaleDynamicsModelMK2(DynamicsModel):
                  abstract_model: RSSM,
                  abstract_action_model: AbstractActionModel,
                  abstract_step_size: int):
+        super().__init__()
         self.primitive_model = primitive_model
         self.abstract_model = abstract_model
         self.abstract_action_model = abstract_action_model
         self.abstract_step_size = abstract_step_size
-        self.d_state = primitive_model.d_s
-        self.d_action = primitive_model.d_a
-        self.d_reward = primitive_model.d_heads['r']
-        self.d_observation = primitive_model.d_heads['o']
-        self.d_abstract_state = abstract_model.d_s
-        self.d_abstract_action = abstract_model.d_a
-        self.d_abstract_reward = abstract_model.d_heads['r']
+        self.d_state = primitive_model.d_state
+        self.d_action = primitive_model.d_action
+        self.d_reward = primitive_model.d_reward
+        self.d_observation = primitive_model.d_observation
+        self.d_abstract_state = abstract_model.d_state
+        self.d_abstract_action = abstract_model.d_action
+        self.d_abstract_reward = abstract_model.d_reward
 
     def forward(self,
                 s_start: torch.Tensor,
@@ -192,9 +193,22 @@ class MultiscaleDynamicsModelMK2(DynamicsModel):
         actions_binned = bin_every_k_steps(a, self.macro_step_size, device)
 
         # memory for primitive predictions
-        primitive_predictions = {head_name: [] for head_name in self.primitive_model.d_heads}
-        primitive_priors = []
-        primitive_posteriors = []
+        prim_obs = []
+        prim_rews = []
+        prim_terms = []
+        prim_priors = []
+        prim_posts = []
+        prim_h = None
+        prim_o = None
+        prim_s = None
+
+        abstr_obs = []
+        abstr_rews = []
+        abstr_terms = []
+        abstr_priors = []
+        abstr_posts = []
+        abstr_h = None
+
 
         # memory for abstract predictions
         abstract_predictions = {head_name: [] for head_name in self.abstract_model.d_heads}
