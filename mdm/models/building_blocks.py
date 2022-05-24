@@ -87,14 +87,30 @@ class RSSM(torch.nn.Module):
                 x_det_, new_cell_state_ = self.det_core(torch.concat([s_, a_, high_level_ctx_], dim=-1), cell_state_)
                 x_det_ = remove_time_dim(x_det_)
                 return x_det_, new_cell_state_
-
         self._det_core_fwd = det_core_forward_fn
+
+        if d_observation == 0:
+            def _obs_fn(x_det: torch.Tensor,
+                        s_smpl: torch.Tensor) -> Tuple[Optional[torch.distributions.Normal], torch.Tensor]:
+                return None, torch.tensor(0.0)
+        else:
+            def _obs_fn(x_det: torch.Tensor,
+                        s_smpl: torch.Tensor) -> Tuple[Optional[torch.distributions.Normal], torch.Tensor]:
+                x_in = torch.concat([x_det, s_smpl], dim=-1)
+                o_params = self.o_dist(x_in)
+                mu, sigma = torch.tensor_split(o_params, 2, dim=-1)
+                sigma = torch.abs(sigma) + self.epsilon
+                o_dist = torch.nn.distributions.Normal(loc=mu, scale=sigma)
+                o_smpl = o_dist.rsample()
+                return o_dist, o_smpl
+        self._observation = _obs_fn
 
     def gen_init_values(self, d_batch: int,  device: torch.device):
         s = torch.zeros(d_batch, self.d_state, device=device)
         o = torch.zeros(d_batch, self.d_observation, device=device)
+        a = torch.zeros(d_batch, self.d_action, device=device)
         h = torch.zeros(self.n_hidden_layers, d_batch, self.d_hidden)
-        return {'s': s, 'o': o, 'h': (h, h)}
+        return {'s': s, 'o': o, 'a': a, 'h': (h, h)}
 
     def forward(self,
                 s: torch.Tensor,
@@ -111,12 +127,9 @@ class RSSM(torch.nn.Module):
         s_post = self._posterior(x_det, ctx_low_level)
         s_post_smpl = s_post.rsample()
 
-        o_dist = self._observation(x_det, s_post_smpl)
-        o_smpl = o_dist.rsample()
-        r_dist = self._reward(x_det, s_post_smpl)
-        r_smpl = r_dist.rsample()
-        term_dist = self._terminal(x_det, s_post_smpl)
-        term_smpl = term_dist.rsample()
+        o_dist, o_smpl = self._observation(x_det, s_post_smpl)
+        r_dist, r_smpl = self._reward(x_det, s_post_smpl)
+        term_dist, term_smpl = self._terminal(x_det, s_post_smpl)
 
         return {'s': s_post_smpl, 's_prior': s_prior, 's_post': s_post, 'o': o_smpl, 'r': r_smpl,
                 'term': term_smpl}, new_cell_state
@@ -139,12 +152,9 @@ class RSSM(torch.nn.Module):
         s_prior = self._prior(x_det)
         s_prior_smpl = s_prior.rsample()
 
-        o_dist = self._observation(x_det, s_prior_smpl)
-        o_smpl = o_dist.rsample()
-        r_dist = self._reward(x_det, s_prior_smpl)
-        r_smpl = r_dist.rsample()
-        term_dist = self._terminal(x_det, s_prior_smpl)
-        term_smpl = term_dist.rsample()
+        o_dist, o_smpl = self._observation(x_det, s_prior_smpl)
+        r_dist, r_smpl = self._reward(x_det, s_prior_smpl)
+        term_dist, term_smpl = self._terminal(x_det, s_prior_smpl)
 
         return {'s': s_prior_smpl, 's_prior': s_prior, 'o': o_smpl, 'r': r_smpl, 'term': term_smpl}, new_cell_state
 
@@ -166,31 +176,24 @@ class RSSM(torch.nn.Module):
         s_post = torch.nn.distributions.Normal(loc=mu, scale=sigma)
         return s_post
 
-    def _observation(self,
-                     x_det: torch.Tensor,
-                     s_smpl: torch.Tensor) -> torch.distributions.Normal:
-        x_in = torch.concat([x_det, s_smpl], dim=-1)
-        o_params = self.o_dist(x_in)
-        mu, sigma = torch.tensor_split(o_params, 2, dim=-1)
-        sigma = torch.abs(sigma) + self.epsilon
-        o_dist = torch.nn.distributions.Normal(loc=mu, scale=sigma)
-        return o_dist
 
     def _reward(self,
                 x_det: torch.Tensor,
-                s_smpl: torch.Tensor) -> torch.distributions.Normal:
+                s_smpl: torch.Tensor) -> Tuple[torch.distributions.Normal, torch.Tensor]:
         x_in = torch.concat([x_det, s_smpl], dim=-1)
         r_params = self.r_dist(x_in)
         mu, sigma = torch.tensor_split(r_params, 2, dim=-1)
         sigma = torch.abs(sigma) + self.epsilon
         r_dist = torch.nn.distributions.Normal(loc=mu, scale=sigma)
-        return r_dist
+        r_smpl = r_dist.rsample()
+        return r_dist, r_smpl
 
     def _terminal(self,
                   x_det: torch.Tensor,
-                  s_smpl: torch.Tensor) -> torch.distributions.ContinuousBernoulli:
+                  s_smpl: torch.Tensor) -> Tuple[torch.distributions.ContinuousBernoulli, torch.Tensor]:
         x_in = torch.concat([x_det, s_smpl], dim=-1)
         term_params = self.term_dist(x_in)
         term_params = torch.sigmoid(term_params)
         term_dist = torch.nn.distributions.ContinuousBernoulli(probs=term_params)
-        return term_dist
+        term_smpl = term_dist.rsample()
+        return term_dist, term_smpl
