@@ -1,7 +1,8 @@
-from typing import Tuple, Union, Iterable, List
+from typing import Tuple, Union, Iterable, List, Sequence
 from enum import Enum
 from collections import namedtuple
 from functools import reduce
+from math import ceil
 
 import torch
 import torch.jit as jit
@@ -147,6 +148,52 @@ class ContinuousBernoulliBlock(FeedforwardBlock):
         x_dist = torch.distributions.ContinuousBernoulli(probs=x)
 
         return x_dist
+
+
+def bin_every_k_steps(data: torch.Tensor,
+                      k: int,
+                      device: torch.device,
+                      padding_val: Union[int, float, None] = None):
+    d_batch, d_time, d_data = data.shape
+    n_macro_steps = ceil(d_time / k)
+    d_padding = n_macro_steps * k - d_time
+
+    if padding_val is None:
+        padding_val = torch.mean(data[:, -d_padding:, :])  # TODO: check this
+
+    padding = torch.full((d_batch, d_padding, d_data), fill_value=padding_val, dtype=data.dtype, device=device)
+    data_padded = torch.concat([data, padding], dim=1)
+    binned = data_padded.reshape(d_batch, (d_time + d_padding) // k, k, d_data)
+
+    #bins = []
+    #for i in range(0, d_time, k):
+    #    bins.append(data[:, i:i+k])
+    #binned2 = torch.stack(bins, dim=1)
+
+    return binned
+
+
+def layers_with_activation(lws: Sequence[int], activation: str = 'relu'):
+    if activation == 'relu':
+        act_constr = torch.nn.ReLU
+    elif activation == 'gelu':
+        act_constr = torch.nn.GELU
+    elif activation == 'elu':
+        act_constr = torch.nn.ELU
+    elif activation == 'tanh':
+        act_constr = torch.nn.Tanh
+    elif activation == 'sigmoid':
+        act_constr = torch.nn.Sigmoid
+    else:
+        raise ValueError(f'Unkown activation function: {activation}')
+
+    layers = []
+    for w_in, w_out in zip(lws, lws[1:]):
+        layers += [torch.nn.Linear(w_in, w_out), act_constr()]
+    layers.pop(-1)  # remove last activation function for final linear layer
+
+    return layers
+
 
 
 def add_time_dim(*xs: torch.Tensor,
