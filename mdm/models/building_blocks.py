@@ -11,13 +11,16 @@ class AbstractActionModel(torch.nn.Module, DeviceMixin):
                  d_action: int,
                  n_abstract_steps: int,
                  d_abstract_action: int,
-                 lws: tuple = (64, 64)):
+                 lws: tuple = (64, 64),
+                 activation: str = 'relu'):
         super(AbstractActionModel, self).__init__()
 
+        lws = (d_action * n_abstract_steps, *lws, d_abstract_action)
         self.flatten_layer = torch.nn.Flatten(start_dim=1)
-        self.det_mdl = FeedforwardBlock(d_action * n_abstract_steps, lws=(*lws, d_abstract_action))
+        self.det_mdl = torch.nn.Sequential(*layers_with_activation(lws, activation))
 
-    def forward(self, actions: torch.Tensor):
+    def forward(self,
+                actions: torch.Tensor) -> torch.Tensor:
         # actions.shape = (d_batch, n_abstract_steps, d_action)
         macro_action = self.flatten_layer(actions)
         macro_action = self.det_mdl(macro_action)
@@ -43,7 +46,8 @@ class RSSM(torch.nn.Module):
                  s_post_lws: Tuple[int] = (32, 32),
                  o_lws: Tuple[int] = (32, 32),
                  r_lws: Tuple[int] = (32, 32),
-                 term_lws: Tuple[int] = (32, 32)):
+                 term_lws: Tuple[int] = (32, 32),
+                 activation: str = 'relu'):
         super().__init__()
 
         self.d_state = d_state
@@ -61,13 +65,13 @@ class RSSM(torch.nn.Module):
         r_lws = (d_hidden, *r_lws, 2)
         term_lws = (d_hidden, *term_lws, 1)
 
-        self.det_core = torch.nn.LSTM(d_state + d_action + d_high_level_context, hidden_size=d_hidden, num_layers=n_hidden_layers, batch_first=True,
-                                      dropout=hidden_dropout)
-        self.s_prior = torch.nn.Sequential(*layers_with_activation(s_prior_lws, 'gelu'))
-        self.s_post = torch.nn.Sequential(*layers_with_activation(s_post_lws, 'gelu'))
-        self.o_dist = torch.nn.Sequential(*layers_with_activation(o_lws, 'gelu'))
-        self.r_dist = torch.nn.Sequential(*layers_with_activation(r_lws, 'gelu'))
-        self.term_dist = torch.nn.Sequential(*layers_with_activation(term_lws, 'gelu'))
+        self.det_core = torch.nn.LSTM(d_state + d_action + d_high_level_context, hidden_size=d_hidden,
+                                      num_layers=n_hidden_layers, batch_first=True, dropout=hidden_dropout)
+        self.s_prior = torch.nn.Sequential(*layers_with_activation(s_prior_lws, activation))
+        self.s_post = torch.nn.Sequential(*layers_with_activation(s_post_lws, activation))
+        self.o_dist = torch.nn.Sequential(*layers_with_activation(o_lws, activation))
+        self.r_dist = torch.nn.Sequential(*layers_with_activation(r_lws, activation))
+        self.term_dist = torch.nn.Sequential(*layers_with_activation(term_lws, activation))
 
         if d_high_level_context == 0:
             def det_core_forward_fn(s_, a_, high_level_ctx_, cell_state_):
