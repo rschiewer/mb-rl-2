@@ -37,8 +37,8 @@ class RSSM(torch.nn.Module):
                  d_action: int,
                  d_observation: int,
                  d_reward: int,
-                 d_high_level_context: int,
-                 d_low_level_context: int,
+                 d_high_level_ctx: int,
+                 d_low_level_ctx: int,
                  d_hidden: int,
                  n_hidden_layers: int = 1,
                  hidden_dropout: float = 0.1,
@@ -55,8 +55,8 @@ class RSSM(torch.nn.Module):
         self.d_action = d_action
         self.d_observation = d_observation
         self.d_reward = d_reward
-        self.d_high_level_context = d_high_level_context
-        self.d_low_level_context = d_low_level_context
+        self.d_high_level_ctx = d_high_level_ctx
+        self.d_low_level_ctx = d_low_level_ctx
         self.d_hidden = d_hidden
         self.n_hidden_layers = n_hidden_layers
         self.epsilon = epsilon
@@ -67,7 +67,7 @@ class RSSM(torch.nn.Module):
         r_lws = (d_hidden, *r_lws, d_reward * 2)
         term_lws = (d_hidden, *term_lws, 1)
 
-        self.det_core = torch.nn.LSTM(d_state + d_action + d_high_level_context, hidden_size=d_hidden,
+        self.det_core = torch.nn.LSTM(d_state + d_action + d_high_level_ctx, hidden_size=d_hidden,
                                       num_layers=n_hidden_layers, batch_first=True, dropout=hidden_dropout)
         self.s_prior = torch.nn.Sequential(*layers_with_activation(s_prior_lws, activation))
         self.s_post = torch.nn.Sequential(*layers_with_activation(s_post_lws, activation))
@@ -75,7 +75,7 @@ class RSSM(torch.nn.Module):
         self.r_dist = torch.nn.Sequential(*layers_with_activation(r_lws, activation))
         self.term_dist = torch.nn.Sequential(*layers_with_activation(term_lws, activation))
 
-        if d_high_level_context == 0:
+        if d_high_level_ctx == 0:
             def det_core_forward_fn(s_, a_, high_level_ctx_, cell_state_):
                 s_, a_ = add_time_dim(a_, s_)
                 x_det_, new_cell_state_ = self.det_core(torch.concat([s_, a_], dim=-1), cell_state_)
