@@ -131,8 +131,8 @@ class RSSM(torch.nn.Module):
         r_dist, r_smpl = self._reward(x_det, s_post_smpl)
         term_dist, term_smpl = self._terminal(x_det, s_post_smpl)
 
-        return {'s': s_post_smpl, 's_prior': s_prior, 's_post': s_post, 'o': o_smpl, 'r': r_smpl,
-                'term': term_smpl}, new_cell_state
+        return {'s': s_post_smpl, 's_prior': s_prior, 's_post': s_post, 'o': o_smpl, 'r': r_smpl, 'term': term_smpl,
+                'h': new_cell_state}
 
     def predict_with_posterior(self,
                                s: torch.Tensor,
@@ -156,7 +156,7 @@ class RSSM(torch.nn.Module):
         r_dist, r_smpl = self._reward(x_det, s_prior_smpl)
         term_dist, term_smpl = self._terminal(x_det, s_prior_smpl)
 
-        return {'s': s_prior_smpl, 's_prior': s_prior, 'o': o_smpl, 'r': r_smpl, 'term': term_smpl}, new_cell_state
+        return {'s': s_prior_smpl, 's_prior': s_prior, 'o': o_smpl, 'r': r_smpl, 'term': term_smpl, 'h': new_cell_state}
 
     def _prior(self,
                x_det: torch.Tensor) -> torch.distributions.Normal:
