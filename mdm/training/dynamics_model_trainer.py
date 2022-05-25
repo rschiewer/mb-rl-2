@@ -20,7 +20,8 @@ class DynamicsModelTrainer(ABC):
                  n_warmup_steps: int,
                  eval_interval: int = None,
                  scheduler: object = None,
-                 logger: Logger = None):
+                 logger: Logger = None,
+                 **kwargs):
         self.model = model
         self.optimizer = optimizer
         self.get_batch_train = get_batch_train
@@ -33,7 +34,8 @@ class DynamicsModelTrainer(ABC):
     def train(self,
               n_train_steps: int,
               progress_bar: bool = False,
-              checkpoint_path: Union[str, Path] = None):
+              checkpoint_path: Union[str, Path] = None,
+              **kwargs):
         device = self.model.device
         step_iter = range(n_train_steps)
         last_eval_losses = {'N/A': torch.tensor(0, device=self.model.device)}
