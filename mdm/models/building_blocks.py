@@ -9,13 +9,13 @@ class AbstractActionModel(torch.nn.Module, DeviceMixin):
 
     def __init__(self,
                  d_action: int,
-                 n_abstract_steps: int,
+                 abstract_step_size: int,
                  d_abstract_action: int,
                  lws: tuple = (64, 64),
                  activation: str = 'relu'):
         super(AbstractActionModel, self).__init__()
 
-        lws = (d_action * n_abstract_steps, *lws, d_abstract_action)
+        lws = (d_action * abstract_step_size, *lws, d_abstract_action)
         self.flatten_layer = torch.nn.Flatten(start_dim=1)
         self.det_mdl = torch.nn.Sequential(*layers_with_activation(lws, activation))
 
