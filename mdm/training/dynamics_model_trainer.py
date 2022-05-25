@@ -17,7 +17,7 @@ class DynamicsModelTrainer(ABC):
                  optimizer: torch.optim.Optimizer,
                  get_batch_train: Callable[..., Tuple[np.array, np.array, np.array, np.array]],
                  get_batch_test: Callable[..., Tuple[np.array, np.array, np.array, np.array]],
-                 warmup_steps: int,
+                 n_warmup_steps: int,
                  eval_interval: int = None,
                  scheduler: object = None,
                  logger: Logger = None):
@@ -25,7 +25,7 @@ class DynamicsModelTrainer(ABC):
         self.optimizer = optimizer
         self.get_batch_train = get_batch_train
         self.get_batch_test = get_batch_test
-        self.warmup_steps = warmup_steps
+        self.n_warmup_steps = n_warmup_steps
         self.eval_interval = eval_interval
         self.scheduler = scheduler
         self.logger = logger
@@ -54,7 +54,7 @@ class DynamicsModelTrainer(ABC):
 
             #with profile(activities=[ProfilerActivity.CPU], record_shapes=True) as prof:
             #    with record_function("model_training"):
-            train_losses = self.model.train_step(s, a, r, term, self.optimizer, self.warmup_steps)
+            train_losses = self.model.train_step(s, a, r, term, self.optimizer, self.n_warmup_steps)
             #print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
 
             if progress_bar:
@@ -76,7 +76,7 @@ class DynamicsModelTrainer(ABC):
                 if not compatible:
                     raise ValueError(msg)
 
-                eval_losses = self.model.eval_step(s, a, r, term, self.warmup_steps)
+                eval_losses = self.model.eval_step(s, a, r, term, self.n_warmup_steps)
 
                 last_total_loss = last_eval_losses.get('total', np.inf)
                 if checkpoint_path and eval_losses['total'] < last_total_loss:
