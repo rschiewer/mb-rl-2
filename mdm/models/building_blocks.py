@@ -100,7 +100,7 @@ class RSSM(torch.nn.Module):
                 o_params = self.o_dist(x_in)
                 mu, sigma = torch.tensor_split(o_params, 2, dim=-1)
                 sigma = torch.abs(sigma) + self.epsilon
-                o_dist = torch.nn.distributions.Normal(loc=mu, scale=sigma)
+                o_dist = torch.distributions.Normal(loc=mu, scale=sigma)
                 o_smpl = o_dist.rsample()
                 return o_dist, o_smpl
         self._observation = _obs_fn
@@ -163,7 +163,7 @@ class RSSM(torch.nn.Module):
         s_prior_params = self.s_prior(x_det)
         mu, sigma = torch.tensor_split(s_prior_params, 2, dim=-1)
         sigma = torch.abs(sigma) + self.epsilon
-        s_prior = torch.nn.distributions.Normal(loc=mu, scale=sigma)
+        s_prior = torch.distributions.Normal(loc=mu, scale=sigma)
         return s_prior
 
     def _posterior(self,
@@ -173,7 +173,7 @@ class RSSM(torch.nn.Module):
         s_post_params = self.s_post(x_in)
         mu, sigma = torch.tensor_split(s_post_params, 2, dim=-1)
         sigma = torch.abs(sigma) + self.epsilon
-        s_post = torch.nn.distributions.Normal(loc=mu, scale=sigma)
+        s_post = torch.distributions.Normal(loc=mu, scale=sigma)
         return s_post
 
 
@@ -184,7 +184,7 @@ class RSSM(torch.nn.Module):
         r_params = self.r_dist(x_in)
         mu, sigma = torch.tensor_split(r_params, 2, dim=-1)
         sigma = torch.abs(sigma) + self.epsilon
-        r_dist = torch.nn.distributions.Normal(loc=mu, scale=sigma)
+        r_dist = torch.distributions.Normal(loc=mu, scale=sigma)
         r_smpl = r_dist.rsample()
         return r_dist, r_smpl
 
@@ -194,6 +194,6 @@ class RSSM(torch.nn.Module):
         x_in = torch.concat([x_det, s_smpl], dim=-1)
         term_params = self.term_dist(x_in)
         term_params = torch.sigmoid(term_params)
-        term_dist = torch.nn.distributions.ContinuousBernoulli(probs=term_params)
+        term_dist = torch.distributions.ContinuousBernoulli(probs=term_params)
         term_smpl = term_dist.rsample()
         return term_dist, term_smpl
