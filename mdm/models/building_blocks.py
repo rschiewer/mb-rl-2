@@ -1,4 +1,4 @@
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Sequence
 
 import torch
 
@@ -43,11 +43,11 @@ class RSSM(torch.nn.Module):
                  n_hidden_layers: int = 1,
                  hidden_dropout: float = 0.1,
                  epsilon: float = 0.01,
-                 s_prior_lws: Tuple[int] = (32, 32),
-                 s_post_lws: Tuple[int] = (32, 32),
-                 o_lws: Tuple[int] = (32, 32),
-                 r_lws: Tuple[int] = (32, 32),
-                 term_lws: Tuple[int] = (32, 32),
+                 s_prior_lws: Sequence[int] = (32, 32),
+                 s_post_lws: Sequence[int] = (32, 32),
+                 o_lws: Sequence[int] = (32, 32),
+                 r_lws: Sequence[int] = (32, 32),
+                 term_lws: Sequence[int] = (32, 32),
                  activation: str = 'relu'):
         super().__init__()
 
