@@ -62,10 +62,10 @@ class RSSM(torch.nn.Module):
         self.epsilon = epsilon
 
         s_prior_lws = (d_hidden, *s_prior_lws, d_state * 2)
-        s_post_lws = (d_hidden, *s_post_lws, d_state * 2)
-        o_lws = (d_hidden, *o_lws, d_observation * 2)
-        r_lws = (d_hidden, *r_lws, d_reward * 2)
-        term_lws = (d_hidden, *term_lws, 1)
+        s_post_lws = (d_hidden + d_low_level_ctx, *s_post_lws, d_state * 2)
+        o_lws = (d_hidden + d_state, *o_lws, d_observation * 2)
+        r_lws = (d_hidden + d_state, *r_lws, d_reward * 2)
+        term_lws = (d_hidden + d_state, *term_lws, 1)
 
         self.det_core = torch.nn.LSTM(d_state + d_action + d_high_level_ctx, hidden_size=d_hidden,
                                       num_layers=n_hidden_layers, batch_first=True, dropout=hidden_dropout)
