@@ -2,7 +2,7 @@ from typing import Tuple, Optional
 
 import torch
 
-from mdm.utils.torch_tools import DeviceMixin, FeedforwardBlock, layers_with_activation, add_time_dim, remove_time_dim
+from mdm.utils.torch_tools import DeviceMixin, layers_with_activation, add_time_dim, remove_time_dim
 
 
 class AbstractActionModel(torch.nn.Module, DeviceMixin):
