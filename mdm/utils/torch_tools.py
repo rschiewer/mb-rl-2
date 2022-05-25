@@ -285,7 +285,7 @@ def reconstruction_loss(y_hat: torch.Tensor, y_true: torch.Tensor):
 
 def kl_loss_normal(priors: List[torch.distributions.Normal],
                    posteriors: List[torch.distributions.Normal],
-                   detach_posterior: bool = True):
+                   detach_posterior: bool = False):
     l = torch.zeros_like(priors[0].loc)
     for prior, posterior in zip(priors, posteriors):
         if detach_posterior:
@@ -296,7 +296,7 @@ def kl_loss_normal(priors: List[torch.distributions.Normal],
 
 def kl_loss_bernolli(priors: List[torch.distributions.ContinuousBernoulli],
                      posteriors: List[torch.distributions.ContinuousBernoulli],
-                     detach_posterior: bool = True):
+                     detach_posterior: bool = False):
     if priors[0].probs is None:
         l = torch.zeros_like(priors[0].logits)
     else:
