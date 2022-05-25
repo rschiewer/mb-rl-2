@@ -7,10 +7,7 @@ import torch
 from torch import device, dtype
 
 
-from mdm.utils.torch_tools import DeviceMixin
-
-
-class DynamicsModel(torch.nn.Module, DeviceMixin, ABC):
+class DynamicsModel(torch.nn.Module, ABC):
 
     def __init__(self):
         super(DynamicsModel, self).__init__()

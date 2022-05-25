@@ -107,7 +107,7 @@ class AbstractModel(torch.nn.Module, DeviceMixin):
                 'macro_term_dist': macro_term_dist}
 
 
-class MultiscaleDynamicsModel(DynamicsModel):
+class MultiscaleDynamicsModel(DynamicsModel, DeviceMixin):
 
     def __init__(self,
                  single_step_model: SingleStepModel,
