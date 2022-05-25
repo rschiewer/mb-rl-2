@@ -1,7 +1,7 @@
 from typing import Tuple, Union, Iterable, List, Sequence
 from enum import Enum
 from collections import namedtuple
-from functools import reduce
+from functools import reduce, wraps
 from math import ceil
 
 import torch
@@ -34,6 +34,48 @@ class DeviceMixin:
             raise RuntimeError(f'Model {self} has parameters on multiple devices')
 
         return first_param.device
+
+
+class FuzzyDeviceMixin:
+
+    def __new__(cls, *args, **kwargs):
+        if not issubclass(cls, torch.nn.Module):
+            raise RuntimeError(f'The class {cls} can\'t use this mixin, it\'s designed for subclasses of '
+                               f'torch.nn.Module only!')
+        instance = super(FuzzyDeviceMixin, cls).__new__(cls)
+        instance._device = torch.device('cpu')
+        return instance
+
+    def _check_device(self, *args, **kwargs):
+        if 'device' in kwargs:
+            self._device = torch.device(kwargs['device'])
+        else:
+            for arg in args:
+                if type(arg) is torch.device:
+                    self._device = arg
+                    break
+                elif type(arg) is str:
+                    try:
+                        self._device = torch.device(arg)
+                    except RuntimeError:
+                            pass  # bad style but works here
+
+    def to(self, *args, **kwargs):
+        self._check_device(*args, **kwargs)
+        return super().to(*args, **kwargs)
+
+    def to_empty(self, *args, device: Union[str, torch.device]):
+        self._check_device(device=device)
+        return super.to_empty(*args, device=device)
+
+    def cpu(self):
+        self._device = torch.device('cpu')
+        return super().cpu()
+
+    def cuda(self, device: int = None):
+        device = device if device else 0
+        self._device = torch.device(f'cuda:{device}')
+        return super().cuda(device)
 
 
 class RecurrentBlock(torch.nn.Module, DeviceMixin):
