@@ -109,7 +109,7 @@ class RSSM(torch.nn.Module):
         s = torch.zeros(d_batch, self.d_state, device=device)
         o = torch.zeros(d_batch, self.d_observation, device=device)
         a = torch.zeros(d_batch, self.d_action, device=device)
-        h = torch.zeros(self.n_hidden_layers, d_batch, self.d_hidden)
+        h = torch.zeros(self.n_hidden_layers, d_batch, self.d_hidden, device=device)
         return {'s': s, 'o': o, 'a': a, 'h': (h, h)}
 
     def forward(self,
