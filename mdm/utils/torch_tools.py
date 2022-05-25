@@ -276,3 +276,61 @@ def extract_sub_distribution(d: torch.distributions.Distribution, *idx: int):
         return torch.distributions.Normal(loc=d.loc[idx], scale=d.scale[idx])
     else:
         raise ValueError(f'Distribution class not supported: {type(d)}')
+
+
+def reconstruction_loss(y_hat: torch.Tensor, y_true: torch.Tensor):
+    l = torch.mean((y_hat - y_true) ** 2)
+    return l
+
+
+def kl_loss_normal(priors: List[torch.distributions.Normal],
+                   posteriors: List[torch.distributions.Normal],
+                   detach_posterior: bool = True):
+    l = torch.zeros_like(priors[0].loc)
+    for prior, posterior in zip(priors, posteriors):
+        if detach_posterior:
+            posterior = torch.distributions.Normal(loc=posterior.loc.detach(), scale=posterior.scale.detach())
+        l += torch.distributions.kl.kl_divergence(posterior, prior)
+    return torch.mean(l)
+
+
+def kl_loss_bernolli(priors: List[torch.distributions.ContinuousBernoulli],
+                     posteriors: List[torch.distributions.ContinuousBernoulli],
+                     detach_posterior: bool = True):
+    if priors[0].probs is None:
+        l = torch.zeros_like(priors[0].logits)
+    else:
+        l = torch.zeros_like(priors[0].probs)
+
+    for prior, posterior in zip(priors, posteriors):
+        if detach_posterior:
+            if posterior.probs is None:
+                posterior = torch.distributions.ContinuousBernoulli(logits=posterior.logits)
+            else:
+                posterior = torch.distributions.ContinuousBernoulli(probs=posterior.probs)
+        l += torch.distributions.kl.kl_divergence(posterior, prior)
+    return torch.mean(l)
+
+
+def kl_regularizer_normal(priors: List[torch.distributions.Normal]):
+    uniform_gauss = torch.distributions.Normal(loc=torch.zeros_like(priors[0].loc, requires_grad=False),
+                                               scale=torch.ones_like(priors[0].scale, requires_grad=False))
+    l = torch.zeros_like(priors[0].loc)
+    for prior in priors:
+        l += torch.distributions.kl.kl_divergence(prior, uniform_gauss)
+    return torch.mean(l)
+
+
+def kl_regularizer_bernoulli(priors: List[torch.distributions.ContinuousBernoulli]):
+    if priors[0].probs is None:
+        uniform_bernoulli = torch.distributions.ContinuousBernoulli(logits=torch.ones_like(priors[0].logits))
+        l = torch.zeros_like(priors[0].logits)
+    else:
+        probs = torch.ones_like(priors[0].probs)
+        probs /= probs.sum()
+        uniform_bernoulli = torch.distributions.ContinuousBernoulli(probs=probs)
+        l = torch.zeros_like(priors[0].probs)
+
+    for prior in priors:
+        l += torch.distributions.kl.kl_divergence(prior, uniform_bernoulli)
+    return torch.mean(l)
