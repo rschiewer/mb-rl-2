@@ -36,7 +36,7 @@ class DeviceMixin:
         return first_param.device
 
 
-class FuzzyDeviceMixin:
+class FuzzyDeviceMixin(torch.nn.Module):
 
     def __new__(cls, *args, **kwargs):
         if not issubclass(cls, torch.nn.Module):
