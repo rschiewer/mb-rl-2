@@ -46,6 +46,10 @@ class FuzzyDeviceMixin(torch.nn.Module):
         instance._device = torch.device('cpu')
         return instance
 
+    @property
+    def device(self):
+        return self._device
+
     def _check_device(self, *args, **kwargs):
         if 'device' in kwargs:
             self._device = torch.device(kwargs['device'])
