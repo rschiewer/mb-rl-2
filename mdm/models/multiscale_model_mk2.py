@@ -33,14 +33,18 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         self.beta_kl_abstr = beta_kl_abstract
         self.beta_reg_abstr = beta_reg_abstract
 
-
     def forward(self,
                 start_observations: torch.Tensor,
                 actions: torch.Tensor):
         d_batch, n_steps = actions.shape[:2]
         n_s_start = start_observations.shape[1]
         device = self._device
-        actions_binned = bin_every_k_steps(actions, self.macro_step_size, device)
+
+        if n_steps % self.abstract_step_size != 0:
+            raise ValueError(f'Provided trajectories\' length must be divisible by abstract step size but is not, '
+                             f'length is {n_steps} and abstract step size is {self.abstract_step_size}')
+
+        actions_binned = bin_every_k_steps(actions, self.abstract_step_size, device, padding_val=0)
 
         mem = { 'o': [], 'r': [], 'term': [], 'prim_s_prior': [], 'prim_s_post': [], 'abstr_s_prior': [],
                 'abstr_s_post': [], 'abstr_r': [], 'abstr_term': []}
@@ -51,7 +55,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             if t % self.abstract_step_size == 0 and t > 0:
                 # prepare input for next abstract state prediction
                 h_flat = MultiscaleDynamicsModelMK2._filter_h(prim_current['h'])
-                abstr_current['a'] = self.macro_action_model(actions_binned[:, t // self.abstract_step_size - 1])
+                abstr_current['a'] = self.abstract_action_model(actions_binned[:, t // self.abstract_step_size - 1])
 
                 # do prediction
                 pred = self.abstract_model(s=abstr_current['s'], a=abstr_current['a'], ctx_low_level=h_flat,
@@ -70,19 +74,48 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                 prim_current['o'] = start_observations[:, t]
 
             pred = self.primitive_model(s=prim_current['s'], a=actions[:, t], ctx_low_level=prim_current['o'],
-                                        cell_state=prim_current['h'])
+                                        ctx_high_level=abstr_current['s'], cell_state=prim_current['h'])
             # update primitive state
             prim_current['s'] = pred['s']
             prim_current['h'] = pred['h']
 
             # store things
-            mem['prim_s_prior'] = pred['s_prior']
-            mem['prim_s_post'] = pred['s_post']
-            mem['o'] = pred['o']
-            mem['r'] = pred['r']
-            mem['term'] = pred['term']
+            mem['prim_s_prior'].append(pred['s_prior'])
+            mem['prim_s_post'].append(pred['s_post'])
+            mem['o'].append(pred['o'])
+            mem['r'].append(pred['r'])
+            mem['term'].append(pred['term'])
+
+        # TODO: make sure the abstract model does a final prediction if the trajectory has ended
+        # TODO: before the next invocation of the abstract model so that it can learn to predict the
+        # TODO: final parts of trajectories as well
+        # TODO: this could be done with some kind of padding
+
+        mem = {k: torch.stack(v, dim=1) if isinstance(v[0], torch.Tensor) else v for k, v in mem.items()}
 
         return mem
+
+    def _invoke_abstract_model(self,
+                               actions_binned: torch.Tensor,
+                               prim_current: dict,
+                               abstr_current: dict,
+                               mem: dict):
+        # prepare input for next abstract state prediction
+        h_flat = MultiscaleDynamicsModelMK2._filter_h(prim_current['h'])
+        abstr_current['a'] = self.abstract_action_model(actions_binned[:, t // self.abstract_step_size - 1])
+
+        # do prediction
+        pred = self.abstract_model(s=abstr_current['s'], a=abstr_current['a'], ctx_low_level=h_flat,
+                                   cell_state=abstr_current['h'])
+        # update abstract state
+        abstr_current['s'] = pred['s']
+        abstr_current['h'] = pred['h']
+
+        # store things
+        mem['abstr_s_prior'].append(pred['s_prior'])
+        mem['abstr_s_post'].append(pred['s_post'])
+        mem['abstr_r'].append(pred['r'])
+        mem['abstr_term'].append(pred['term'])
 
     def train_step(self,
                    o_ground_truth: torch.Tensor,
@@ -109,7 +142,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         abstr_r_target = bin_every_k_steps(r_ground_truth, self.abstract_step_size, device=device).sum(dim=2)
         abstr_term_target = bin_every_k_steps(term_ground_truth, self.abstract_step_size, device=device).sum(dim=2)
 
-        start_observations = o_ground_truth[:, n_warmup]
+        start_observations = o_ground_truth[:, :n_warmup]
         pred = self(start_observations, a_ground_truth)
 
         # primitive model loss
@@ -131,6 +164,12 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         return {'total': total, 'prim_o': prim_rec_o, 'prim_r': prim_rec_r, 'prim_term': prim_rec_term,
                 'prim_kl_s': prim_kl_s, 'prim_kl_s_reg': prim_kl_s_reg, 'abstr_r': abstr_rec_r,
                 'abstr_term': abstr_rec_term, 'abstr_kl_s': abstr_kl_s, 'abstr_kl_s_reg': abstr_kl_s_reg}
+
+    def input_compatible(self,
+                         o_ground_truth: torch.Tensor,
+                         a_ground_truth: torch.Tensor,
+                         r_ground_truth: torch.Tensor) -> Tuple[bool, str]:
+        return True, ''
 
     @staticmethod
     def _filter_h(h: Tuple[torch.Tensor, torch.Tensor]):
