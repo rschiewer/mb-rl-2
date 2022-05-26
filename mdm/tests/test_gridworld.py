@@ -13,7 +13,7 @@ from mdm.utils.utils import here
 class GridworldTest(unittest.TestCase):
 
     def setUp(self) -> None:
-        self.world = Gridworld(5, 5, 100, 1.0, 0.0, 0.99)
+        self.world = Gridworld(5, 5, 100, 1.0, -0.01, 0.99)
         self.agent_start_pos = (2, 2)
         self.reward_pos = (0, 4)
         self.wall_pos = (3, 1)
@@ -114,7 +114,7 @@ class GridworldTest(unittest.TestCase):
         world = self.world
 
         actions = [0, 0, 0, 1, 1]
-        rewards = [0, 0, 0, 0, 1.0]
+        rewards = [world.step_reward] * 4 + [world.reward + world.step_reward]
         dones = [False, False, False, False, True]
 
         s = world.observation_space.sample()
@@ -225,6 +225,15 @@ class GridworldTest(unittest.TestCase):
 
         # TODO: further testing
 
+    def test_reward(self):
+        world = self.world
+
+        world.reset()
+        rewards = []
+        for t in range(world.time_limit):
+            o, r, done, info = world.step(0)
+            rewards.append(r)
+            self.assertEqual(r, -0.01)
 
     @unittest.skip
     def test_render(self):
