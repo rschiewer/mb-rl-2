@@ -1,0 +1,56 @@
+---
+env: "../../mdm/gridworld/8x8_v0.mapdata"
+neptune_cfg: "../neptune_settings.yaml"
+train_samples: "gridworld_train.samples"
+test_samples: "gridworld_test.samples"
+checkpoint_path: 'checkpoints'
+final_model_path: 'model.ptmdl'
+
+# model in general
+mdm:
+  abstract_step_size: 3
+  beta_kl_primitive: 0.01
+  beta_reg_primitive: 0.001
+  beta_kl_abstract: 0.01
+  beta_reg_abstract: 0.001
+
+prim_mdl:
+  d_state: 4
+  d_hidden: 64
+  n_hidden_layers: 2
+  hidden_dropout: 0.1
+  epsilon: 0.01
+  s_prior_lws: [64, 32]
+  s_post_lws: [64, 32]
+  o_lws: [64, 32]
+  r_lws: [64, 32]
+  term_lws: [64, 32]
+  activation: "gelu"
+
+abstr_mdl:
+  d_state: 4
+  d_action: 2
+  d_reward: 1
+  d_hidden: 64
+  n_hidden_layers: 2
+  hidden_dropout: 0.1
+  epsilon: 0.01
+  s_prior_lws: [64, 32]
+  s_post_lws: [64, 32]
+  r_lws: [64, 32]
+  term_lws: [64, 32]
+  activation: "gelu"
+
+abstr_act_mdl:
+  lws: [64, 32]
+  activation: "gelu"
+
+optim:
+  lr: 0.003
+
+trainer:
+  n_warmup_steps: 1
+  n_train_steps: 6000
+  eval_interval: 100
+  d_batch: 1024
+  pad_last_terminal_flag: False
