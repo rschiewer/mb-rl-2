@@ -122,23 +122,25 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                   n_warmup: int = 1) -> Dict[str, torch.Tensor]:
         device = self._device
 
+        # sum makes sense for rewards, use padding=0 to not affect sum for last element
         abstr_r_target = bin_every_k_steps(r_ground_truth, self.abstract_step_size, device=device,
                                            padding_val=0).sum(dim=2)
+        # terminal flag can only be 0 or 1, so mean value with automatic padding should be used
         abstr_term_target = bin_every_k_steps(term_ground_truth, self.abstract_step_size, device=device).mean(dim=2)
 
         start_observations = o_ground_truth[:, :n_warmup]
         pred = self(start_observations, a_ground_truth)
 
         # primitive model loss
-        prim_rec_o = reconstruction_loss(pred['o'], o_ground_truth)
-        prim_rec_r = reconstruction_loss(pred['r'], r_ground_truth)
-        prim_rec_term = reconstruction_loss(pred['term'], term_ground_truth)
+        prim_rec_o = torch.nn.functional.mse_loss(pred['o'], o_ground_truth)
+        prim_rec_r = torch.nn.functional.mse_loss(pred['r'], r_ground_truth)
+        prim_rec_term = torch.nn.functional.binary_cross_entropy(pred['term'], term_ground_truth)
         prim_kl_s = self.beta_kl_prim * kl_loss_normal(pred['prim_s_prior'], pred['prim_s_post'])
         prim_kl_s_reg = self.beta_reg_prim * kl_regularizer_normal(pred['prim_s_post'])
 
         # abstract model loss
-        abstr_rec_r = reconstruction_loss(pred['abstr_r'], abstr_r_target)
-        abstr_rec_term = reconstruction_loss(pred['abstr_term'], abstr_term_target)
+        abstr_rec_r = torch.nn.functional.mse_loss(pred['abstr_r'], abstr_r_target)
+        abstr_rec_term = torch.nn.functional.binary_cross_entropy(pred['abstr_term'], abstr_term_target)
         abstr_kl_s = self.beta_kl_abstr * kl_loss_normal(pred['abstr_s_prior'], pred['abstr_s_post'])
         abstr_kl_s_reg = self.beta_reg_abstr * kl_regularizer_normal(pred['abstr_s_post'])
 
