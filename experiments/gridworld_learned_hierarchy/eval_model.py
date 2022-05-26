@@ -90,7 +90,7 @@ if __name__ == '__main__':
         n_steps.append(i_step)
         mem.push(s_mem, a_mem, r_mem, term_mem)
 
-        n_macro_steps = np.ceil(i_step  / mdl.macro_step_size).astype(np.int)
+        n_macro_steps = np.ceil(i_step  / mdl.macro_step_size).astype(np.int32)
         best_macro_terms = plan_abstr['macro_terms']
         #plot_mats = infer_position(env, best_macro_ss[:n_macro_steps], best_macro_terms[:n_macro_steps], macro_ss_list, loc_list, act_seq_list)
         #ani = gen_video(plot_mats, 1000, 2000)

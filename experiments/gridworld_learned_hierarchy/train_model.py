@@ -38,7 +38,7 @@ if __name__ == '__main__':
     a_mdl_term_prior_lws = (128, 64)
     a_mdl_term_post_lws = (128, 64)
 
-    trainer_d_batch = 2000
+    trainer_d_batch = 1024
     trainer_n_warmup_steps = 1
     trainer_n_train_steps = 6000
     trainer_n_eval_interval = 100
