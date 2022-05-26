@@ -205,9 +205,11 @@ def bin_every_k_steps(data: torch.Tensor,
     d_padding = n_macro_steps * k - d_time
 
     if padding_val is None:
-        padding_val = torch.mean(data[:, -d_padding:, :])  # TODO: check this
-
-    padding = torch.full((d_batch, d_padding, d_data), fill_value=padding_val, dtype=data.dtype, device=device)
+        last_valid = (n_macro_steps - 1) * k
+        padding_val = torch.mean(data[:, last_valid:], dim=1, keepdim=True)
+        padding = torch.repeat_interleave(padding_val, d_padding, dim=1)
+    else:
+        padding = torch.full((d_batch, d_padding, d_data), fill_value=padding_val, dtype=data.dtype, device=device)
     data_padded = torch.concat([data, padding], dim=1)
     binned = data_padded.reshape(d_batch, (d_time + d_padding) // k, k, d_data)
 
