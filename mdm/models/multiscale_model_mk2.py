@@ -122,8 +122,9 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                   n_warmup: int = 1) -> Dict[str, torch.Tensor]:
         device = self._device
 
-        abstr_r_target = bin_every_k_steps(r_ground_truth, self.abstract_step_size, device=device).sum(dim=2)
-        abstr_term_target = bin_every_k_steps(term_ground_truth, self.abstract_step_size, device=device).sum(dim=2)
+        abstr_r_target = bin_every_k_steps(r_ground_truth, self.abstract_step_size, device=device,
+                                           padding_val=0).sum(dim=2)
+        abstr_term_target = bin_every_k_steps(term_ground_truth, self.abstract_step_size, device=device).mean(dim=2)
 
         start_observations = o_ground_truth[:, :n_warmup]
         pred = self(start_observations, a_ground_truth)
@@ -152,6 +153,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                          o_ground_truth: torch.Tensor,
                          a_ground_truth: torch.Tensor,
                          r_ground_truth: torch.Tensor) -> Tuple[bool, str]:
+        # laziness ahead
         return True, ''
 
     @staticmethod
