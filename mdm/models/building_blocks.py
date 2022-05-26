@@ -137,45 +137,22 @@ class RSSM(torch.nn.Module):
                 ctx_low_level: Optional[torch.Tensor] = None,
                 ctx_high_level: Optional[torch.Tensor] = None,
                 cell_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None):
+        x_det, new_cell_state = self._det_core_fwd(s, a, ctx_high_level, cell_state)
+
+        s_prior = self._prior(x_det)
         if ctx_low_level is None:
-            return self.predict_with_prior(s, a, ctx_high_level, cell_state)
+            s_post = None
+            s_smpl = s_prior.rsample()
         else:
-            return self.predict_with_posterior(s, a, ctx_low_level, ctx_high_level, cell_state)
+            s_post = self._posterior(x_det, ctx_low_level)
+            s_smpl = s_post.rsample()
 
-    def predict_with_posterior(self,
-                               s: torch.Tensor,
-                               a: torch.Tensor,
-                               ctx_low_level: torch.Tensor,
-                               ctx_high_level: Optional[torch.Tensor] = None,
-                               cell_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None):
-        x_det, new_cell_state = self._det_core_fwd(s, a, ctx_high_level, cell_state)
+        o_dist, o_smpl = self._observation(x_det, s_smpl)
+        r_dist, r_smpl = self._reward(x_det, s_smpl)
+        term_dist, term_smpl = self._terminal(x_det, s_smpl)
 
-        s_prior = self._prior(x_det)
-        s_post = self._posterior(x_det, ctx_low_level)
-        s_post_smpl = s_post.rsample()
-
-        o_dist, o_smpl = self._observation(x_det, s_post_smpl)
-        r_dist, r_smpl = self._reward(x_det, s_post_smpl)
-        term_dist, term_smpl = self._terminal(x_det, s_post_smpl)
-
-        return {'s': s_post_smpl, 's_prior': s_prior, 's_post': s_post, 'o': o_smpl, 'r': r_smpl, 'term': term_smpl,
+        return {'s': s_smpl, 's_prior': s_prior, 's_post': s_post, 'o': o_smpl, 'r': r_smpl, 'term': term_smpl,
                 'h': new_cell_state}
-
-    def predict_with_prior(self,
-                           s: torch.Tensor,
-                           a: torch.Tensor,
-                           ctx_high_level: Optional[torch.Tensor] = None,
-                           cell_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None):
-        x_det, new_cell_state = self._det_core_fwd(s, a, ctx_high_level, cell_state)
-
-        s_prior = self._prior(x_det)
-        s_prior_smpl = s_prior.rsample()
-
-        o_dist, o_smpl = self._observation(x_det, s_prior_smpl)
-        r_dist, r_smpl = self._reward(x_det, s_prior_smpl)
-        term_dist, term_smpl = self._terminal(x_det, s_prior_smpl)
-
-        return {'s': s_prior_smpl, 's_prior': s_prior, 'o': o_smpl, 'r': r_smpl, 'term': term_smpl, 'h': new_cell_state}
 
     def _prior(self,
                x_det: torch.Tensor) -> torch.distributions.Normal:
