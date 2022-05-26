@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Dict, Optional
 
 from mdm.models.building_blocks import AbstractActionModel, RSSM
 from mdm.utils.torch_tools import *
@@ -59,18 +59,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             if t < n_s_start:
                 prim_current['o'] = start_observations[:, t]
 
-            pred = self.primitive_model(s=prim_current['s'], a=actions[:, t], ctx_low_level=prim_current['o'],
-                                        ctx_high_level=abstr_current['s'], cell_state=prim_current['h'])
-            # update primitive state
-            prim_current['s'] = pred['s']
-            prim_current['h'] = pred['h']
-
-            # store things
-            mem['prim_s_prior'].append(pred['s_prior'])
-            mem['prim_s_post'].append(pred['s_post'])
-            mem['o'].append(pred['o'])
-            mem['r'].append(pred['r'])
-            mem['term'].append(pred['term'])
+            self._invoke_primitive_model(actions[:, t], prim_current, abstr_current, mem)
 
         # do a final prediction on abstract level
         abstr_current['a'] = self.abstract_action_model(actions_binned[:, -1])
@@ -79,6 +68,25 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         mem = {k: torch.stack(v, dim=1) if isinstance(v[0], torch.Tensor) else v for k, v in mem.items()}
 
         return mem
+
+    def _invoke_primitive_model(self,
+                                action: torch.Tensor,
+                                prim_current: dict,
+                                abstr_current: dict,
+                                mem: dict):
+        # do prediction
+        pred = self.primitive_model(s=prim_current['s'], a=action, ctx_low_level=prim_current['o'],
+                                    ctx_high_level=abstr_current['s'], cell_state=prim_current['h'])
+        # update primitive state
+        prim_current['s'] = pred['s']
+        prim_current['h'] = pred['h']
+
+        # store things
+        mem['prim_s_prior'].append(pred['s_prior'])
+        mem['prim_s_post'].append(pred['s_post'])
+        mem['o'].append(pred['o'])
+        mem['r'].append(pred['r'])
+        mem['term'].append(pred['term'])
 
     def _invoke_abstract_model(self,
                                prim_current: dict,
@@ -164,3 +172,12 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         h = torch.transpose(h, 0, 1)  # bring batch dimension to front
         h = torch.flatten(h, start_dim=1)  # fold h/c/layer dimension into d_hidden
         return h
+
+    def rollout_primitive(self,
+                          start_states: torch.Tensor,
+                          actions: torch.Tensor,
+                          ctx_high_level: Optional[torch.Tensor] = None):
+        d_batch, n_steps = actions.shape[:2]
+        n_start_states = start_states.shape[1]
+        pred = self.primitive_model.predict_with_prior(s=start_states, a=actions, ctx_high_level=ctx_high_level)
+        return pred
