@@ -56,10 +56,11 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                 abstr_current['a'] = self.abstract_action_model(actions_binned[:, t // self.abstract_step_size - 1])
                 self._invoke_abstract_model(prim_current, abstr_current, mem)
 
+            prim_current['a'] = actions[:, t]
             if t < n_s_start:
                 prim_current['o'] = start_observations[:, t]
 
-            self._invoke_primitive_model(actions[:, t], prim_current, abstr_current, mem)
+            self._invoke_primitive_model(prim_current, abstr_current, mem)
 
         # do a final prediction on abstract level
         abstr_current['a'] = self.abstract_action_model(actions_binned[:, -1])
@@ -70,12 +71,11 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         return mem
 
     def _invoke_primitive_model(self,
-                                action: torch.Tensor,
                                 prim_current: dict,
                                 abstr_current: dict,
                                 mem: dict):
         # do prediction
-        pred = self.primitive_model(s=prim_current['s'], a=action, ctx_low_level=prim_current['o'],
+        pred = self.primitive_model(s=prim_current['s'], a=prim_current['a'], ctx_low_level=prim_current['o'],
                                     ctx_high_level=abstr_current['s'], cell_state=prim_current['h'])
         # update primitive state
         prim_current['s'] = pred['s']
@@ -174,10 +174,25 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         return h
 
     def rollout_primitive(self,
-                          start_states: torch.Tensor,
+                          start_observations: torch.Tensor,
                           actions: torch.Tensor,
                           ctx_high_level: Optional[torch.Tensor] = None):
         d_batch, n_steps = actions.shape[:2]
-        n_start_states = start_states.shape[1]
-        pred = self.primitive_model.predict_with_prior(s=start_states, a=actions, ctx_high_level=ctx_high_level)
-        return pred
+        n_s_start = start_observations.shape[1]
+        device = self._device
+
+        mem = { 'o': [], 'r': [], 'term': [], 'prim_s_prior': [], 'prim_s_post': [], 'abstr_s_prior': [],
+                'abstr_s_post': [], 'abstr_r': [], 'abstr_term': []}
+        prim_current = self.primitive_model.gen_init_values(d_batch, device)
+        abstr_current = self.abstract_model.gen_init_values(d_batch, device)
+        abstr_current['s'] = ctx_high_level
+
+        for t in range(n_steps):
+            prim_current['a'] = actions[:, t]
+            if t < n_s_start:
+                prim_current['o'] = start_observations[:, t]
+            self._invoke_primitive_model(prim_current, abstr_current, mem)
+
+        mem = {k: torch.stack(v, dim=1) if isinstance(v[0], torch.Tensor) else v for k, v in mem.items()}
+
+        return mem

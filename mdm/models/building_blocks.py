@@ -76,7 +76,7 @@ class RSSM(torch.nn.Module):
         self.term_dist = torch.nn.Sequential(*layers_with_activation(term_lws, activation))
 
         if d_high_level_ctx == 0:
-            self._det_core_fwd = self._det_core_without_context
+            self._det_core_fwd = self._det_core_without_ctx
         else:
             self._det_core_fwd = self._det_core_with_ctx
 
@@ -85,11 +85,11 @@ class RSSM(torch.nn.Module):
         else:
             self._observation = self._nonzero_observation
 
-    def _det_core_without_context(self,
-                                  s: torch.Tensor,
-                                  a: torch.Tensor,
-                                  high_level_ctx: torch.Tensor,
-                                  cell_state: Tuple[torch.Tensor, torch.Tensor]):
+    def _det_core_without_ctx(self,
+                              s: torch.Tensor,
+                              a: torch.Tensor,
+                              high_level_ctx: torch.Tensor,
+                              cell_state: Tuple[torch.Tensor, torch.Tensor]):
         s, a = add_time_dim(a, s)
         x_det_, new_cell_state_ = self.det_core(torch.concat([s, a], dim=-1), cell_state)
         x_det_ = remove_time_dim(x_det_)
@@ -134,9 +134,20 @@ class RSSM(torch.nn.Module):
                 #o: torch.Tensor,  # those should be in ctx_low_level
                 #r: torch.Tensor,
                 #term: torch.Tensor,
-                ctx_low_level: torch.Tensor,
-                ctx_high_level: torch.Tensor = None,
+                ctx_low_level: Optional[torch.Tensor] = None,
+                ctx_high_level: Optional[torch.Tensor] = None,
                 cell_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None):
+        if ctx_low_level is None:
+            return self.predict_with_prior(s, a, ctx_high_level, cell_state)
+        else:
+            return self.predict_with_posterior(s, a, ctx_low_level, ctx_high_level, cell_state)
+
+    def predict_with_posterior(self,
+                               s: torch.Tensor,
+                               a: torch.Tensor,
+                               ctx_low_level: torch.Tensor,
+                               ctx_high_level: Optional[torch.Tensor] = None,
+                               cell_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None):
         x_det, new_cell_state = self._det_core_fwd(s, a, ctx_high_level, cell_state)
 
         s_prior = self._prior(x_det)
@@ -150,18 +161,10 @@ class RSSM(torch.nn.Module):
         return {'s': s_post_smpl, 's_prior': s_prior, 's_post': s_post, 'o': o_smpl, 'r': r_smpl, 'term': term_smpl,
                 'h': new_cell_state}
 
-    def predict_with_posterior(self,
-                               s: torch.Tensor,
-                               a: torch.Tensor,
-                               ctx_low_level: torch.Tensor,
-                               ctx_high_level: torch.Tensor = None,
-                               cell_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None):
-        return self(s, a, ctx_low_level, ctx_high_level, cell_state)
-
     def predict_with_prior(self,
                            s: torch.Tensor,
                            a: torch.Tensor,
-                           ctx_high_level: torch.Tensor,
+                           ctx_high_level: Optional[torch.Tensor] = None,
                            cell_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None):
         x_det, new_cell_state = self._det_core_fwd(s, a, ctx_high_level, cell_state)
 
