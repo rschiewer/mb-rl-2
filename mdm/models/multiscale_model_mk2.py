@@ -65,8 +65,9 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         abstr_current['a'] = self.abstract_action_model(actions_binned[:, -1])
         self._invoke_abstract_model(abstr_current, prim_current['h'], mem)
 
-        # TODO: add final prim_h and abstr_h here
         mem = self._pack_mem(mem)
+        mem['prim_h'] = prim_current['h']
+        mem['abstr_h'] = abstr_current['h']
 
         return mem
 
@@ -205,8 +206,9 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                 prim_current['o'] = start_observations[:, t]
             self._invoke_primitive_model(prim_current, ctx_high_level, mem)
 
-        # TODO: add final prim_h and abstr_h here
         mem = self._pack_mem(mem)
+        mem['prim_h'] = prim_current['h']
+        mem['abstr_h'] = None
 
         return mem
 
@@ -226,7 +228,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             abstr_current['a'] = abstr_actions[:, t]
             self._invoke_abstract_model(abstr_current, ctx_low_level[t], mem)
 
-        # TODO: add final prim_h and abstr_h here
         mem = self._pack_mem(mem)
+        mem['prim_h'] = None
+        mem['abstr_h'] = abstr_current['h']
 
         return mem
