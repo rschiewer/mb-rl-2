@@ -136,16 +136,17 @@ class RSSM(torch.nn.Module):
                 #term: torch.Tensor,
                 ctx_low_level: Optional[torch.Tensor] = None,
                 ctx_high_level: Optional[torch.Tensor] = None,
-                cell_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None):
+                cell_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+                use_posterior: bool = True):
         x_det, new_cell_state = self._det_core_fwd(s, a, ctx_high_level, cell_state)
 
         s_prior = self._prior(x_det)
-        if ctx_low_level is None:
-            s_post = None
-            s_smpl = s_prior.rsample()
-        else:
+        if use_posterior:
             s_post = self._posterior(x_det, ctx_low_level)
             s_smpl = s_post.rsample()
+        else:
+            s_post = None
+            s_smpl = s_prior.rsample()
 
         o_dist, o_smpl = self._observation(x_det, s_smpl)
         r_dist, r_smpl = self._reward(x_det, s_smpl)
