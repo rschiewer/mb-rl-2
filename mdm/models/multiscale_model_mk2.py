@@ -45,8 +45,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
         actions_binned = bin_every_k_steps(actions, self.abstract_step_size, self.device, padding_val=0)
 
-        mem = { 'o': [], 'r': [], 'term': [], 'prim_s_prior': [], 'prim_s_post': [], 'abstr_s_prior': [],
-                'abstr_s_post': [], 'abstr_r': [], 'abstr_term': []}
+        mem = self._gen_mem()
         prim_current = self.primitive_model.gen_init_values(d_batch, self.device)
         abstr_current = self.abstract_model.gen_init_values(d_batch, self.device)
 
@@ -88,6 +87,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         prim_current['h'] = pred['h']
 
         # store things
+        mem['prim_s'].append(pred['s'])
         mem['prim_s_prior'].append(pred['s_prior'])
         mem['prim_s_post'].append(pred['s_post'])
         mem['o'].append(pred['o'])
@@ -113,10 +113,16 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         abstr_current['h'] = pred['h']
 
         # store things
+        mem['abstr_s'].append(pred['s'])
         mem['abstr_s_prior'].append(pred['s_prior'])
         mem['abstr_s_post'].append(pred['s_post'])
         mem['abstr_r'].append(pred['r'])
         mem['abstr_term'].append(pred['term'])
+
+    def _gen_mem(self):
+        mem = { 'o': [], 'r': [], 'term': [], 'prim_s_prior': [], 'prim_s_post': [], 'prim_s': [], 'abstr_s_prior': [],
+                'abstr_s_post': [], 'abstr_s': [], 'abstr_r': [], 'abstr_term': []}
+        return mem
 
     def _pack_mem(self, mem):
         for k, v in mem.items():
@@ -193,16 +199,15 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                           actions: torch.Tensor,
                           ctx_high_level: Optional[torch.Tensor] = None):
         d_batch, n_steps = actions.shape[:2]
-        n_s_start = start_observations.shape[1]
+        n_warmup = start_observations.shape[1]
         device = self._device
 
-        mem = { 'o': [], 'r': [], 'term': [], 'prim_s_prior': [], 'prim_s_post': [], 'abstr_s_prior': [],
-                'abstr_s_post': [], 'abstr_r': [], 'abstr_term': []}
+        mem = self._gen_mem()
         prim_current = self.primitive_model.gen_init_values(d_batch, device)
 
         for t in range(n_steps):
             prim_current['a'] = actions[:, t]
-            if t < n_s_start:
+            if t < n_warmup:
                 prim_current['o'] = start_observations[:, t]
             self._invoke_primitive_model(prim_current, ctx_high_level, mem)
 
@@ -217,15 +222,16 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                          abstr_actions: torch.Tensor,
                          ctx_low_level: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None):
         d_batch, n_steps = abstr_actions.shape[:2]
+        n_warmup = abstr_start_states.shape[1]
         device = self._device
 
-        mem = { 'o': [], 'r': [], 'term': [], 'prim_s_prior': [], 'prim_s_post': [], 'abstr_s_prior': [],
-                'abstr_s_post': [], 'abstr_r': [], 'abstr_term': []}
+        mem = self._gen_mem()
         abstr_current = self.abstract_model.gen_init_values(d_batch, device)
-        abstr_current['s'] = abstr_start_states
 
         for t in range(n_steps):
             abstr_current['a'] = abstr_actions[:, t]
+            if t < n_warmup:
+                abstr_current['s'] = abstr_start_states[:, t]
             self._invoke_abstract_model(abstr_current, ctx_low_level[t], mem)
 
         mem = self._pack_mem(mem)
