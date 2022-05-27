@@ -89,21 +89,21 @@ class RSSM(torch.nn.Module):
                               s: torch.Tensor,
                               a: torch.Tensor,
                               high_level_ctx: torch.Tensor,
-                              cell_state: Tuple[torch.Tensor, torch.Tensor]):
+                              h: Tuple[torch.Tensor, torch.Tensor]):
         s, a = add_time_dim(a, s)
-        x_det_, new_cell_state_ = self.det_core(torch.concat([s, a], dim=-1), cell_state)
-        x_det_ = remove_time_dim(x_det_)
-        return x_det_, new_cell_state_
+        x_det, new_h = self.det_core(torch.concat([s, a], dim=-1), h)
+        x_det = remove_time_dim(x_det)
+        return x_det, new_h
 
     def _det_core_with_ctx(self,
                            s: torch.Tensor,
                            a: torch.Tensor,
                            high_level_ctx: torch.Tensor,
-                           cell_state: Tuple[torch.Tensor, torch.Tensor]):
+                           h: Tuple[torch.Tensor, torch.Tensor]):
         s, a, high_level_ctx = add_time_dim(a, s, high_level_ctx)
-        x_det_, new_cell_state_ = self.det_core(torch.concat([s, a, high_level_ctx], dim=-1), cell_state)
-        x_det_ = remove_time_dim(x_det_)
-        return x_det_, new_cell_state_
+        x_det, new_h = self.det_core(torch.concat([s, a, high_level_ctx], dim=-1), h)
+        x_det = remove_time_dim(x_det)
+        return x_det, new_h
 
     def _zero_observation(self,
                           x_det: torch.Tensor,
@@ -136,9 +136,9 @@ class RSSM(torch.nn.Module):
                 #term: torch.Tensor,
                 ctx_low_level: Optional[torch.Tensor] = None,
                 ctx_high_level: Optional[torch.Tensor] = None,
-                cell_state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+                h: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
                 use_posterior: bool = True):
-        x_det, new_cell_state = self._det_core_fwd(s, a, ctx_high_level, cell_state)
+        x_det, new_h = self._det_core_fwd(s, a, ctx_high_level, h)
 
         s_prior = self._prior(x_det)
         if use_posterior:
@@ -153,7 +153,7 @@ class RSSM(torch.nn.Module):
         term_dist, term_smpl = self._terminal(x_det, s_smpl)
 
         return {'s': s_smpl, 's_prior': s_prior, 's_post': s_post, 'o': o_smpl, 'r': r_smpl, 'term': term_smpl,
-                'h': new_cell_state}
+                'h': new_h}
 
     def _prior(self,
                x_det: torch.Tensor) -> torch.distributions.Normal:

@@ -65,7 +65,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         abstr_current['a'] = self.abstract_action_model(actions_binned[:, -1])
         self._invoke_abstract_model(abstr_current, prim_current['h'], mem)
 
-        mem = {k: torch.stack(v, dim=1) if isinstance(v[0], torch.Tensor) else v for k, v in mem.items()}
+        # TODO: add final prim_h and abstr_h here
+        mem = self._pack_mem(mem)
 
         return mem
 
@@ -80,7 +81,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
         # do prediction
         pred = self.primitive_model(s=prim_current['s'], a=prim_current['a'], ctx_low_level=prim_current['o'],
-                                    ctx_high_level=abstr_s, cell_state=prim_current['h'])
+                                    ctx_high_level=abstr_s, h=prim_current['h'])
         # update primitive state
         prim_current['s'] = pred['s']
         prim_current['h'] = pred['h']
@@ -105,7 +106,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
         # do prediction
         pred = self.abstract_model(s=abstr_current['s'], a=abstr_current['a'], ctx_low_level=h_primitive,
-                                   cell_state=abstr_current['h'], use_posterior=use_posterior)
+                                   h=abstr_current['h'], use_posterior=use_posterior)
         # update abstract state
         abstr_current['s'] = pred['s']
         abstr_current['h'] = pred['h']
@@ -115,6 +116,12 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         mem['abstr_s_post'].append(pred['s_post'])
         mem['abstr_r'].append(pred['r'])
         mem['abstr_term'].append(pred['term'])
+
+    def _pack_mem(self, mem):
+        for k, v in mem.items():
+            if isinstance(v, List) and len(v) > 0 and isinstance(v[0], torch.Tensor):
+                mem[k] = torch.stack(mem[k], dim=1)
+        return mem
 
     def train_step(self,
                    o_ground_truth: torch.Tensor,
@@ -198,7 +205,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                 prim_current['o'] = start_observations[:, t]
             self._invoke_primitive_model(prim_current, ctx_high_level, mem)
 
-        mem = {k: torch.stack(v, dim=1) if isinstance(v[0], torch.Tensor) else v for k, v in mem.items()}
+        # TODO: add final prim_h and abstr_h here
+        mem = self._pack_mem(mem)
 
         return mem
 
@@ -218,6 +226,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             abstr_current['a'] = abstr_actions[:, t]
             self._invoke_abstract_model(abstr_current, ctx_low_level[t], mem)
 
-        mem = {k: torch.stack(v, dim=1) if isinstance(v[0], torch.Tensor) else v for k, v in mem.items()}
+        # TODO: add final prim_h and abstr_h here
+        mem = self._pack_mem(mem)
 
         return mem
