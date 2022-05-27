@@ -228,6 +228,9 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         mem = self._gen_mem()
         abstr_current = self.abstract_model.gen_init_values(d_batch, device)
 
+        if ctx_low_level is None:
+            ctx_low_level = [None] * n_steps
+
         for t in range(n_steps):
             abstr_current['a'] = abstr_actions[:, t]
             if t < n_warmup:
