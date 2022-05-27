@@ -97,13 +97,17 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
     def _invoke_abstract_model(self,
                                abstr_current: dict,
-                               h_flat: Union[torch.Tensor, None],  # this is low level context
+                               h_primitive: Union[Tuple[torch.Tensor, torch.Tensor], None],  # this is low level context
                                mem: dict):
         # checks
-        use_posterior = not h_flat is None
+        if h_primitive is None:
+            use_posterior = False
+        else:
+            use_posterior = True
+            h_primitive = self._filter_h(h_primitive)
 
         # do prediction
-        pred = self.abstract_model(s=abstr_current['s'], a=abstr_current['a'], ctx_low_level=h_flat,
+        pred = self.abstract_model(s=abstr_current['s'], a=abstr_current['a'], ctx_low_level=h_primitive,
                                    cell_state=abstr_current['h'], use_posterior=use_posterior)
         # update abstract state
         abstr_current['s'] = pred['s']
