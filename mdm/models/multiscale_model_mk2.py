@@ -54,8 +54,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         for t in range(n_steps):
             if t % self.abstract_step_size == 0 and t > 0:
                 abstr_current['a'] = self.abstract_action_model(actions_binned[:, t // self.abstract_step_size - 1])
-                h_flat = self._filter_h(prim_current['h'])
-                self._invoke_abstract_model(abstr_current, h_flat, mem)
+                self._invoke_abstract_model(abstr_current, prim_current['h'], mem)
 
             prim_current['a'] = actions[:, t]
             if t < n_s_start:
@@ -65,8 +64,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
         # do a final prediction on abstract level
         abstr_current['a'] = self.abstract_action_model(actions_binned[:, -1])
-        h_flat = self._filter_h(prim_current['h'])
-        self._invoke_abstract_model(abstr_current, h_flat, mem)
+        self._invoke_abstract_model(abstr_current, prim_current['h'], mem)
 
         mem = {k: torch.stack(v, dim=1) if isinstance(v[0], torch.Tensor) else v for k, v in mem.items()}
 
@@ -194,8 +192,6 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         mem = { 'o': [], 'r': [], 'term': [], 'prim_s_prior': [], 'prim_s_post': [], 'abstr_s_prior': [],
                 'abstr_s_post': [], 'abstr_r': [], 'abstr_term': []}
         prim_current = self.primitive_model.gen_init_values(d_batch, device)
-        if ctx_high_level is None:
-            ctx_high_level = torch.zeros(d_batch, self.d_abstract_state)
 
         for t in range(n_steps):
             prim_current['a'] = actions[:, t]
@@ -210,7 +206,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
     def rollout_abstract(self,
                          abstr_start_states: torch.Tensor,
                          abstr_actions: torch.Tensor,
-                         ctx_low_level: Optional[Tuple[torch.Tensor, torch.Tensor]] = None):
+                         ctx_low_level: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None):
         d_batch, n_steps = abstr_actions.shape[:2]
         device = self._device
 
@@ -221,7 +217,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
         for t in range(n_steps):
             abstr_current['a'] = abstr_actions[:, t]
-            self._invoke_abstract_model(abstr_current, None, mem)
+            self._invoke_abstract_model(abstr_current, ctx_low_level[t], mem)
 
         mem = {k: torch.stack(v, dim=1) if isinstance(v[0], torch.Tensor) else v for k, v in mem.items()}
 
