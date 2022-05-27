@@ -38,18 +38,17 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                 actions: torch.Tensor):
         d_batch, n_steps = actions.shape[:2]
         n_s_start = start_observations.shape[1]
-        device = self._device
 
         #if n_steps % self.abstract_step_size != 0:
         #    raise ValueError(f'Provided trajectories\' length must be divisible by abstract step size but is not, '
         #                     f'length is {n_steps} and abstract step size is {self.abstract_step_size}')
 
-        actions_binned = bin_every_k_steps(actions, self.abstract_step_size, device, padding_val=0)
+        actions_binned = bin_every_k_steps(actions, self.abstract_step_size, self.device, padding_val=0)
 
         mem = { 'o': [], 'r': [], 'term': [], 'prim_s_prior': [], 'prim_s_post': [], 'abstr_s_prior': [],
                 'abstr_s_post': [], 'abstr_r': [], 'abstr_term': []}
-        prim_current = self.primitive_model.gen_init_values(d_batch, device)
-        abstr_current = self.abstract_model.gen_init_values(d_batch, device)
+        prim_current = self.primitive_model.gen_init_values(d_batch, self.device)
+        abstr_current = self.abstract_model.gen_init_values(d_batch, self.device)
 
         for t in range(n_steps):
             if t % self.abstract_step_size == 0 and t > 0:
@@ -77,7 +76,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         # checks
         if abstr_s is None:
             d_batch = prim_current['o'].shape[0]
-            abstr_s = torch.zeros(d_batch, self.d_abstract_state)
+            abstr_s = torch.zeros(d_batch, self.d_abstract_state, device=self.device)
 
         # do prediction
         pred = self.primitive_model(s=prim_current['s'], a=prim_current['a'], ctx_low_level=prim_current['o'],
