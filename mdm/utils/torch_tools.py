@@ -51,18 +51,31 @@ class FuzzyDeviceMixin(torch.nn.Module):
         return self._device
 
     def _check_device(self, *args, **kwargs):
-        if 'device' in kwargs:
-            self._device = torch.device(kwargs['device'])
+        device, dtype, non_blocking, convert_to_format = torch._C._nn._parse_to(*args, **kwargs)
+        if device is not None:
+            if device.type == 'cuda':
+                device_type = 'cuda:0'
+                self._device = torch.device(device_type)
+            else:
+                self._device = device
+        #if 'device' in kwargs:
+        #    self._device = torch.device(self._add_cuda_id(kwargs['device']))
+        #else:
+        #    for arg in args:
+        #        try:
+        #            self._device = torch.device(self._add_cuda_id(arg))
+        #            return True
+        #        except RuntimeError:
+        #            pass  # bad style but works here
+
+    def _add_cuda_id(self, arg: Union[torch.device, str]):
+        if type(arg) is torch.device:
+            return arg
+
+        if arg == 'cuda':
+            return 'cuda:0'
         else:
-            for arg in args:
-                if type(arg) is torch.device:
-                    self._device = arg
-                    break
-                elif type(arg) is str:
-                    try:
-                        self._device = torch.device(arg)
-                    except RuntimeError:
-                            pass  # bad style but works here
+            return arg
 
     def to(self, *args, **kwargs):
         self._check_device(*args, **kwargs)
