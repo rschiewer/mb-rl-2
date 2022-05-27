@@ -90,9 +90,9 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         mem['prim_s'].append(pred['s'])
         mem['prim_s_prior'].append(pred['s_prior'])
         mem['prim_s_post'].append(pred['s_post'])
-        mem['o'].append(pred['o'])
-        mem['r'].append(pred['r'])
-        mem['term'].append(pred['term'])
+        mem['prim_o'].append(pred['o'])
+        mem['prim_r'].append(pred['r'])
+        mem['prim_term'].append(pred['term'])
 
     def _invoke_abstract_model(self,
                                abstr_current: dict,
@@ -120,8 +120,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         mem['abstr_term'].append(pred['term'])
 
     def _gen_mem(self):
-        mem = { 'o': [], 'r': [], 'term': [], 'prim_s_prior': [], 'prim_s_post': [], 'prim_s': [], 'abstr_s_prior': [],
-                'abstr_s_post': [], 'abstr_s': [], 'abstr_r': [], 'abstr_term': []}
+        mem = { 'prim_o': [], 'prim_r': [], 'prim_term': [], 'prim_s_prior': [], 'prim_s_post': [], 'prim_s': [],
+                'abstr_s_prior': [], 'abstr_s_post': [], 'abstr_s': [], 'abstr_r': [], 'abstr_term': []}
         return mem
 
     def _pack_mem(self, mem):
@@ -162,9 +162,9 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         pred = self(start_observations, a_ground_truth)
 
         # primitive model loss
-        prim_rec_o = torch.nn.functional.mse_loss(pred['o'], o_ground_truth)
-        prim_rec_r = torch.nn.functional.mse_loss(pred['r'], r_ground_truth)
-        prim_rec_term = torch.nn.functional.binary_cross_entropy(pred['term'], term_ground_truth)
+        prim_rec_o = torch.nn.functional.mse_loss(pred['prim_o'], o_ground_truth)
+        prim_rec_r = torch.nn.functional.mse_loss(pred['prim_r'], r_ground_truth)
+        prim_rec_term = torch.nn.functional.binary_cross_entropy(pred['prim_term'], term_ground_truth)
         prim_kl_s = self.beta_kl_prim * kl_loss_normal(pred['prim_s_prior'], pred['prim_s_post'])
         prim_kl_s_reg = self.beta_reg_prim * kl_regularizer_normal(pred['prim_s_post'])
 
