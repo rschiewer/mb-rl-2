@@ -6,7 +6,7 @@ import torch
 from mdm.utils.torch_tools import FuzzyDeviceMixin, layers_with_activation, add_time_dim, remove_time_dim
 
 
-class AbstractActionModel(torch.nn.Module, FuzzyDeviceMixin):
+class AbstractActionModel(torch.nn.Module):
 
     def __init__(self,
                  d_action: int,
