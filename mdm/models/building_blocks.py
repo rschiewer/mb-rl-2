@@ -3,10 +3,10 @@ from enum import Enum
 
 import torch
 
-from mdm.utils.torch_tools import DeviceMixin, layers_with_activation, add_time_dim, remove_time_dim
+from mdm.utils.torch_tools import FuzzyDeviceMixin, layers_with_activation, add_time_dim, remove_time_dim
 
 
-class AbstractActionModel(torch.nn.Module, DeviceMixin):
+class AbstractActionModel(torch.nn.Module, FuzzyDeviceMixin):
 
     def __init__(self,
                  d_action: int,
@@ -72,7 +72,6 @@ class RSSM(torch.nn.Module):
                                       num_layers=n_hidden_layers, batch_first=True, dropout=hidden_dropout)
         self.s_prior = torch.nn.Sequential(*layers_with_activation(s_prior_lws, activation))
         self.s_post = torch.nn.Sequential(*layers_with_activation(s_post_lws, activation))
-        #self.o_dist = torch.nn.Sequential(*layers_with_activation(o_lws, activation))
         self.r_dist = torch.nn.Sequential(*layers_with_activation(r_lws, activation))
         self.term_dist = torch.nn.Sequential(*layers_with_activation(term_lws, activation))
 
@@ -137,14 +136,28 @@ class RSSM(torch.nn.Module):
         return o_dist, o_smpl
 
     def gen_init_values(self, d_batch: int,  device: torch.device):
-        s = torch.zeros(d_batch, self.d_state, device=device)
+        s = self.zero_s(d_batch, device)
+        o = self.zero_o(d_batch, device)
+        a = self.zero_a(d_batch, device)
+        h = self.zero_h(d_batch, device)
+        return {'s': s, 'o': o, 'a': a, 'h': h}
+
+    def zero_s(self, d_batch:int,  device: torch.device):
+        return torch.zeros(d_batch, self.d_state, device=device)
+
+    def zero_o(self, d_batch:int,  device: torch.device):
         if self.d_observation > 0:
             o = torch.zeros(d_batch, self.d_observation, device=device)
         else:
             o = torch.tensor(0, device=device)
-        a = torch.zeros(d_batch, self.d_action, device=device)
+        return o
+
+    def zero_a(self, d_batch:int,  device: torch.device):
+        return torch.zeros(d_batch, self.d_action, device=device)
+
+    def zero_h(self, d_batch:int,  device: torch.device):
         h = torch.zeros(self.n_hidden_layers, d_batch, self.d_hidden, device=device)
-        return {'s': s, 'o': o, 'a': a, 'h': (h, h)}
+        return (h, h)
 
     def forward(self,
                 s: torch.Tensor,
