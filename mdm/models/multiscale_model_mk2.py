@@ -70,6 +70,18 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
         return mem
 
+    # this method is more of a note on how to work with arbitrary model hierarchies
+    def _invoke_model(self,
+                      mdl: RSSM,
+                      mdl_current: dict,
+                      ctx_low_level: torch.Tensor,
+                      ctx_high_level: torch.Tensor):
+        pred = mdl(s=mdl_current['s'], a=mdl_current['a'], ctx_low_level=ctx_low_level, ctx_high_level=ctx_high_level,
+                   h=mdl_current['h'])
+        mdl_current['s'] = pred['s']
+        mdl_current['h'] = pred['h']
+        return pred
+
     def _invoke_primitive_model(self,
                                 prim_current: dict,
                                 abstr_s: Union[torch.Tensor, None],  # this is high level context
