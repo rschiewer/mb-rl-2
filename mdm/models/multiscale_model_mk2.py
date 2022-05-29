@@ -53,6 +53,9 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             if t % self.abstract_step_size == 0 and t > 0:
                 abstr_current['a'] = self.abstract_action_model(actions_binned[:, t // self.abstract_step_size - 1])
                 self._invoke_abstract_model(abstr_current, prim_current['h'], mem)
+
+                # cut information flow for primitive model
+                prim_current['s'] = self.primitive_model.zero_s(d_batch, self.device)
                 prim_current['o'] = self.primitive_model.zero_o(d_batch, self.device)
                 prim_current['h'] = self.primitive_model.zero_h(d_batch, self.device)
 
