@@ -1,4 +1,5 @@
 from typing import Tuple, Optional, Sequence
+from enum import Enum
 
 import torch
 
@@ -84,6 +85,18 @@ class RSSM(torch.nn.Module):
             self._observation = self._zero_observation
         else:
             self._observation = self._nonzero_observation
+
+    @property
+    def top_node(self):
+        return self.d_high_level_ctx == 0
+
+    @property
+    def inner_node(self):
+        return self.d_high_level_ctx > 0 and self.d_observation == 0
+
+    @property
+    def bottom_node(self):
+        return self. self.d_observation > 0
 
     def _det_core_without_ctx(self,
                               s: torch.Tensor,
