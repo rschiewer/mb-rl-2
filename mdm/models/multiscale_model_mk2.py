@@ -38,11 +38,6 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                 actions: torch.Tensor):
         d_batch, n_steps = actions.shape[:2]
         n_s_start = start_observations.shape[1]
-
-        #if n_steps % self.abstract_step_size != 0:
-        #    raise ValueError(f'Provided trajectories\' length must be divisible by abstract step size but is not, '
-        #                     f'length is {n_steps} and abstract step size is {self.abstract_step_size}')
-
         actions_binned = bin_every_k_steps(actions, self.abstract_step_size, self.device, padding_val=0)
 
         mem = self._gen_mem()
@@ -55,15 +50,15 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                 self._invoke_abstract_model(abstr_current, prim_current['h'], mem)
 
                 # cut information flow for primitive model
+                prim_current['o'] = None
                 prim_current['s'] = self.primitive_model.zero_s(d_batch, self.device)
-                prim_current['o'] = self.primitive_model.zero_o(d_batch, self.device)
                 prim_current['h'] = self.primitive_model.zero_h(d_batch, self.device)
 
             prim_current['a'] = actions[:, t]
             if t < n_s_start:
                 prim_current['o'] = start_observations[:, t]
 
-            self._invoke_primitive_model(prim_current, abstr_current['s'], mem)
+            self._invoke_primitive_model(prim_current, prim_current['o'], abstr_current['s'], mem)
 
         # do a final prediction on abstract level
         abstr_current['a'] = self.abstract_action_model(actions_binned[:, -1])
@@ -81,24 +76,35 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                       mdl_current: dict,
                       ctx_low_level: torch.Tensor,
                       ctx_high_level: torch.Tensor):
+        if ctx_low_level is None:
+            use_posterior = True
+        else:
+            use_posterior = False
+
         pred = mdl(s=mdl_current['s'], a=mdl_current['a'], ctx_low_level=ctx_low_level, ctx_high_level=ctx_high_level,
-                   h=mdl_current['h'])
+                   h=mdl_current['h'], use_posterior=use_posterior)
         mdl_current['s'] = pred['s']
         mdl_current['h'] = pred['h']
         return pred
 
     def _invoke_primitive_model(self,
                                 prim_current: dict,
+                                prim_o: Union[torch.Tensor, None],  # this is low level context
                                 abstr_s: Union[torch.Tensor, None],  # this is high level context
                                 mem: dict):
         # checks
+        if prim_o is None:
+            use_posterior = False
+        else:
+            use_posterior = True
+
         if abstr_s is None:
-            d_batch = prim_current['o'].shape[0]
+            d_batch = prim_current['s'].shape[0]
             abstr_s = torch.zeros(d_batch, self.d_abstract_state, device=self.device)
 
         # do prediction
-        pred = self.primitive_model(s=prim_current['s'], a=prim_current['a'], ctx_low_level=prim_current['o'],
-                                    ctx_high_level=abstr_s, h=prim_current['h'])
+        pred = self.primitive_model(s=prim_current['s'], a=prim_current['a'], ctx_low_level=prim_o,
+                                    ctx_high_level=abstr_s, h=prim_current['h'], use_posterior=use_posterior)
         # update primitive state
         prim_current['s'] = pred['s']
         prim_current['h'] = pred['h']
@@ -106,7 +112,10 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         # store things
         mem['prim_s'].append(pred['s'])
         mem['prim_s_prior'].append(pred['s_prior'])
-        mem['prim_s_post'].append(pred['s_post'])
+        if use_posterior:  # hack to make loss calculation work like usual but also always provide a distribution for s
+            mem['prim_s_post'].append(pred['s_post'])
+        else:
+            mem['prim_s_post'].append(pred['s_prior'])
         mem['prim_o'].append(pred['o'])
         mem['prim_r'].append(pred['r'])
         mem['prim_term'].append(pred['term'])
@@ -212,25 +221,29 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         return h
 
     def rollout_primitive(self,
-                          start_observations: torch.Tensor,
+                          start_observations: Optional[torch.Tensor],
                           actions: torch.Tensor,
                           ctx_high_level: Optional[torch.Tensor] = None):
         d_batch, n_steps = actions.shape[:2]
-        n_warmup = start_observations.shape[1]
         device = self._device
+        prim_current = self.primitive_model.gen_init_values(d_batch, device)
+
+        if start_observations is None:
+            n_warmup = 0
+            prim_current['o'] = None
+        else:
+            n_warmup = start_observations.shape[1]
 
         mem = self._gen_mem()
-        prim_current = self.primitive_model.gen_init_values(d_batch, device)
 
         for t in range(n_steps):
             prim_current['a'] = actions[:, t]
             if t < n_warmup:
                 prim_current['o'] = start_observations[:, t]
-            self._invoke_primitive_model(prim_current, ctx_high_level, mem)
+            self._invoke_primitive_model(prim_current, prim_current['o'], ctx_high_level, mem)
 
         mem = self._pack_mem(mem)
         mem['prim_h'] = prim_current['h']
-        mem['abstr_h'] = None
 
         return mem
 
@@ -255,7 +268,6 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             self._invoke_abstract_model(abstr_current, ctx_low_level[t], mem)
 
         mem = self._pack_mem(mem)
-        mem['prim_h'] = None
         mem['abstr_h'] = abstr_current['h']
 
         return mem
