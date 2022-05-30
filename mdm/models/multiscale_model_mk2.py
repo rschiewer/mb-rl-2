@@ -91,7 +91,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                                 prim_current: dict,
                                 prim_o: Union[torch.Tensor, None],  # this is low level context
                                 abstr_s: Union[torch.Tensor, None],  # this is high level context
-                                mem: dict):
+                                mem: dict,
+                                sample: bool = True):
         # checks
         if prim_o is None:
             use_posterior = False
@@ -104,7 +105,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
         # do prediction
         pred = self.primitive_model(s=prim_current['s'], a=prim_current['a'], ctx_low_level=prim_o,
-                                    ctx_high_level=abstr_s, h=prim_current['h'], use_posterior=use_posterior)
+                                    ctx_high_level=abstr_s, h=prim_current['h'], use_posterior=use_posterior,
+                                    sample=sample)
         # update primitive state
         prim_current['s'] = pred['s']
         prim_current['h'] = pred['h']
@@ -123,7 +125,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
     def _invoke_abstract_model(self,
                                abstr_current: dict,
                                h_primitive: Union[Tuple[torch.Tensor, torch.Tensor], None],  # this is low level context
-                               mem: dict):
+                               mem: dict,
+                               sample: bool = True):
         # checks
         if h_primitive is None:
             use_posterior = False
@@ -133,7 +136,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
         # do prediction
         pred = self.abstract_model(s=abstr_current['s'], a=abstr_current['a'], ctx_low_level=h_primitive,
-                                   h=abstr_current['h'], use_posterior=use_posterior)
+                                   h=abstr_current['h'], use_posterior=use_posterior, sample=sample)
         # update abstract state
         abstr_current['s'] = pred['s']
         abstr_current['h'] = pred['h']
@@ -223,7 +226,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
     def rollout_primitive(self,
                           start_observations: Optional[torch.Tensor],
                           actions: torch.Tensor,
-                          ctx_high_level: Optional[torch.Tensor] = None):
+                          ctx_high_level: Optional[torch.Tensor] = None,
+                          sample: bool = True):
         d_batch, n_steps = actions.shape[:2]
         device = self._device
         prim_current = self.primitive_model.gen_init_values(d_batch, device)
@@ -240,7 +244,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             prim_current['a'] = actions[:, t]
             if t < n_warmup:
                 prim_current['o'] = start_observations[:, t]
-            self._invoke_primitive_model(prim_current, prim_current['o'], ctx_high_level, mem)
+            self._invoke_primitive_model(prim_current, prim_current['o'], ctx_high_level, mem, sample=sample)
 
         mem = self._pack_mem(mem)
         mem['prim_h'] = prim_current['h']
@@ -250,7 +254,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
     def rollout_abstract(self,
                          abstr_start_states: torch.Tensor,
                          abstr_actions: torch.Tensor,
-                         ctx_low_level: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None):
+                         ctx_low_level: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
+                         sample: bool = True):
         d_batch, n_steps = abstr_actions.shape[:2]
         n_warmup = abstr_start_states.shape[1]
         device = self._device
@@ -265,7 +270,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             abstr_current['a'] = abstr_actions[:, t]
             if t < n_warmup:
                 abstr_current['s'] = abstr_start_states[:, t]
-            self._invoke_abstract_model(abstr_current, ctx_low_level[t], mem)
+            self._invoke_abstract_model(abstr_current, ctx_low_level[t], mem, sample=sample)
 
         mem = self._pack_mem(mem)
         mem['abstr_h'] = abstr_current['h']
