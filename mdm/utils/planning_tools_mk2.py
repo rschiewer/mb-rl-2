@@ -23,7 +23,7 @@ def init_abstr_s(model: MultiscaleDynamicsModelMK2,
 
     def _rollout_init_fn(o_start_: torch.Tensor, a_: torch.Tensor):
         a_ = to_onehot(a_, n_classes=model.d_action)
-        pred = model.rollout_primitive(o_start_, a_)
+        pred = model.rollout_primitive(o_start_, a_, sample=False)
         return pred['prim_r'].squeeze(), pred['prim_term'].squeeze(), pred
 
     actions, act_dist, i_winners, rollout_data = planner.plan(rollout_fn=_rollout_init_fn,
@@ -40,7 +40,7 @@ def init_abstr_s(model: MultiscaleDynamicsModelMK2,
     best_o = rollout_data['prim_o'][i_best]
     empty_abstr_s = torch.zeros(1, 1, model.d_abstract_state, device=model.device)
     abstr_a = model.abstract_action_model(best_a.unsqueeze(0)).unsqueeze(0)
-    pred = model.rollout_abstract(empty_abstr_s, abstr_a, [best_h])
+    pred = model.rollout_abstract(empty_abstr_s, abstr_a, [best_h], sample=False)
     pred.update({'prim_o': best_o, 'prim_a': best_a})
 
     return {'abstr_s': pred['abstr_s'].squeeze(0),  # remove batch dimension
@@ -62,7 +62,7 @@ def plan_abstract(model: MultiscaleDynamicsModelMK2,
 
     def _rollout_abstract_fn(abstr_s_start_: torch.Tensor, abstr_a_: torch.Tensor):
         #abstr_a = torch.nn.functional.one_hot(abstr_a, num_classes=mdl.d_macro_action)
-        predictions = model.rollout_abstract(abstr_s_start_, abstr_a_)
+        predictions = model.rollout_abstract(abstr_s_start_, abstr_a_, sample=False)
         return predictions['abstr_r'].squeeze(), None, predictions
 
     # macro_s_next_post = extract_sub_distribution(macro_s_start_dist, 0)  # remove time dim
@@ -97,7 +97,6 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
                  planner: CrossentropyPlanner,
                  env: gym.Env,
                  abstr_s: torch.Tensor,
-                 abstr_a: torch.Tensor,
                  abstr_s_next: torch.Tensor,
                  n_rollouts: int,
                  n_evolution_steps: int,
@@ -114,12 +113,12 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
         pred_prim = model.rollout_primitive(o_start_, a_, abstr_s_batch)
         abstr_a_batch_post = model.abstract_action_model(a_)
         pred_abstr = model.rollout_abstract(abstr_s_batch.unsqueeze(1), abstr_a_batch_post.unsqueeze(1),
-                                            [pred_prim['prim_h']])
+                                            [pred_prim['prim_h']], sample=False)
         #overlap = torch.distributions.kl_divergence(macro_s_next_post_dist,
         #                                            macro_s_next.expand((pln_d_batch, mdl.d_macro_state)))
         #overlap = - overlap.abs().sum(dim=1, keepdim=True)
-        overlap = pred_abstr['abstr_s_post'][0].log_prob(abstr_s_batch_next).sum(dim=1)
-        #overlap = -torch.sum(torch.abs(macro_s_next_post - abstr_a_batch_next), dim=1)
+        #overlap = pred_abstr['abstr_s_post'][0].log_prob(abstr_s_batch_next).sum(dim=1)
+        overlap = -torch.sum(torch.abs(abstr_s_batch_next - pred_abstr['abstr_s'][:, 0]), dim=1)
         return overlap, None, pred_prim
 
     actions, act_dist, i_winners, rollout_data = planner.plan(rollout_fn=_rollout_detailed_fn,
