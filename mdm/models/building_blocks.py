@@ -119,22 +119,6 @@ class RSSM(torch.nn.Module):
         x_det = remove_time_dim(x_det)
         return x_det, new_h
 
-    def _zero_observation(self,
-                          x_det: torch.Tensor,
-                          s_smpl: torch.Tensor):
-        return None, torch.tensor(0.0)
-
-    def _nonzero_observation(self,
-                             x_det: torch.Tensor,
-                             s_smpl: torch.Tensor):
-        x_in = torch.concat([x_det, s_smpl], dim=-1)
-        o_params = self.o_dist(x_in)
-        mu, sigma = torch.tensor_split(o_params, 2, dim=-1)
-        sigma = torch.abs(sigma) + self.epsilon
-        o_dist = torch.distributions.Normal(loc=mu, scale=sigma)
-        o_smpl = o_dist.rsample()
-        return o_dist, o_smpl
-
     def gen_init_values(self, d_batch: int,  device: torch.device):
         s = self.zero_s(d_batch, device)
         o = self.zero_o(d_batch, device)
@@ -168,20 +152,26 @@ class RSSM(torch.nn.Module):
                 ctx_low_level: Optional[torch.Tensor] = None,
                 ctx_high_level: Optional[torch.Tensor] = None,
                 h: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-                use_posterior: bool = True):
+                use_posterior: bool = True,
+                sample: bool = True):
         x_det, new_h = self._det_core_fwd(s, a, ctx_high_level, h)
 
         s_prior = self._prior(x_det)
         if use_posterior:
             s_post = self._posterior(x_det, ctx_low_level)
-            s_smpl = s_post.rsample()
+            s_dist = s_post
         else:
             s_post = None
-            s_smpl = s_prior.rsample()
+            s_dist = s_prior
 
-        o_dist, o_smpl = self._observation(x_det, s_smpl)
-        r_dist, r_smpl = self._reward(x_det, s_smpl)
-        term_dist, term_smpl = self._terminal(x_det, s_smpl)
+        if sample:
+            s_smpl = s_dist.rsample()
+        else:
+            s_smpl = s_dist.loc
+
+        o_dist, o_smpl = self._observation(x_det, s_smpl, sample)
+        r_dist, r_smpl = self._reward(x_det, s_smpl, sample)
+        term_dist, term_smpl = self._terminal(x_det, s_smpl, sample)
 
         return {'s': s_smpl, 's_prior': s_prior, 's_post': s_post, 'o': o_smpl, 'r': r_smpl, 'term': term_smpl,
                 'h': new_h}
@@ -204,24 +194,43 @@ class RSSM(torch.nn.Module):
         s_post = torch.distributions.Normal(loc=mu, scale=sigma)
         return s_post
 
+    def _zero_observation(self,
+                          x_det: torch.Tensor,
+                          s_smpl: torch.Tensor,
+                          sample: bool = True):
+        return None, torch.tensor(0.0)
+
+    def _nonzero_observation(self,
+                             x_det: torch.Tensor,
+                             s_smpl: torch.Tensor,
+                             sample: bool = True):
+        x_in = torch.concat([x_det, s_smpl], dim=-1)
+        o_params = self.o_dist(x_in)
+        mu, sigma = torch.tensor_split(o_params, 2, dim=-1)
+        sigma = torch.abs(sigma) + self.epsilon
+        o_dist = torch.distributions.Normal(loc=mu, scale=sigma)
+        o_smpl = o_dist.rsample() if sample else mu
+        return o_dist, o_smpl
 
     def _reward(self,
                 x_det: torch.Tensor,
-                s_smpl: torch.Tensor) -> Tuple[torch.distributions.Normal, torch.Tensor]:
+                s_smpl: torch.Tensor,
+                sample: bool = True) -> Tuple[torch.distributions.Normal, torch.Tensor]:
         x_in = torch.concat([x_det, s_smpl], dim=-1)
         r_params = self.r_dist(x_in)
         mu, sigma = torch.tensor_split(r_params, 2, dim=-1)
         sigma = torch.abs(sigma) + self.epsilon
         r_dist = torch.distributions.Normal(loc=mu, scale=sigma)
-        r_smpl = r_dist.rsample()
+        r_smpl = r_dist.rsample() if sample else mus
         return r_dist, r_smpl
 
     def _terminal(self,
                   x_det: torch.Tensor,
-                  s_smpl: torch.Tensor) -> Tuple[torch.distributions.ContinuousBernoulli, torch.Tensor]:
+                  s_smpl: torch.Tensor,
+                  sample: bool = True) -> Tuple[torch.distributions.ContinuousBernoulli, torch.Tensor]:
         x_in = torch.concat([x_det, s_smpl], dim=-1)
         term_params = self.term_dist(x_in)
         term_params = torch.sigmoid(term_params)
         term_dist = torch.distributions.ContinuousBernoulli(probs=term_params)
-        term_smpl = term_dist.rsample()
+        term_smpl = term_dist.rsample() if sample else term_params
         return term_dist, term_smpl

@@ -56,10 +56,10 @@ class CrossentropyPlanner:
              discount: float,
              act_noise: float = 0,
              init_act_params: Union[torch.Tensor, np.ndarray] = None):
-        if start_states.device != self.device:
-            raise ValueError(f'Expected device for start_states is {self.device} but was {start_states.device}')
+        #if start_states.device != self.device:
+        #    raise ValueError(f'Expected device for start_states is {self.device} but was {start_states.device}')
 
-        d_batch = start_states.shape[0]  # n_batch equals number of rollouts
+        d_batch = len(start_states)  # d_batch equals number of rollouts
         n_winners = ceil(d_batch * winning_perc)
         act_dist_params = self._init_params(d_batch, n_plan_steps, d_dist, init_act_params)
 
