@@ -2,6 +2,7 @@ from typing import Tuple, Optional, Sequence
 from enum import Enum
 
 import torch
+import haste_pytorch as haste
 
 from mdm.utils.torch_tools import FuzzyDeviceMixin, layers_with_activation, add_time_dim, remove_time_dim
 
@@ -49,7 +50,8 @@ class RSSM(torch.nn.Module):
                  o_lws: Sequence[int] = (32, 32),
                  r_lws: Sequence[int] = (32, 32),
                  term_lws: Sequence[int] = (32, 32),
-                 activation: str = 'relu'):
+                 activation: str = 'relu',
+                 layer_norm: bool = False):
         super().__init__()
 
         self.d_state = d_state
@@ -61,6 +63,8 @@ class RSSM(torch.nn.Module):
         self.d_hidden = d_hidden
         self.n_hidden_layers = n_hidden_layers
         self.epsilon = epsilon
+        self.activation = activation
+        self.layer_norm = layer_norm
 
         s_prior_lws = (d_hidden, *s_prior_lws, d_state * 2)
         s_post_lws = (d_hidden + d_low_level_ctx, *s_post_lws, d_state * 2)
@@ -70,10 +74,18 @@ class RSSM(torch.nn.Module):
 
         self.det_core = torch.nn.LSTM(d_state + d_action + d_high_level_ctx, hidden_size=d_hidden,
                                       num_layers=n_hidden_layers, batch_first=True, dropout=hidden_dropout)
-        self.s_prior = torch.nn.Sequential(*layers_with_activation(s_prior_lws, activation))
-        self.s_post = torch.nn.Sequential(*layers_with_activation(s_post_lws, activation))
-        self.r_dist = torch.nn.Sequential(*layers_with_activation(r_lws, activation))
-        self.term_dist = torch.nn.Sequential(*layers_with_activation(term_lws, activation))
+        #self.det_core = haste.LayerNormLSTM(d_state + d_action + d_high_level_ctx, hidden_size=d_hidden,
+        #                                    zoneout=0.05, dropout=hidden_dropout, batch_first=True)
+        #self.de_core = torch.nn.GRU(d_state + d_action + d_high_level_ctx, hidden_size=d_hidden,
+        #                            num_layers=n_hidden_layers, batch_first=True, dropout=hidden_dropout)
+        if layer_norm:
+            self.det_core_norm = torch.nn.LayerNorm(d_hidden)
+        else:
+            self.det_core_norm = None
+        self.s_prior = torch.nn.Sequential(*layers_with_activation(s_prior_lws, activation, layer_norm=layer_norm))
+        self.s_post = torch.nn.Sequential(*layers_with_activation(s_post_lws, activation, layer_norm=layer_norm))
+        self.r_dist = torch.nn.Sequential(*layers_with_activation(r_lws, activation, layer_norm=layer_norm))
+        self.term_dist = torch.nn.Sequential(*layers_with_activation(term_lws, activation, layer_norm=layer_norm))
 
         if d_high_level_ctx == 0:
             self._det_core_fwd = self._det_core_without_ctx
@@ -107,6 +119,8 @@ class RSSM(torch.nn.Module):
         s, a = add_time_dim(a, s)
         x_det, new_h = self.det_core(torch.concat([s, a], dim=-1), h)
         x_det = remove_time_dim(x_det)
+        if self.layer_norm:
+            new_h[0] = self.det_core_norm(new_h[0])
         return x_det, new_h
 
     def _det_core_with_ctx(self,
@@ -117,6 +131,8 @@ class RSSM(torch.nn.Module):
         s, a, high_level_ctx = add_time_dim(a, s, high_level_ctx)
         x_det, new_h = self.det_core(torch.concat([s, a, high_level_ctx], dim=-1), h)
         x_det = remove_time_dim(x_det)
+        if self.layer_norm:
+            new_h = self.det_core_norm(new_h)
         return x_det, new_h
 
     def gen_init_values(self, d_batch: int,  device: torch.device):
@@ -141,6 +157,7 @@ class RSSM(torch.nn.Module):
 
     def zero_h(self, d_batch:int,  device: torch.device):
         h = torch.zeros(self.n_hidden_layers, d_batch, self.d_hidden, device=device)
+        #h = torch.zeros(1, d_batch, self.d_hidden, device=device)
         return (h, h)
 
     def forward(self,
