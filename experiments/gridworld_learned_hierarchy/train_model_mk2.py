@@ -11,6 +11,7 @@ from mdm.training.dynamics_model_trainer import DynamicsModelTrainer
 from mdm.memory.trajectory_memory import TrajectoryMemory
 from mdm.training.offline_rl_driver import OfflineRLDriver
 from mdm.logging.neptune_logger import NeptuneLogger
+from mdm.logging.logger import Scope
 
 if __name__ == '__main__':
     cfg = load_yaml(here() / 'model_mk2.yaml')
@@ -58,6 +59,9 @@ if __name__ == '__main__':
 
     # train
     neptune_logger = NeptuneLogger(neptune_cfg['PROJECT_NAME'], api_token=neptune_cfg['NEPTUNE_API_TOKEN'])
+    neptune_logger.setup()
+    neptune_logger.log(cfg, Scope.PARAMETERS())
+
     trainer = DynamicsModelTrainer(model=model, optimizer=optimizer, get_batch_train=get_batch_train,
                                    get_batch_test=get_batch_test, logger=neptune_logger, **cfg['trainer'])
     trainer.train(n_train_steps=cfg['trainer']['n_train_steps'], progress_bar=True,
