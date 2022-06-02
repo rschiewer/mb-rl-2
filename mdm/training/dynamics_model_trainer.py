@@ -65,7 +65,7 @@ class DynamicsModelTrainer(ABC):
             if self.logger:
                 r_stats = {'r_raw': r, 'r_sum_ep': r.sum(axis=1), 'r_sum': r.sum(), 'r_mean': r.mean()}
                 #self.logger.log(self._to_np(r_stats), Scope.TRAIN, i_step)
-                self.logger.log(self._to_np(train_losses), Scope.TRAIN, i_step)
+                self.logger.log(self._to_np(train_losses), Scope.TRAIN(), i_step)
 
             if self.scheduler:
                 self.scheduler.step()
@@ -89,7 +89,7 @@ class DynamicsModelTrainer(ABC):
                 if self.logger:
                     r_stats = {'r_raw': r, 'r_sum_ep': r.sum(axis=1), 'r_sum': r.sum(), 'r_mean': r.mean()}
                     #self.logger.log(self._to_np(r_stats), Scope.TEST, i_step)
-                    self.logger.log(self._to_np(eval_losses), Scope.TEST, i_step)
+                    self.logger.log(self._to_np(eval_losses), Scope.TEST(), i_step)
 
         if self.logger:
             self.logger.teardown()

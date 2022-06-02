@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Dict, Any, Union
 import os
 
 import neptune.new as neptune
@@ -41,9 +41,8 @@ class NeptuneLogger(Logger):
                                'constructor argument')
 
     def setup(self):
-        if self._run:
-            self.teardown()
-        self._run = neptune.init(project=self._project, api_token=self.token)
+        if not self._run:
+            self._run = neptune.init(project=self._project, api_token=self.token)
 
     def teardown(self):
         if self._run:
@@ -54,16 +53,18 @@ class NeptuneLogger(Logger):
             scope: Scope,
             time_step: int = None):
         for name, value in message.items():
-            full_scope = f'{scope}/{name}'
+            full_scope = scope / name
             if isinstance(value, np.ndarray):
                 value = value.flatten()
                 for v in value:
-                    self._run[full_scope].log(v)
+                    self._run[str(full_scope)].log(v)
+            elif isinstance(value, dict):
+                self.log(value, full_scope, time_step=time_step)
             else:
-                self._run[full_scope].log(value)
+                self._run[str(full_scope)].log(value, step=time_step)
 
-    def log_object(self, object: Any, scope: Scope, time_step: int = None):
+    def log_object(self, object: Any, scope: Union[Scope, str], time_step: int = None):
         pass
 
-    def log_plot(self, figure: Figure, scope: Scope, time_step: int = None):
+    def log_plot(self, figure: Figure, scope: Union[Scope, str], time_step: int = None):
         pass
