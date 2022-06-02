@@ -51,7 +51,8 @@ class RSSM(torch.nn.Module):
                  r_lws: Sequence[int] = (32, 32),
                  term_lws: Sequence[int] = (32, 32),
                  activation: str = 'relu',
-                 layer_norm: bool = False):
+                 layer_norm: bool = False,
+                 rnn_type: str = 'lstm'):
         super().__init__()
 
         self.d_state = d_state
@@ -65,6 +66,7 @@ class RSSM(torch.nn.Module):
         self.epsilon = epsilon
         self.activation = activation
         self.layer_norm = layer_norm
+        self.rnn_type = rnn_type
 
         s_prior_lws = (d_hidden, *s_prior_lws, d_state * 2)
         s_post_lws = (d_hidden + d_low_level_ctx, *s_post_lws, d_state * 2)
@@ -72,16 +74,25 @@ class RSSM(torch.nn.Module):
         r_lws = (d_hidden + d_state, *r_lws, d_reward * 2)
         term_lws = (d_hidden + d_state, *term_lws, 1)
 
-        self.det_core = torch.nn.LSTM(d_state + d_action + d_high_level_ctx, hidden_size=d_hidden,
-                                      num_layers=n_hidden_layers, batch_first=True, dropout=hidden_dropout)
+        if rnn_type == 'lstm':
+            rnn_constr = torch.nn.LSTM
+        elif rnn_type == 'gru':
+            rnn_constr = torch.nn.GRU
+        else:
+            raise ValueError(f'Unsupported rnn type: {rnn_type}')
+        self.det_core = rnn_constr(d_state + d_action + d_high_level_ctx, hidden_size=d_hidden,
+                                   num_layers=n_hidden_layers, batch_first=True, dropout=hidden_dropout)
+        #self.det_core = torch.nn.LSTM(d_state + d_action + d_high_level_ctx, hidden_size=d_hidden,
+        #                              num_layers=n_hidden_layers, batch_first=True, dropout=hidden_dropout)
         #self.det_core = haste.LayerNormLSTM(d_state + d_action + d_high_level_ctx, hidden_size=d_hidden,
         #                                    zoneout=0.05, dropout=hidden_dropout, batch_first=True)
-        #self.de_core = torch.nn.GRU(d_state + d_action + d_high_level_ctx, hidden_size=d_hidden,
+        #self.det_core = torch.nn.GRU(d_state + d_action + d_high_level_ctx, hidden_size=d_hidden,
         #                            num_layers=n_hidden_layers, batch_first=True, dropout=hidden_dropout)
         if layer_norm:
             self.det_core_norm = torch.nn.LayerNorm(d_hidden)
         else:
             self.det_core_norm = None
+
         self.s_prior = torch.nn.Sequential(*layers_with_activation(s_prior_lws, activation, layer_norm=layer_norm))
         self.s_post = torch.nn.Sequential(*layers_with_activation(s_post_lws, activation, layer_norm=layer_norm))
         self.r_dist = torch.nn.Sequential(*layers_with_activation(r_lws, activation, layer_norm=layer_norm))
@@ -157,8 +168,10 @@ class RSSM(torch.nn.Module):
 
     def zero_h(self, d_batch:int,  device: torch.device):
         h = torch.zeros(self.n_hidden_layers, d_batch, self.d_hidden, device=device)
-        #h = torch.zeros(1, d_batch, self.d_hidden, device=device)
-        return (h, h)
+        if self.rnn_type == 'lstm':
+            return (h, h)
+        else:
+            return h
 
     def forward(self,
                 s: torch.Tensor,
@@ -238,7 +251,7 @@ class RSSM(torch.nn.Module):
         mu, sigma = torch.tensor_split(r_params, 2, dim=-1)
         sigma = torch.abs(sigma) + self.epsilon
         r_dist = torch.distributions.Normal(loc=mu, scale=sigma)
-        r_smpl = r_dist.rsample() if sample else mus
+        r_smpl = r_dist.rsample() if sample else mu
         return r_dist, r_smpl
 
     def _terminal(self,
@@ -247,7 +260,8 @@ class RSSM(torch.nn.Module):
                   sample: bool = True) -> Tuple[torch.distributions.ContinuousBernoulli, torch.Tensor]:
         x_in = torch.concat([x_det, s_smpl], dim=-1)
         term_params = self.term_dist(x_in)
-        term_params = torch.sigmoid(term_params)
-        term_dist = torch.distributions.ContinuousBernoulli(probs=term_params)
+        #term_params = torch.sigmoid(term_params)
+        #term_params = torch.clamp(term_params, 0.01, 0.99)
+        term_dist = torch.distributions.ContinuousBernoulli(logits=term_params)
         term_smpl = term_dist.rsample() if sample else term_params
         return term_dist, term_smpl

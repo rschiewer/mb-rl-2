@@ -27,7 +27,8 @@ if __name__ == '__main__':
 
     cfg['abstr_mdl']['d_observation'] = 0
     cfg['abstr_mdl']['d_high_level_ctx'] = 0
-    cfg['abstr_mdl']['d_low_level_ctx'] = cfg['prim_mdl']['n_hidden_layers'] * cfg['prim_mdl']['d_hidden'] * 2
+    d_cell = 2 if cfg['prim_mdl']['rnn_type'] == 'lstm' else 1
+    cfg['abstr_mdl']['d_low_level_ctx'] = cfg['prim_mdl']['n_hidden_layers'] * cfg['prim_mdl']['d_hidden'] * d_cell
 
     cfg['abstr_act_mdl']['d_action'] = env.action_space.n
     cfg['abstr_act_mdl']['abstract_step_size'] = cfg['mdm']['abstract_step_size']

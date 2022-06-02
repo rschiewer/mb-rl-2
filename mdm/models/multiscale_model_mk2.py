@@ -218,7 +218,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         return True, ''
 
     def _filter_h(self, h: Tuple[torch.Tensor, torch.Tensor]):
-        h = torch.concat(h, dim=0)  # concat h and c tensors of LSTM along the layer dimension, this is arbitrary
+        if self.primitive_model.rnn_type == 'lstm':
+            h = torch.concat(h, dim=0)  # concat h and c tensors of LSTM along the layer dimension, this is arbitrary
         h = torch.transpose(h, 0, 1)  # bring batch dimension to front
         h = torch.flatten(h, start_dim=1)  # fold h/c/layer dimension into d_hidden
         return h
