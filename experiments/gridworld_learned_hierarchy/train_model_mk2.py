@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 
 import torch
 import numpy as np
@@ -61,12 +62,15 @@ if __name__ == '__main__':
         return s, a, r, terminal
 
     # train
-    neptune_logger = NeptuneLogger(neptune_cfg['PROJECT_NAME'], api_token=neptune_cfg['NEPTUNE_API_TOKEN'])
-    neptune_logger.setup()
-    neptune_logger.log(cfg, Scope.PARAMETERS())
+    if 'LOG_RUN' in os.environ:
+        logger = NeptuneLogger(neptune_cfg['PROJECT_NAME'], api_token=neptune_cfg['NEPTUNE_API_TOKEN'])
+        logger.setup()
+        logger.log(cfg, Scope.PARAMETERS())
+    else:
+        logger = None
 
     trainer = DynamicsModelTrainer(model=model, optimizer=optimizer, get_batch_train=get_batch_train,
-                                   get_batch_test=get_batch_test, logger=neptune_logger, **cfg['trainer'])
+                                   get_batch_test=get_batch_test, logger=logger, **cfg['trainer'])
     trainer.train(n_train_steps=cfg['trainer']['n_train_steps'], progress_bar=True,
                   checkpoint_path=here() / cfg['checkpoint_path'])
     torch.save(model, Path(__file__).parent / cfg['final_model_path'])
