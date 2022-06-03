@@ -44,7 +44,12 @@ if __name__ == '__main__':
     model = MultiscaleDynamicsModelMK2(primitive_model=prim_mdl, abstract_model=abstr_mdl,
                                        abstract_action_model=abstr_act_mdl, **cfg['mdm'])
     model = model.to('cuda')
-    optimizer = torch.optim.Adam(model.parameters(), **cfg['optim'])
+    if cfg['optim']['type'] == 'adam':
+        optimizer = torch.optim.Adam(model.parameters(), **cfg['optim'])
+    elif cfg['optim']['type'] == 'adamw':
+        optimizer = torch.optim.AdamW(model.parameters(), **cfg['optim'])
+    else:
+        raise ValueError(f'Unknown optimizer: {cfg["optim"]["type"]}')
 
     # build data pipeline
     train_mem = TrajectoryMemory.load(here() / cfg['train_samples']).shuffle()
