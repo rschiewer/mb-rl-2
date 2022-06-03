@@ -58,7 +58,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             if t < n_s_start:
                 prim_current['o'] = start_observations[:, t]
 
-            self._invoke_primitive_model(prim_current, prim_current['o'], abstr_current['s'], mem)
+            abstr_ctx = torch.concat([abstr_current['s'], self._filter_h(abstr_current['h'])], dim=-1)
+            self._invoke_primitive_model(prim_current, prim_current['o'], abstr_ctx, mem)
 
         # do a final prediction on abstract level
         abstr_current['a'] = self.abstract_action_model(actions_binned[:, -1])
@@ -90,7 +91,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
     def _invoke_primitive_model(self,
                                 prim_current: dict,
                                 prim_o: Union[torch.Tensor, None],  # this is low level context
-                                abstr_s: Union[torch.Tensor, None],  # this is high level context
+                                abstr_ctx: Union[torch.Tensor, None],  # this is high level context
                                 mem: dict,
                                 sample: bool = True):
         # checks
@@ -99,13 +100,13 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         else:
             use_posterior = True
 
-        if abstr_s is None:
+        if abstr_ctx is None:
             d_batch = prim_current['s'].shape[0]
-            abstr_s = torch.zeros(d_batch, self.d_abstract_state, device=self.device)
+            abstr_ctx = torch.zeros(d_batch, self.d_abstract_state, device=self.device)
 
         # do prediction
         pred = self.primitive_model(s=prim_current['s'], a=prim_current['a'], ctx_low_level=prim_o,
-                                    ctx_high_level=abstr_s, h=prim_current['h'], use_posterior=use_posterior,
+                                    ctx_high_level=abstr_ctx, h=prim_current['h'], use_posterior=use_posterior,
                                     sample=sample)
         # update primitive state
         prim_current['s'] = pred['s']
@@ -218,7 +219,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         return True, ''
 
     def _filter_h(self, h: Tuple[torch.Tensor, torch.Tensor]):
-        if self.primitive_model.rnn_type == 'lstm':
+        if self.primitive_model.rnn_type == 'lstm' and self.abstract_model.rnn_type == self.primitive_model.rnn_type:
             h = torch.concat(h, dim=0)  # concat h and c tensors of LSTM along the layer dimension, this is arbitrary
         h = torch.transpose(h, 0, 1)  # bring batch dimension to front
         h = torch.flatten(h, start_dim=1)  # fold h/c/layer dimension into d_hidden

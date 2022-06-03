@@ -22,7 +22,9 @@ if __name__ == '__main__':
     cfg['prim_mdl']['d_observation'] = env.observation_space.shape[0]
     cfg['prim_mdl']['d_action'] = env.action_space.n
     cfg['prim_mdl']['d_reward'] = 1
-    cfg['prim_mdl']['d_high_level_ctx'] = cfg['abstr_mdl']['d_state']
+    d_cell = 2 if cfg['prim_mdl']['rnn_type'] == 'lstm' else 1
+    cfg['prim_mdl']['d_high_level_ctx'] = cfg['abstr_mdl']['d_state'] + cfg['abstr_mdl']['d_hidden'] \
+                                          * cfg['abstr_mdl']['n_hidden_layers'] * d_cell
     cfg['prim_mdl']['d_low_level_ctx'] = env.observation_space.shape[0]
 
     cfg['abstr_mdl']['d_observation'] = 0
