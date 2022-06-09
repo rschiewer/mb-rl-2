@@ -199,20 +199,22 @@ class RSSM(torch.nn.Module):
         return torch.zeros(d_batch, self.d_low_level_ctx, device=device)
 
     def forward(self,
-                s: torch.Tensor,
+                s: Optional[torch.Tensor],
                 a: torch.Tensor,
-                #o: torch.Tensor,  # those should be in ctx_low_level
-                #r: torch.Tensor,
-                #term: torch.Tensor,
-                ctx_low_level: Optional[torch.Tensor] = None,
-                ctx_high_level: Optional[torch.Tensor] = None,
-                h: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+                ctx_low_level: Optional[torch.Tensor] = None,  # this is o, r, term in primitive model
+                ctx_high_level: Optional[torch.Tensor] = None,  # this is abstr_s, abstr_h in primitive model
+                h: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # memory from previous step
                 use_posterior: bool = True,
                 sample: bool = True):
-        zero_ctx_low_level = self.zero_ctx_low_level(s.shape[0], s.device)
-        x_det, new_h = self._det_core_fwd(s, a, zero_ctx_low_level, ctx_high_level, h)
+        if s is None:
+            s = self.zero_s(a.shape[0], a.device)
+        if h is None:
+            h = self.zero_h(a.shape[0], a.device)
 
+        zero_ctx_low_level = self.zero_ctx_low_level(a.shape[0], a.device)
+        x_det, new_h = self._det_core_fwd(s, a, zero_ctx_low_level, ctx_high_level, h)
         s_prior = self._prior(x_det)
+
         if use_posterior:
             x_det, new_h = self._det_core_fwd(s, a, ctx_low_level, ctx_high_level, h)
             s_post = self._posterior(x_det)
