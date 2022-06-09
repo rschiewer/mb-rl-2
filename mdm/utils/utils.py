@@ -209,5 +209,19 @@ def prepare_data(s: Union[np.ndarray, torch.Tensor],
                                         Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray]]:
     s, a, r, terminal = flatten_and_unsqueeze(s, a, r, terminal)
     s = normalize_obs(s, env)
+    a = a[:, :-1]  # last timestep is padding in any case, so omit it because we need one less action than o, r, term
     a = to_onehot(a, env.action_space.n)
+
+    # since r and terminal were padded with one element anyway, rotate it to the front and make it zero
+    if isinstance(r, torch.Tensor):
+        r = torch.roll(r, shifts=1, dims=1)
+    else:
+        r = np.roll(r, shift=1, axis=1)
+    r[:, 0] = 0
+    if isinstance(terminal, torch.Tensor):
+        terminal = torch.roll(terminal, shifts=1, dims=1)
+    else:
+        terminal = np.roll(terminal, shift=1, axis=1)
+    terminal[:, 0] = 0
+
     return s, a, r, terminal

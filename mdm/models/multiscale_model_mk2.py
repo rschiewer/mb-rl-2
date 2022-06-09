@@ -34,14 +34,19 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         self.beta_reg_abstr = beta_reg_abstract
 
     def forward(self,
-                start_observations: torch.Tensor,
-                start_rewards: torch.Tensor,
-                start_terminals: torch.Tensor,
-                actions: torch.Tensor):
-        device = actions.device
-        d_batch, n_steps = actions.shape[:2]
-        n_s_start = start_observations.shape[1]
-        actions_binned = bin_every_k_steps(actions, self.abstract_step_size, self.device, padding_val=0)
+                o: torch.Tensor,
+                a: torch.Tensor,
+                r: torch.Tensor,
+                term: torch.Tensor,
+                n_warmup: int = 1):
+        assert o.shape[1] == r.shape[1] == term.shape[1] == a.shape[1] + 1
+        assert torch.all(r[:, 0] == 0)
+        assert torch.all(term[:, 0] == 0)
+        assert n_warmup >= 1
+
+        device = a.device
+        d_batch, n_steps = a.shape[:2]
+        actions_binned = bin_every_k_steps(a, self.abstract_step_size, self.device, padding_val=0)
 
         mem = self._gen_mem()
         prim_current = self.primitive_model.gen_init_values(d_batch, self.device)
@@ -49,31 +54,32 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
         for t in range(n_steps):
             if t % self.abstract_step_size == 0 and t > 0:
-                abstr_current['a'] = self.abstract_action_model(actions_binned[:, t // self.abstract_step_size - 1])
+                i_a = t // self.abstract_step_size - 1
+                abstr_current['a'] = self.abstract_action_model(actions_binned[:, i_a])
                 self._invoke_abstract_model(prim_current, abstr_current, mem)
 
                 # cut information flow for primitive model
                 prim_current['s'] = self.primitive_model.zero_s(d_batch, device)
-                prim_current['h'] = self.primitive_model.zero_h(d_batch, device)
-                prim_use_posterior = False
-            else:
-                prim_use_posterior = True
+                prim_current['rnn_state'] = self.primitive_model.zero_h(d_batch, device)
+                prim_current['o'] = self.primitive_model.zero_o(d_batch, device)
+                prim_current['r'] = self.primitive_model.zero_r(d_batch, device)
+                prim_current['term'] = self.primitive_model.zero_term(d_batch, device)
 
-            prim_current['a'] = actions[:, t]
-            if t < n_s_start:
-                prim_current['o'] = start_observations[:, t]
-                prim_current['r'] = start_rewards[:, t]
-                prim_current['term'] = start_terminals[:, t]
+            prim_current['a'] = a[:, t]
+            if t < n_warmup:
+                prim_current['o'] = o[:, t]
+                prim_current['r'] = r[:, t]
+                prim_current['term'] = term[:, t]
 
-            self._invoke_primitive_model(prim_current, abstr_current, mem, use_posterior=prim_use_posterior)
+            self._invoke_primitive_model(prim_current, abstr_current, mem, o[:, t+1], r[:, t+1], term[:, t+1])
 
         # do a final prediction on abstract level
         abstr_current['a'] = self.abstract_action_model(actions_binned[:, -1])
         self._invoke_abstract_model(prim_current, abstr_current, mem)
 
         mem = self._pack_mem(mem)
-        mem['prim_h'] = prim_current['h']
-        mem['abstr_h'] = abstr_current['h']
+        mem['prim_rnn_state'] = prim_current['rnn_state']
+        mem['abstr_rnn_state'] = abstr_current['rnn_state']
 
         return mem
 
@@ -97,7 +103,10 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
     def _invoke_primitive_model(self,
                                 prim_current: dict,
                                 abstr_current: Optional[dict],
-                                mem: dict,
+                                mem: Optional[dict],
+                                next_o: torch.Tensor,
+                                next_r: torch.Tensor,
+                                next_term: torch.Tensor,
                                 use_posterior: bool = True,
                                 sample: bool = True):
         d_batch = abstr_current['a'].shape[0]
@@ -105,63 +114,68 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
         # checks
         if use_posterior:
-            ctx_low_level = torch.concat([prim_current['o'], prim_current['r'], prim_current['term']], dim=-1)
+            x_post_gt = torch.concat([next_o, next_r, next_term], dim=-1)
         else:
-            ctx_low_level = self.primitive_model.zero_ctx_low_level(d_batch, device)
-
+            x_post_gt = self.primitive_model.zero_x_post_groundtruth(d_batch, device)
         if abstr_current is None:
             ctx_high_level = self.primitive_model.zero_ctx_high_level(d_batch, device)
         else:
-            ctx_high_level = torch.concat([abstr_current['s'], self.filter_rnn_state(abstr_current['h'])], dim=-1)
+            ctx_high_level = torch.concat([abstr_current['s'],
+                                           self.filter_rnn_state(abstr_current['rnn_state'])], dim=-1)
+        x_hat = torch.concat([prim_current['o'], prim_current['r'], prim_current['term']], dim=-1)
 
         # do prediction
-        pred = self.primitive_model(s=prim_current['s'], a=prim_current['a'], ctx_low_level=ctx_low_level,
-                                    ctx_high_level=ctx_high_level, h=prim_current['h'], use_posterior=use_posterior,
-                                    sample=sample)
+        pred = self.primitive_model(s=prim_current['s'], a=prim_current['a'], x_hat=x_hat, x_post_groundtruth=x_post_gt,
+                                    ctx_high_level=ctx_high_level, rnn_state=prim_current['rnn_state'],
+                                    use_posterior=use_posterior, sample=sample)
         # update primitive state
         prim_current['s'] = pred['s']
-        prim_current['h'] = pred['h']
+        prim_current['rnn_state'] = pred['rnn_state']
 
         # store things
-        mem['prim_s'].append(pred['s'])
-        mem['prim_s_prior'].append(pred['s_prior'])
-        if use_posterior:  # hack to make loss calculation work like usual but also always provide a distribution for s
-            mem['prim_s_post'].append(pred['s_post'])
-        else:
-            mem['prim_s_post'].append(pred['s_prior'])
-        mem['prim_o'].append(pred['o'])
-        mem['prim_r'].append(pred['r'])
-        mem['prim_term'].append(pred['term'])
+        if mem:
+            mem['prim_s'].append(pred['s'])
+            mem['prim_s_prior'].append(pred['s_prior'])
+            if use_posterior:  # hack to make loss calculation work like usual but also always provide a distribution for s
+                mem['prim_s_post'].append(pred['s_post'])
+            else:
+                mem['prim_s_post'].append(pred['s_prior'])
+            mem['prim_o'].append(pred['o'])
+            mem['prim_r'].append(pred['r'])
+            mem['prim_term'].append(pred['term'])
 
     def _invoke_abstract_model(self,
                                prim_current: Optional[dict],
                                abstr_current: dict,
-                               mem: dict,
+                               mem: Optional[dict],
                                use_posterior: bool = True,
                                sample: bool = True):
         d_batch = abstr_current['a'].shape[0]
         device = abstr_current['a'].device
 
         if use_posterior:
-            ctx_low_level = torch.concat([prim_current['s'], self.filter_rnn_state(prim_current['h'])], dim=-1)
+            # TODO: check if this is the correct time step's s and h
+            x_post_gt = torch.concat([prim_current['s'], self.filter_rnn_state(prim_current['rnn_state'])], dim=-1)
         else:
-            ctx_low_level = self.primitive_model.zero_ctx_low_level(d_batch, device)
+            x_post_gt = self.primitive_model.zero_x_post_groundtruth(d_batch, device)
         ctx_high_level = self.abstract_model.zero_ctx_high_level(d_batch, device)
+        x_hat = torch.concat([abstr_current['r'], abstr_current['term']], dim=-1)
 
         # do prediction
-        pred = self.abstract_model(s=abstr_current['s'], a=abstr_current['a'], ctx_low_level=ctx_low_level,
-                                   ctx_high_level=ctx_high_level, h=abstr_current['h'],
-                                   use_posterior=use_posterior, sample=sample)
+        pred = self.abstract_model(s=abstr_current['s'], a=abstr_current['a'], x_hat=x_hat,
+                                   x_post_groundtruth=x_post_gt, ctx_high_level=ctx_high_level,
+                                   rnn_state=abstr_current['rnn_state'], use_posterior=use_posterior, sample=sample)
         # update abstract state
         abstr_current['s'] = pred['s']
-        abstr_current['h'] = pred['h']
+        abstr_current['rnn_state'] = pred['rnn_state']
 
         # store things
-        mem['abstr_s'].append(pred['s'])
-        mem['abstr_s_prior'].append(pred['s_prior'])
-        mem['abstr_s_post'].append(pred['s_post'])  # TODO: posterior might not be populated here
-        mem['abstr_r'].append(pred['r'])
-        mem['abstr_term'].append(pred['term'])
+        if mem:
+            mem['abstr_s'].append(pred['s'])
+            mem['abstr_s_prior'].append(pred['s_prior'])
+            mem['abstr_s_post'].append(pred['s_post'])  # TODO: posterior might not be populated here
+            mem['abstr_r'].append(pred['r'])
+            mem['abstr_term'].append(pred['term'])
 
     @staticmethod
     def _gen_mem():
@@ -199,21 +213,18 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         device = self._device
 
         # sum makes sense for rewards, use padding=0 to not affect sum for last element
-        abstr_r_target = bin_every_k_steps(r_ground_truth, self.abstract_step_size, device=device,
+        abstr_r_target = bin_every_k_steps(r_ground_truth[:, 1:], self.abstract_step_size, device=device,
                                            padding_val=0).sum(dim=2)
         # terminal flag can only be 0 or 1, so mean value with automatic padding should be used
-        abstr_term_target = bin_every_k_steps(term_ground_truth, self.abstract_step_size,
+        abstr_term_target = bin_every_k_steps(term_ground_truth[:, 1:], self.abstract_step_size,
                                               device=device).mean(dim=2)
 
-        start_observations = o_ground_truth[:, :n_warmup]
-        start_rewards = r_ground_truth[:, :n_warmup]
-        start_terminals = term_ground_truth[:, :n_warmup]
-        pred = self(start_observations, start_rewards, start_terminals, a_ground_truth)
+        pred = self(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, n_warmup)
 
         # primitive model loss
-        prim_rec_o = torch.nn.functional.mse_loss(pred['prim_o'], o_ground_truth)
-        prim_rec_r = torch.nn.functional.mse_loss(pred['prim_r'], r_ground_truth)
-        prim_rec_term = torch.nn.functional.binary_cross_entropy(pred['prim_term'], term_ground_truth)
+        prim_rec_o = torch.nn.functional.mse_loss(pred['prim_o'], o_ground_truth[:, 1:])
+        prim_rec_r = torch.nn.functional.mse_loss(pred['prim_r'], r_ground_truth[:, 1:])
+        prim_rec_term = torch.nn.functional.binary_cross_entropy(pred['prim_term'], term_ground_truth[:, 1:])
         prim_kl_s = self.beta_kl_prim * kl_loss_normal(pred['prim_s_prior'], pred['prim_s_post'])
         prim_kl_s_reg = self.beta_reg_prim * kl_regularizer_normal(pred['prim_s_post'])
 
