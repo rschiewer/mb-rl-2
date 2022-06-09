@@ -50,8 +50,8 @@ class RSSM(torch.nn.Module):
                  o_lws: Sequence[int] = (32, 32),
                  r_lws: Sequence[int] = (32, 32),
                  term_lws: Sequence[int] = (32, 32),
-                 activation: str = 'relu',
                  layer_norm: bool = False,
+                 activation: str = 'relu',
                  rnn_type: str = 'lstm'):
         super().__init__()
 
@@ -80,31 +80,20 @@ class RSSM(torch.nn.Module):
             rnn_constr = torch.nn.GRU
         else:
             raise ValueError(f'Unsupported rnn type: {rnn_type}')
-        self.det_core = rnn_constr(d_state + d_action + d_low_level_ctx + d_high_level_ctx, hidden_size=d_hidden,
-                                   num_layers=n_hidden_layers, batch_first=True, dropout=hidden_dropout)
-        #self.det_core = haste.LayerNormLSTM(d_state + d_action + d_high_level_ctx, hidden_size=d_hidden,
+        self._rnn = rnn_constr(d_state + d_action + d_low_level_ctx + d_high_level_ctx, hidden_size=d_hidden,
+                               num_layers=n_hidden_layers, batch_first=True, dropout=hidden_dropout)
+        #self._det_core = haste.LayerNormLSTM(d_state + d_action + d_high_level_ctx, hidden_size=d_hidden,
         #                                    zoneout=0.05, dropout=hidden_dropout, batch_first=True)
         if layer_norm:
             self.det_core_norm = torch.nn.LayerNorm(d_hidden)
         else:
             self.det_core_norm = None
 
-        self.s_prior = torch.nn.Sequential(*layers_with_activation(s_prior_lws, activation, layer_norm=layer_norm))
-        self.s_post = torch.nn.Sequential(*layers_with_activation(s_post_lws, activation, layer_norm=layer_norm))
-        self.r_dist = torch.nn.Sequential(*layers_with_activation(r_lws, activation, layer_norm=layer_norm))
-        self.term_dist = torch.nn.Sequential(*layers_with_activation(term_lws, activation, layer_norm=layer_norm))
-
-        if d_high_level_ctx == 0:
-            self._det_core_fwd = self._det_core_without_high_level_ctx
-        else:
-            self._det_core_fwd = self._det_core_with_high_level_ctx
-
-        if d_observation == 0:
-            self._observation = self._zero_observation
-            self.o_dist = None
-        else:
-            self._observation = self._nonzero_observation
-            self.o_dist = torch.nn.Sequential(*layers_with_activation(o_lws, activation, layer_norm=layer_norm))
+        self._s_prior = torch.nn.Sequential(*layers_with_activation(s_prior_lws, activation, layer_norm=layer_norm))
+        self._s_post = torch.nn.Sequential(*layers_with_activation(s_post_lws, activation, layer_norm=layer_norm))
+        self._o_dist = torch.nn.Sequential(*layers_with_activation(o_lws, activation, layer_norm=layer_norm))
+        self._r_dist = torch.nn.Sequential(*layers_with_activation(r_lws, activation, layer_norm=layer_norm))
+        self._term_dist = torch.nn.Sequential(*layers_with_activation(term_lws, activation, layer_norm=layer_norm))
 
     @property
     def top_node(self):
@@ -118,27 +107,14 @@ class RSSM(torch.nn.Module):
     def bottom_node(self):
         return self. self.d_observation > 0
 
-    def _det_core_without_high_level_ctx(self,
-                                         s: torch.Tensor,
-                                         a: torch.Tensor,
-                                         low_level_ctx: torch.Tensor,
-                                         high_level_ctx: torch.Tensor,
-                                         h: Tuple[torch.Tensor, torch.Tensor]):
-        s, a, low_level_ctx = add_time_dim(s, a, low_level_ctx)
-        x_det, new_h = self.det_core(torch.concat([s, a, low_level_ctx], dim=-1), h)
-        x_det = remove_time_dim(x_det)
-        #if self.layer_norm:
-        #    new_h[0] = self.det_core_norm(new_h[0])
-        return x_det, new_h
-
-    def _det_core_with_high_level_ctx(self,
-                                      s: torch.Tensor,
-                                      a: torch.Tensor,
-                                      low_level_ctx: torch.Tensor,
-                                      high_level_ctx: torch.Tensor,
-                                      h: Tuple[torch.Tensor, torch.Tensor]):
+    def _det_core(self,
+                  s: torch.Tensor,
+                  a: torch.Tensor,
+                  low_level_ctx: torch.Tensor,
+                  high_level_ctx: torch.Tensor,
+                  h: Tuple[torch.Tensor, torch.Tensor]):
         s, a, low_level_ctx, high_level_ctx = add_time_dim(s, a, low_level_ctx, high_level_ctx)
-        x_det, new_h = self.det_core(torch.concat([s, a, low_level_ctx, high_level_ctx], dim=-1), h)
+        x_det, new_h = self._rnn(torch.concat([s, a, low_level_ctx, high_level_ctx], dim=-1), h)
         x_det = remove_time_dim(x_det)
         #if self.layer_norm:
         #    new_h[0] = self.det_core_norm(new_h[0])
@@ -163,11 +139,7 @@ class RSSM(torch.nn.Module):
     def zero_o(self,
                d_batch: int,
                device: torch.device):
-        if self.d_observation > 0:
-            o = torch.zeros(d_batch, self.d_observation, device=device)
-        else:
-            o = torch.tensor(0, device=device)
-        return o
+        return torch.zeros(d_batch, self.d_observation, device=device)
 
     def zero_a(self,
                d_batch: int,
@@ -198,26 +170,26 @@ class RSSM(torch.nn.Module):
                            device: torch.device):
         return torch.zeros(d_batch, self.d_low_level_ctx, device=device)
 
+    def zero_ctx_high_level(self,
+                            d_batch: int,
+                            device: torch.device):
+        return torch.zeros(d_batch, self.d_high_level_ctx, device=device)
+
     def forward(self,
-                s: Optional[torch.Tensor],
+                s: torch.Tensor,
                 a: torch.Tensor,
-                ctx_low_level: Optional[torch.Tensor] = None,  # this is o, r, term in primitive model
-                ctx_high_level: Optional[torch.Tensor] = None,  # this is abstr_s, abstr_h in primitive model
-                h: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # memory from previous step
+                ctx_low_level: torch.Tensor,  # this is o, r, term in primitive model
+                ctx_high_level: torch.Tensor,  # this is abstr_s, abstr_h in primitive model
+                h: Tuple[torch.Tensor, torch.Tensor],  # memory from previous step
                 use_posterior: bool = True,
                 sample: bool = True):
-        if s is None:
-            s = self.zero_s(a.shape[0], a.device)
-        if h is None:
-            h = self.zero_h(a.shape[0], a.device)
-
         zero_ctx_low_level = self.zero_ctx_low_level(a.shape[0], a.device)
-        x_det, new_h = self._det_core_fwd(s, a, zero_ctx_low_level, ctx_high_level, h)
-        s_prior = self._prior(x_det)
+        x_det, new_h = self._det_core(s, a, zero_ctx_low_level, ctx_high_level, h)
+        s_prior = self._build_s_prior(x_det)
 
         if use_posterior:
-            x_det, new_h = self._det_core_fwd(s, a, ctx_low_level, ctx_high_level, h)
-            s_post = self._posterior(x_det)
+            x_det, new_h = self._det_core(s, a, ctx_low_level, ctx_high_level, h)
+            s_post = self._build_s_post(x_det)
             s_dist = s_post
         else:
             s_post = None
@@ -228,62 +200,58 @@ class RSSM(torch.nn.Module):
         else:
             s_smpl = s_dist.loc
 
-        o_dist, o_smpl = self._observation(x_det, s_smpl, sample)
-        r_dist, r_smpl = self._reward(x_det, s_smpl, sample)
-        term_dist, term_smpl = self._terminal(x_det, s_smpl)
+        o_dist, o_smpl = self._build_o_dist(x_det, s_smpl, sample)
+        r_dist, r_smpl = self._build_r_dist(x_det, s_smpl, sample)
+        term_smpl = self._build_terminal_dist(x_det, s_smpl)
 
         return {'s': s_smpl, 's_prior': s_prior, 's_post': s_post, 'o': o_smpl, 'r': r_smpl, 'term': term_smpl,
                 'h': new_h}
 
-    def _prior(self,
-               x_det: torch.Tensor) -> torch.distributions.Normal:
-        s_prior_params = self.s_prior(x_det)
+    def _build_s_prior(self,
+                       x_det: torch.Tensor) -> torch.distributions.Normal:
+        s_prior_params = self._s_prior(x_det)
         mu, sigma = torch.tensor_split(s_prior_params, 2, dim=-1)
         sigma = torch.abs(sigma) + self.epsilon
         s_prior = torch.distributions.Normal(loc=mu, scale=sigma)
         return s_prior
 
-    def _posterior(self,
-                   x_det: torch.Tensor) -> torch.distributions.Normal:
-        s_post_params = self.s_post(x_det)
+    def _build_s_post(self,
+                      x_det: torch.Tensor) -> torch.distributions.Normal:
+        s_post_params = self._s_post(x_det)
         mu, sigma = torch.tensor_split(s_post_params, 2, dim=-1)
         sigma = torch.abs(sigma) + self.epsilon
         s_post = torch.distributions.Normal(loc=mu, scale=sigma)
         return s_post
 
-    def _zero_observation(self,
-                          *args):
-        return None, torch.tensor(0.0)
-
-    def _nonzero_observation(self,
-                             x_det: torch.Tensor,
-                             s_smpl: torch.Tensor,
-                             sample: bool = True):
+    def _build_o_dist(self,
+                      x_det: torch.Tensor,
+                      s_smpl: torch.Tensor,
+                      sample: bool = True):
         x_in = torch.concat([x_det, s_smpl], dim=-1)
-        o_params = self.o_dist(x_in)
+        o_params = self._o_dist(x_in)
         mu, sigma = torch.tensor_split(o_params, 2, dim=-1)
         sigma = torch.abs(sigma) + self.epsilon
         o_dist = torch.distributions.Normal(loc=mu, scale=sigma)
         o_smpl = o_dist.rsample() if sample else mu
         return o_dist, o_smpl
 
-    def _reward(self,
-                x_det: torch.Tensor,
-                s_smpl: torch.Tensor,
-                sample: bool = True) -> Tuple[torch.distributions.Normal, torch.Tensor]:
+    def _build_r_dist(self,
+                      x_det: torch.Tensor,
+                      s_smpl: torch.Tensor,
+                      sample: bool = True) -> Tuple[torch.distributions.Normal, torch.Tensor]:
         x_in = torch.concat([x_det, s_smpl], dim=-1)
-        r_params = self.r_dist(x_in)
+        r_params = self._r_dist(x_in)
         mu, sigma = torch.tensor_split(r_params, 2, dim=-1)
         sigma = torch.abs(sigma) + self.epsilon
         r_dist = torch.distributions.Normal(loc=mu, scale=sigma)
         r_smpl = r_dist.rsample() if sample else mu
         return r_dist, r_smpl
 
-    def _terminal(self,
-                  x_det: torch.Tensor,
-                  s_smpl: torch.Tensor) -> torch.Tensor:
+    def _build_terminal_dist(self,
+                             x_det: torch.Tensor,
+                             s_smpl: torch.Tensor) -> torch.Tensor:
         x_in = torch.concat([x_det, s_smpl], dim=-1)
-        term_params = self.term_dist(x_in)
+        term_params = self._term_dist(x_in)
         #term_params = torch.sigmoid(term_params)
         #term_params = torch.clamp(term_params, 0.01, 0.99)
         #term_dist = torch.distributions.ContinuousBernoulli(logits=term_params)
