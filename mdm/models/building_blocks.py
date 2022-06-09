@@ -104,7 +104,7 @@ class RSSM(torch.nn.Module):
             self.o_dist = None
         else:
             self._observation = self._nonzero_observation
-            self.o_dist = torch.nn.Sequential(*layers_with_activation(o_lws, activation))
+            self.o_dist = torch.nn.Sequential(*layers_with_activation(o_lws, activation, layer_norm=layer_norm))
 
     @property
     def top_node(self):
@@ -150,8 +150,10 @@ class RSSM(torch.nn.Module):
         s = self.zero_s(d_batch, device)
         o = self.zero_o(d_batch, device)
         a = self.zero_a(d_batch, device)
+        r = self.zero_r(d_batch, device)
+        term = self.zero_term(d_batch, device)
         h = self.zero_h(d_batch, device)
-        return {'s': s, 'o': o, 'a': a, 'h': h}
+        return {'s': s, 'o': o, 'a': a, 'r': r, 'term': term, 'h': h}
 
     def zero_s(self,
                d_batch: int,
@@ -171,6 +173,16 @@ class RSSM(torch.nn.Module):
                d_batch: int,
                device: torch.device):
         return torch.zeros(d_batch, self.d_action, device=device)
+
+    def zero_r(self,
+               d_batch: int,
+               device: torch.device):
+        return torch.zeros(d_batch, self.d_reward, device=device)
+
+    def zero_term(self,
+                  d_batch: int,
+                  device: torch.device):
+        return torch.zeros(d_batch, 1, device=device)
 
     def zero_h(self,
                d_batch: int,
@@ -216,7 +228,7 @@ class RSSM(torch.nn.Module):
 
         o_dist, o_smpl = self._observation(x_det, s_smpl, sample)
         r_dist, r_smpl = self._reward(x_det, s_smpl, sample)
-        term_dist, term_smpl = self._terminal(x_det, s_smpl, sample)
+        term_dist, term_smpl = self._terminal(x_det, s_smpl)
 
         return {'s': s_smpl, 's_prior': s_prior, 's_post': s_post, 'o': o_smpl, 'r': r_smpl, 'term': term_smpl,
                 'h': new_h}
@@ -238,9 +250,7 @@ class RSSM(torch.nn.Module):
         return s_post
 
     def _zero_observation(self,
-                          x_det: torch.Tensor,
-                          s_smpl: torch.Tensor,
-                          sample: bool = True):
+                          *args):
         return None, torch.tensor(0.0)
 
     def _nonzero_observation(self,
