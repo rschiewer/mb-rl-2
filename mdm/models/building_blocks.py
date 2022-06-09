@@ -269,12 +269,12 @@ class RSSM(torch.nn.Module):
 
     def _terminal(self,
                   x_det: torch.Tensor,
-                  s_smpl: torch.Tensor,
-                  sample: bool = True) -> Tuple[torch.distributions.ContinuousBernoulli, torch.Tensor]:
+                  s_smpl: torch.Tensor) -> torch.Tensor:
         x_in = torch.concat([x_det, s_smpl], dim=-1)
         term_params = self.term_dist(x_in)
         #term_params = torch.sigmoid(term_params)
         #term_params = torch.clamp(term_params, 0.01, 0.99)
-        term_dist = torch.distributions.ContinuousBernoulli(logits=term_params)
-        term_smpl = term_dist.rsample() if sample else term_params
-        return term_dist, term_smpl
+        #term_dist = torch.distributions.ContinuousBernoulli(logits=term_params)
+        #term_smpl = term_dist.rsample() if sample else term_params
+        #return term_dist, term_smpl
+        return torch.sigmoid(term_params)
