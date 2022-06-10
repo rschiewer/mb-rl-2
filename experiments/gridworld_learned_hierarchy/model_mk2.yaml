@@ -8,46 +8,47 @@ final_model_path: 'model.ptmdl'
 
 # model in general
 mdm:
-  abstract_step_size: 100
+  abstract_step_size: 3
   beta_kl_primitive: 0.01
   beta_reg_primitive: 0.01
   beta_kl_abstract: 0.01
   beta_reg_abstract: 0.01
 
 prim_mdl:
-  d_state: 4
-  d_hidden: 256
+  d_state: 128
+  d_hidden: 128
   n_hidden_layers: 1
   hidden_dropout: 0.1
   epsilon: 0.1
-  s_prior_lws: [64, 32]
-  s_post_lws: [64, 32]
-  o_lws: [64, 32]
-  r_lws: [64, 32]
-  term_lws: [64, 32]
-  activation: "gelu"
+  s_prior_lws: [128, 128]
+  s_post_lws: [128, 128]
+  o_lws: [64, 32, 16]
+  r_lws: [64, 32, 16]
+  term_lws: [64, 32, 16]
   layer_norm: False
+  activation: "gelu"
   rnn_type: "lstm"
 
 abstr_mdl:
-  d_state: 128
+  d_state: 256
+  d_hidden: 256
   d_action: 4
   d_reward: 1
-  d_hidden: 256
   n_hidden_layers: 1
   hidden_dropout: 0.1
   epsilon: 0.1
-  s_prior_lws: [64, 64]
-  s_post_lws: [64, 64]
-  r_lws: [64, 64]
-  term_lws: [64, 64]
-  activation: "gelu"
+  s_prior_lws: [256, 256]
+  s_post_lws: [256, 256]
+  r_lws: [128, 64, 32]
+  term_lws: [128, 64, 32]
   layer_norm: False
+  activation: "gelu"
   rnn_type: "lstm"
 
 abstr_act_mdl:
   lws: [64, 32]
   activation: "gelu"
+  layer_norm: False
 
 optim:
   lr: 0.003
@@ -57,4 +58,4 @@ trainer:
   n_train_steps: 10000
   eval_interval: 200
   d_batch: 1024
-  pad_last_terminal_flag: True
+  pad_last_terminal_flag: False
