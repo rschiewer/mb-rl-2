@@ -57,7 +57,7 @@ class NeptuneLogger(Logger):
             if isinstance(value, np.ndarray):
                 value = value.flatten()
                 for v in value:
-                    self._run[str(full_scope)].log(v)
+                    self._run[str(full_scope)].log(v, step=time_step)
             elif isinstance(value, dict):
                 self.log(value, full_scope, time_step=time_step)
             else:
