@@ -24,14 +24,17 @@ if __name__ == '__main__':
     cfg['prim_mdl']['d_action'] = env.action_space.n
     cfg['prim_mdl']['d_reward'] = 1
     d_cell = 2 if cfg['prim_mdl']['rnn_type'] == 'lstm' else 1
-    cfg['prim_mdl']['d_high_level_ctx'] = cfg['abstr_mdl']['d_state'] + cfg['abstr_mdl']['d_hidden'] \
-                                          * cfg['abstr_mdl']['n_hidden_layers'] * d_cell
-    cfg['prim_mdl']['d_low_level_ctx'] = env.observation_space.shape[0]
+    #cfg['prim_mdl']['d_ctx_high_level'] = cfg['abstr_mdl']['d_state'] + cfg['abstr_mdl']['d_hidden'] \
+    #                                      * cfg['abstr_mdl']['n_hidden_layers'] * d_cell
+    cfg['prim_mdl']['d_ctx_high_level'] = cfg['abstr_mdl']['d_hidden'] + cfg['abstr_mdl']['d_state']
+    cfg['prim_mdl']['d_x_posterior'] = env.observation_space.shape[0] + 2  # observation, terminal flag and reward
 
     cfg['abstr_mdl']['d_observation'] = 0
-    cfg['abstr_mdl']['d_high_level_ctx'] = 0
+    cfg['abstr_mdl']['o_lws'] = (0,)
+    cfg['abstr_mdl']['d_ctx_high_level'] = 0
     d_cell = 2 if cfg['prim_mdl']['rnn_type'] == 'lstm' else 1
-    cfg['abstr_mdl']['d_low_level_ctx'] = cfg['prim_mdl']['n_hidden_layers'] * cfg['prim_mdl']['d_hidden'] * d_cell
+    #cfg['abstr_mdl']['d_x_posterior'] = cfg['prim_mdl']['n_hidden_layers'] * cfg['prim_mdl']['d_hidden'] * d_cell
+    cfg['abstr_mdl']['d_x_posterior'] = cfg['prim_mdl']['d_hidden'] + cfg['prim_mdl']['d_state']
 
     cfg['abstr_act_mdl']['d_action'] = env.action_space.n
     cfg['abstr_act_mdl']['abstract_step_size'] = cfg['mdm']['abstract_step_size']
@@ -44,12 +47,8 @@ if __name__ == '__main__':
     model = MultiscaleDynamicsModelMK2(primitive_model=prim_mdl, abstract_model=abstr_mdl,
                                        abstract_action_model=abstr_act_mdl, **cfg['mdm'])
     model = model.to('cuda')
-    if cfg['optim']['type'] == 'adam':
-        optimizer = torch.optim.Adam(model.parameters(), **cfg['optim'])
-    elif cfg['optim']['type'] == 'adamw':
-        optimizer = torch.optim.AdamW(model.parameters(), **cfg['optim'])
-    else:
-        raise ValueError(f'Unknown optimizer: {cfg["optim"]["type"]}')
+    optimizer = torch.optim.Adam(model.parameters(), **cfg['optim'])
+    #optimizer = torch.optim.AdamW(model.parameters(), **cfg['optim'])
 
     # build data pipeline
     train_mem = TrajectoryMemory.load(here() / cfg['train_samples']).shuffle()
@@ -67,7 +66,7 @@ if __name__ == '__main__':
         return s, a, r, terminal
 
     # train
-    if 'LOG_RUN' in os.environ:
+    if os.environ.get('LOG_RUN', 0):
         logger = NeptuneLogger(neptune_cfg['PROJECT_NAME'], api_token=neptune_cfg['NEPTUNE_API_TOKEN'])
         logger.setup()
         logger.log(cfg, Scope.PARAMETERS())
