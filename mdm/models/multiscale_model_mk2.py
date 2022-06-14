@@ -45,7 +45,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         assert torch.all(term[:, 0] == 0)
         assert n_warmup_prim >= 1
 
-        mem = self._gen_mem()
+        mem = self.gen_mem()
         d_batch, n_steps_prim = a.shape[:2]
 
         a_binned = bin_every_k_steps(a, self.abstract_step_size, self.device, padding_val=0)
@@ -103,7 +103,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         d_batch, n_steps = a.shape[:2]
         actions_binned = bin_every_k_steps(a, self.abstract_step_size, self.device, padding_val=0)
 
-        mem = self._gen_mem()
+        mem = self.gen_mem()
         prim_current = self.primitive_model.gen_init_values(d_batch, self.device)
         abstr_current = self.abstract_model.gen_init_values(d_batch, self.device)
 
@@ -196,11 +196,6 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         d_batch = abstr_current['a'].shape[0]
         device = abstr_current['a'].device
 
-        #if use_posterior:
-        #    # TODO: check if this is the correct time step's s and h
-        #    x_post_gt = torch.concat([prim_current['s'], self.filter_rnn_hc(prim_current['rnn_state'])], dim=-1)
-        #else:
-        #    x_post_gt = self.primitive_model.zero_x_post_groundtruth(d_batch, device)
         ctx_high_level = self.abstract_model.zero_ctx_high_level(d_batch, device)
         x_hat = torch.concat([abstr_current['r'], abstr_current['term']], dim=-1)
 
@@ -222,7 +217,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         mem['abstr_term'].append(pred['term'])
 
     @staticmethod
-    def _gen_mem():
+    def gen_mem():
         mem = { 'prim_o': [], 'prim_r': [], 'prim_term': [], 'prim_s_prior': [], 'prim_s_post': [], 'prim_s': [],
                 'abstr_s_prior': [], 'abstr_s_post': [], 'abstr_s': [], 'abstr_r': [], 'abstr_term': []}
         return mem
@@ -272,13 +267,13 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         prim_rec_o = torch.nn.functional.mse_loss(pred['prim_o'], o_ground_truth[:, 1:])
         prim_rec_r = torch.nn.functional.mse_loss(pred['prim_r'], r_ground_truth[:, 1:])
         prim_rec_term = torch.nn.functional.binary_cross_entropy(pred['prim_term'], term_ground_truth[:, 1:])
-        prim_kl_s = self.beta_kl_prim * kl_loss_normal(pred['prim_s_prior'], pred['prim_s_post'], detach_posterior=True)
+        prim_kl_s = self.beta_kl_prim * kl_loss_normal(pred['prim_s_prior'], pred['prim_s_post'], detach_posterior=False)
         prim_kl_s_reg = self.beta_reg_prim * kl_regularizer_normal(pred['prim_s_post'])
 
         # abstract model loss
         abstr_rec_r = torch.nn.functional.mse_loss(pred['abstr_r'], abstr_r_target)
         abstr_rec_term = torch.nn.functional.binary_cross_entropy(pred['abstr_term'], abstr_term_target)
-        abstr_kl_s = self.beta_kl_abstr * kl_loss_normal(pred['abstr_s_prior'], pred['abstr_s_post'], detach_posterior=True)
+        abstr_kl_s = self.beta_kl_abstr * kl_loss_normal(pred['abstr_s_prior'], pred['abstr_s_post'], detach_posterior=False)
         abstr_kl_s_reg = self.beta_reg_abstr * kl_regularizer_normal(pred['abstr_s_post'])
 
         total = prim_rec_o + prim_rec_r + prim_rec_term + prim_kl_s + prim_kl_s_reg
