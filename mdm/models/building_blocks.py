@@ -168,9 +168,9 @@ class RSSM(torch.nn.Module):
         else:
             return h
 
-    def zero_x_post_groundtruth(self,
-                                d_batch: int,
-                                device: torch.device):
+    def zero_x_post(self,
+                    d_batch: int,
+                    device: torch.device):
         return torch.zeros(d_batch, self.d_low_level_ctx, device=device)
 
     def zero_ctx_high_level(self,
