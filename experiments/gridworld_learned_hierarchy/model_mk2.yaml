@@ -8,16 +8,17 @@ final_model_path: 'model.ptmdl'
 
 # model in general
 mdm:
-  abstract_step_size: 3
+  abstract_step_size: 5
   beta_kl_primitive: 0.01
   beta_reg_primitive: 0.01
   beta_kl_abstract: 0.01
   beta_reg_abstract: 0.01
+  detach_posteriors: False
 
 prim_mdl:
-  d_state: 128
-  d_hidden: 128
-  n_hidden_layers: 1
+  d_state: 32
+  d_hidden: 64
+  n_hidden_layers: 2
   hidden_dropout: 0.1
   epsilon: 0.1
   s_prior_lws: [128, 128]
@@ -25,13 +26,13 @@ prim_mdl:
   o_lws: [64, 32, 16]
   r_lws: [64, 32, 16]
   term_lws: [64, 32, 16]
-  layer_norm: False
+  layer_norm: True
   activation: "gelu"
   rnn_type: "lstm"
 
 abstr_mdl:
-  d_state: 256
-  d_hidden: 256
+  d_state: 64
+  d_hidden: 128
   d_action: 4
   d_reward: 1
   n_hidden_layers: 1
@@ -41,14 +42,14 @@ abstr_mdl:
   s_post_lws: [256, 256]
   r_lws: [128, 64, 32]
   term_lws: [128, 64, 32]
-  layer_norm: False
+  layer_norm: True
   activation: "gelu"
   rnn_type: "lstm"
 
 abstr_act_mdl:
   lws: [64, 32]
   activation: "gelu"
-  layer_norm: False
+  layer_norm: True
 
 optim:
   lr: 0.003
