@@ -1,4 +1,4 @@
-from typing import Tuple, Optional, Sequence
+from typing import Tuple, Optional, Sequence, Union
 from enum import Enum
 
 import torch
@@ -114,7 +114,7 @@ class RSSM(torch.nn.Module):
                   a: torch.Tensor,
                   x_hat: torch.Tensor,
                   ctx_high_level: torch.Tensor,
-                  rnn_state: Tuple[torch.Tensor, torch.Tensor]):
+                  rnn_state: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]):
         inp = torch.concat([s, a, x_hat, ctx_high_level], dim=-1)
         inp = add_time_dim(inp)
         x_det, new_h = self._rnn(inp, rnn_state)
