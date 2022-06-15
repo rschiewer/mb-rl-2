@@ -29,8 +29,11 @@ class ConcurrentDataLoader:
 
     def _prepare_batch(self, get_batch_fn: Callable, queue: mp.Queue):
         while self.proc_running.is_set():
-            s, a, r, done = get_batch_fn()
-            queue.put((s, a, r, done), block=True, timeout=None)
+            try:
+                s, a, r, done = get_batch_fn()
+                queue.put((s, a, r, done), block=True, timeout=None)
+            except KeyboardInterrupt:
+                break
 
     def get_batch(self):
         return self.queue.get(block=True, timeout=None)
