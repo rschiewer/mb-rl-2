@@ -123,6 +123,3 @@ class DynamicsModelTrainer(ABC):
     def _to_np(data_dict: Dict[str, torch.Tensor]):
         return {k: v.detach().cpu().numpy() for k, v in data_dict.items()}
 
-
-
-
