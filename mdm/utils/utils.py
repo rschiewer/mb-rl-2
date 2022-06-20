@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Union, Dict, Tuple, List
 from itertools import product, chain, repeat
 import sys
-import time
+import re
 
 import gym
 import numpy as np
@@ -11,6 +11,7 @@ import yaml
 import torch
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
+import pandas as pd
 
 from mdm.gridworld.gridworld import Gridworld, CellType
 from mdm.models.multiscale_model import MultiscaleDynamicsModel
@@ -36,6 +37,34 @@ def load_yaml(path: Union[str, Path]) -> Dict:
     with open(path, 'r') as f:
         config = yaml.load(f, Loader=yaml.SafeLoader)
     return config
+
+
+hierarchy_sep = '|'
+cfg_placeholder = re.compile(r'^.*(<.+>).*$')
+float_pattern = re.compile(r'^[-+]?(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?$')
+int_pattern = re.compile(r'^[-+]?(0[xX][\dA-Fa-f]+|0[0-7]*|\d+)$')
+
+
+def fill_placeholders(cfg: dict, _flattened_cfg: dict = None):
+    if _flattened_cfg is None:
+        _flattened_cfg = pd.json_normalize(cfg, sep=hierarchy_sep).to_dict(orient='records')[0]
+    for k, v in cfg.items():
+        if isinstance(v, dict):
+            # re-build _flattened_cfg in case a placeholer was updated
+            _flattened_cfg = pd.json_normalize(cfg, sep=hierarchy_sep).to_dict(orient='records')[0]
+            fill_placeholders(v, _flattened_cfg)
+        elif isinstance(v, str):
+            m = cfg_placeholder.match(v)
+            if m:
+                identifier = m.group(1)[1:-1]
+                insert_value = str(_flattened_cfg[identifier])
+                new_value = v.replace(m.group(1), insert_value)
+                cfg[k] = new_value
+            # cast all numeric strings to their true data type
+            if int_pattern.match(cfg[k]):
+                cfg[k] = int(cfg[k])
+            elif float_pattern.match(cfg[k]):
+                cfg[k] = float(cfg[k])
 
 
 def np_one_hot(x: np.array,

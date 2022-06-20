@@ -1,0 +1,19 @@
+---
+main_0: "hello"
+main_1: "<main_0> world"
+
+nested_0:
+  param_0: 42
+  param_1: 125.45
+  param_2: 10e-3
+  param_3: 4E2
+  param_4: "<nested_0|param_0>"
+  param_5: "<nested_0|param_1>"
+  param_6: "<nested_0|param_2>"
+  param_7: "<nested_0|param_3>"
+
+nested_1:
+  param_0: "<nested_0|param_4>"
+  param_1: "<main_0>"
+
+
