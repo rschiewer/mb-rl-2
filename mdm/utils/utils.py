@@ -40,7 +40,7 @@ def load_yaml(path: Union[str, Path]) -> Dict:
 
 
 hierarchy_sep = '|'
-cfg_placeholder = re.compile(r'^.*(<.+>).*$')
+cfg_placeholder = re.compile(r'.*?(<.+?>).*?')
 float_pattern = re.compile(r'^[-+]?(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?$')
 int_pattern = re.compile(r'^[-+]?(0[xX][\dA-Fa-f]+|0[0-7]*|\d+)$')
 
@@ -54,11 +54,11 @@ def fill_placeholders(cfg: dict, _flattened_cfg: dict = None):
             _flattened_cfg = pd.json_normalize(cfg, sep=hierarchy_sep).to_dict(orient='records')[0]
             fill_placeholders(v, _flattened_cfg)
         elif isinstance(v, str):
-            m = cfg_placeholder.match(v)
-            if m:
-                identifier = m.group(1)[1:-1]
+            matches = cfg_placeholder.findall(v)
+            for m in matches:
+                identifier = m[1:-1]
                 insert_value = str(_flattened_cfg[identifier])
-                new_value = v.replace(m.group(1), insert_value)
+                new_value = cfg[k].replace(m, insert_value)
                 cfg[k] = new_value
             # cast all numeric strings to their true data type
             if int_pattern.match(cfg[k]):

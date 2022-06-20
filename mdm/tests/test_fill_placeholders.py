@@ -18,10 +18,12 @@ class FillPlaceholdersTest(unittest.TestCase):
         self.assertEqual(cfg['nested_0']['param_4'], 42)
         self.assertEqual(cfg['nested_0']['param_5'], 125.45)
         self.assertEqual(cfg['nested_0']['param_6'], 10e-3)
-        self.assertEqual(cfg['nested_0']['param_7'], 4E2)
+        self.assertEqual(cfg['nested_0']['param_7'], 42125.45)
         self.assertEqual(cfg['nested_1']['param_0'], cfg['nested_0']['param_4'])
         self.assertEqual(cfg['nested_1']['param_0'], cfg['nested_0']['param_0'])
         self.assertEqual(cfg['nested_1']['param_1'], cfg['main_0'])
+        self.assertEqual(cfg['nested_1']['param_2'], 'hello hello')
+        self.assertEqual(cfg['nested_1']['param_3'], 'hellohello')
 
 
 if __name__ == '__main__':
