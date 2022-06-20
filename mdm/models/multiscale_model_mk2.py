@@ -238,7 +238,6 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                 'abstr_s_prior': [], 'abstr_s_post': [], 'abstr_s': [], 'abstr_r': [], 'abstr_term': []}
         return mem
 
-
     @staticmethod
     def pack_mem(mem):
         for k, v in mem.items():
@@ -326,24 +325,46 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
     def rollout_primitive(self,
                           a: torch.Tensor,
-                          init_o: torch.Tensor,
-                          init_r: torch.Tensor,
-                          init_term: torch.Tensor,
-                          init_s: torch.Tensor,
-                          init_rnn_state: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]],
-                          ctx_high_level: torch.Tensor,
-                          o_target: torch.Tensor,
-                          r_target: torch.Tensor,
-                          term_target: torch.Tensor,
-                          mem: dict,
+                          init_o: Optional[torch.Tensor],
+                          init_r: Optional[torch.Tensor],
+                          init_term: Optional[torch.Tensor],
+                          init_s: Optional[torch.Tensor],
+                          init_rnn_state: Optional[Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]],
+                          ctx_high_level: Optional[torch.Tensor],
+                          o_target: Optional[torch.Tensor],
+                          r_target: Optional[torch.Tensor],
+                          term_target: Optional[torch.Tensor],
+                          mem: Optional[dict],
                           use_posterior: bool = True,
                           sample: bool = True):
         d_batch, n_steps = a.shape[:2]
-        n_warmup = init_o.shape[1]
         prim_current = self.primitive_model.gen_init_values(d_batch, self.device)
-        prim_current['s'] = init_s
-        prim_current['rnn_state'] = init_rnn_state
 
+        # default arguments
+        if init_o is None:
+            init_o = add_time_dim(self.primitive_model.zero_o(d_batch, self.device))
+        if init_r is None:
+            init_r = add_time_dim(self.primitive_model.zero_r(d_batch, self.device))
+        if init_term is None:
+            init_term = add_time_dim(self.primitive_model.zero_term(d_batch, self.device))
+
+        if init_s is None:
+            prim_current['s'] = self.primitive_model.zero_s(d_batch, self.device)
+        else:
+            prim_current['s'] = init_s
+        if init_rnn_state is None:
+            prim_current['rnn_state'] = self.primitive_model.zero_h(d_batch, self.device)
+        else:
+            prim_current['rnn_state'] = init_rnn_state
+
+        if ctx_high_level is None:
+            ctx_high_level = self.primitive_model.zero_ctx_high_level(d_batch, self.device)
+
+        if mem is None:
+            mem = self.gen_mem()
+
+        # prediction
+        n_warmup = init_o.shape[1]
         for t in range(n_steps):
             if use_posterior:
                 x_posterior = torch.concat([o_target[:, t], r_target[:, t], term_target[:, t]], dim=-1)
@@ -363,25 +384,39 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
     def rollout_abstract(self,
                          a: torch.Tensor,
-                         init_r: torch.Tensor,
-                         init_term: torch.Tensor,
-                         init_s: torch.Tensor,
-                         init_rnn_state: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]],
-                         ctx_low_level: torch.Tensor,
-                         r_target: torch.Tensor,
-                         term_target: torch.Tensor,
-                         mem: dict,
+                         init_r: Optional[torch.Tensor],
+                         init_term: Optional[torch.Tensor],
+                         init_s: Optional[torch.Tensor],
+                         init_rnn_state: Optional[Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]],
+                         ctx_low_level: Optional[torch.Tensor],
+                         r_target: Optional[torch.Tensor],
+                         term_target: Optional[torch.Tensor],
+                         mem: Optional[dict],
                          use_posterior: bool = True,
                          sample: bool = True):
         d_batch, n_steps = a.shape[:2]
-        n_warmup = init_r.shape[1]
         abstr_current = self.abstract_model.gen_init_values(d_batch, self.device)
-        abstr_current['s'] = init_s
-        abstr_current['rnn_state'] = init_rnn_state
 
-        if ctx_low_level is None:
-            ctx_low_level = [None] * n_steps
+        # default arguments
+        if init_r is None:
+            init_r = add_time_dim(self.abstract_model.zero_r(d_batch, self.device))
+        if init_term is None:
+            init_term = add_time_dim(self.abstract_model.zero_term(d_batch, self.device))
 
+        if init_s is None:
+            abstr_current['s'] = self.abstract_model.zero_s(d_batch, self.device)
+        else:
+            abstr_current['s'] = init_s
+        if init_rnn_state is None:
+            abstr_current['rnn_state'] = self.abstract_model.zero_h(d_batch, self.device)
+        else:
+            abstr_current['rnn_state'] = init_rnn_state
+
+        if mem is None:
+            mem = self.gen_mem()
+
+        # prediction
+        n_warmup = init_r.shape[1]
         for t in range(n_steps):
             if use_posterior:
                 x_posterior = torch.concat([ctx_low_level[:, t], r_target[:, t], term_target[:, t]], dim=-1)
