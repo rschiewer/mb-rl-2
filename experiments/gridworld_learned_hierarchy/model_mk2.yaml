@@ -3,12 +3,12 @@ env: "../../mdm/gridworld/8x8_v0.mapdata"
 neptune_cfg: "../neptune_settings.yaml"
 train_samples: "gridworld_train.samples"
 test_samples: "gridworld_test.samples"
-checkpoint_path: 'checkpoints'
-final_model_path: 'model_<abstract_step_size>.ptmdl'
+checkpoint_path: "checkpoints"
+final_model_path: "model"
 
 # model in general
 mdm:
-  abstract_step_size: 10
+  abstract_step_size: 3
   beta_kl_primitive: 0.01
   beta_reg_primitive: 0.01
   beta_kl_abstract: 0.01

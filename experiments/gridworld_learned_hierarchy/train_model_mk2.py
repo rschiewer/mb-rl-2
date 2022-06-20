@@ -75,8 +75,7 @@ if __name__ == '__main__':
 
     #loader_train = ConcurrentDataLoader(get_batch_train, queue_len=3)
     #loader_test = ConcurrentDataLoader(get_batch_test, queue_len=1)
-
-    fill_placeholders(cfg)
+    model_path = f'{cfg["final_model_path"]}_{cfg["mdm"]["abstract_step_size"]}.ptmdl'
 
     # train
     if os.environ.get('LOG_RUN', 0):
@@ -91,5 +90,5 @@ if __name__ == '__main__':
     trainer.train(n_train_steps=cfg['trainer']['n_train_steps'], progress_bar=True,
                   checkpoint_path=here() / cfg['checkpoint_path'])
 
-
-    torch.save(model, Path(__file__).parent / cfg['final_model_path'])
+    model_path = f'{cfg["final_model_path"]}_{cfg["mdm"]["abstract_step_size"]}.ptmdl'
+    torch.save(model, Path(__file__).parent / model_path)

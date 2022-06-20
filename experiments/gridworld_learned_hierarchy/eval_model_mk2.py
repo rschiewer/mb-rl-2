@@ -15,10 +15,10 @@ from mdm.utils.utils import load_yaml, fill_placeholders
 
 if __name__ == '__main__':
     cfg = load_yaml(here() / 'model_mk2.yaml')
-    fill_placeholders(cfg)
+    model_path = f'{cfg["final_model_path"]}_{cfg["mdm"]["abstract_step_size"]}.ptmdl'
 
     env = Gridworld.from_cleartext(here() / '../../mdm/gridworld/8x8_v0.mapdata')
-    mdl: MultiscaleDynamicsModelMK2 = torch.load(here() / cfg['final_model_path'])
+    mdl: MultiscaleDynamicsModelMK2 = torch.load(here() / model_path)
     mdl = mdl.to('cuda')
     planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, device=mdl.device)
     planner_abstr = CrossentropyPlanner(DistributionType.NORMAL, device=mdl.device)
