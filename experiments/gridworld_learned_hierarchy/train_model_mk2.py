@@ -1,6 +1,6 @@
 from pathlib import Path
 import os
-import multiprocessing as mp
+import re
 
 import torch
 import numpy as np
@@ -73,8 +73,13 @@ if __name__ == '__main__':
         return s, a, r, terminal
 
 
-    loader_train = ConcurrentDataLoader(get_batch_train, queue_len=3)
-    loader_test = ConcurrentDataLoader(get_batch_test, queue_len=1)
+    #loader_train = ConcurrentDataLoader(get_batch_train, queue_len=3)
+    #loader_test = ConcurrentDataLoader(get_batch_test, queue_len=1)
+
+    # insert abstract step size in final model path name
+    m = re.match('^.*(<abstract_step_size>).*$', cfg['final_model_path'])
+    if m:
+        cfg['final_model_path'] = cfg['final_model_path'].replace(m.group(1), str(cfg['mdm']['abstract_step_size']))
 
     # train
     if os.environ.get('LOG_RUN', 0):
@@ -84,8 +89,10 @@ if __name__ == '__main__':
     else:
         logger = None
 
-    trainer = DynamicsModelTrainer(model=model, optimizer=optimizer, get_batch_train=loader_train.get_batch,
-                                   get_batch_test=loader_test.get_batch, logger=logger, **cfg['trainer'])
+    trainer = DynamicsModelTrainer(model=model, optimizer=optimizer, get_batch_train=get_batch_train,
+                                   get_batch_test=get_batch_test, logger=logger, **cfg['trainer'])
     trainer.train(n_train_steps=cfg['trainer']['n_train_steps'], progress_bar=True,
                   checkpoint_path=here() / cfg['checkpoint_path'])
+
+
     torch.save(model, Path(__file__).parent / cfg['final_model_path'])

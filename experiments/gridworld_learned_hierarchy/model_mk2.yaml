@@ -4,11 +4,11 @@ neptune_cfg: "../neptune_settings.yaml"
 train_samples: "gridworld_train.samples"
 test_samples: "gridworld_test.samples"
 checkpoint_path: 'checkpoints'
-final_model_path: 'model.ptmdl'
+final_model_path: 'model_<abstract_step_size>.ptmdl'
 
 # model in general
 mdm:
-  abstract_step_size: 5
+  abstract_step_size: 10
   beta_kl_primitive: 0.01
   beta_reg_primitive: 0.01
   beta_kl_abstract: 0.01
@@ -21,8 +21,8 @@ prim_mdl:
   n_hidden_layers: 2
   hidden_dropout: 0.1
   epsilon: 0.1
-  s_prior_lws: [128, 128]
-  s_post_lws: [128, 128]
+  s_prior_lws: [64, 64]
+  s_post_lws: [64, 64]
   o_lws: [64, 32, 16]
   r_lws: [64, 32, 16]
   term_lws: [64, 32, 16]
@@ -35,11 +35,11 @@ abstr_mdl:
   d_hidden: 128
   d_action: 4
   d_reward: 1
-  n_hidden_layers: 1
+  n_hidden_layers: 2
   hidden_dropout: 0.1
   epsilon: 0.1
-  s_prior_lws: [256, 256]
-  s_post_lws: [256, 256]
+  s_prior_lws: [128, 128]
+  s_post_lws: [128, 128]
   r_lws: [128, 64, 32]
   term_lws: [128, 64, 32]
   layer_norm: True
