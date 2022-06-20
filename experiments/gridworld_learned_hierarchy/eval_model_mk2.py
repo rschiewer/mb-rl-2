@@ -1,3 +1,5 @@
+import re
+
 import torch
 import numpy as np
 from tqdm import tqdm
@@ -6,22 +8,26 @@ from mdm.gridworld.gridworld import Gridworld
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.planning.cem_planner import CrossentropyPlanner, DistributionType
 from mdm.utils.utils import here, gen_macro_state_map, infer_position, transform_macro_s_init_history, gen_video
-from mdm.utils.planning_tools_mk2 import init_abstr_s, plan_section, plan_abstract
+from mdm.utils.planning_tools_mk2 import init_s_abstr, plan_section, plan_abstract
 from mdm.memory.trajectory_memory import TrajectoryMemory
+from mdm.utils.utils import load_yaml, fill_placeholders
 
 
 if __name__ == '__main__':
+    cfg = load_yaml(here() / 'model_mk2.yaml')
+    fill_placeholders(cfg)
+
     env = Gridworld.from_cleartext(here() / '../../mdm/gridworld/8x8_v0.mapdata')
-    mdl: MultiscaleDynamicsModelMK2 = torch.load(here() / 'model.ptmdl')
+    mdl: MultiscaleDynamicsModelMK2 = torch.load(here() / cfg['final_model_path'])
     mdl = mdl.to('cuda')
     planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, device=mdl.device)
     planner_abstr = CrossentropyPlanner(DistributionType.NORMAL, device=mdl.device)
 
     n_episodes = 10
     store_result_trajectories = False
-    pln_d_batch = 5000
-    pln_n_optim_steps_abstr = 30
-    pln_n_optim_steps_prim = 20
+    pln_d_batch = 2000
+    pln_n_optim_steps_abstr = 20
+    pln_n_optim_steps_prim = 10
     pln_winning_perc = 0.01
     pln_discount = 0.90
     pln_act_noise_abstr = 0.01
@@ -44,7 +50,7 @@ if __name__ == '__main__':
         s_mem.append(o)
 
         o_start = torch.from_numpy(o).to(mdl.device)
-        plan_init = init_abstr_s(model=mdl, planner=planner_prim, env=env, o_start=o_start, n_rollouts=pln_d_batch,
+        plan_init = init_s_abstr(model=mdl, planner=planner_prim, env=env, o_start=o_start, n_rollouts=pln_d_batch,
                                  n_evolution_steps=pln_n_optim_steps_abstr, winning_perc=pln_winning_perc,
                                  discount=pln_discount, act_noise=pln_act_noise_abstr)
 
@@ -59,7 +65,7 @@ if __name__ == '__main__':
         actions = plan_init['prim_a']
         for t in range(pln_n_abstract_steps):
             plan_detail = plan_section(model=mdl, planner=planner_prim, env=env, abstr_s=best_abstr_s[t],
-                                       abstr_a=plan_abstr['abstr_a'][t], abstr_s_next=best_abstr_s[t + 1],
+                                       abstr_s_next=best_abstr_s[t + 1],
                                        n_rollouts=pln_d_batch, n_evolution_steps=pln_n_optim_steps_prim,
                                        winning_perc=pln_winning_perc, discount=pln_discount,
                                        act_noise=pln_act_noise_prim)

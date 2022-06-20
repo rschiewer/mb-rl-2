@@ -6,7 +6,7 @@ import torch
 import numpy as np
 
 from mdm.gridworld.gridworld import Gridworld
-from mdm.utils.utils import here, load_yaml, prepare_data
+from mdm.utils.utils import here, load_yaml, prepare_data, fill_placeholders
 from mdm.models.building_blocks import RSSM, AbstractActionModel
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.training.dynamics_model_trainer import DynamicsModelTrainer
@@ -76,10 +76,7 @@ if __name__ == '__main__':
     #loader_train = ConcurrentDataLoader(get_batch_train, queue_len=3)
     #loader_test = ConcurrentDataLoader(get_batch_test, queue_len=1)
 
-    # insert abstract step size in final model path name
-    m = re.match('^.*(<abstract_step_size>).*$', cfg['final_model_path'])
-    if m:
-        cfg['final_model_path'] = cfg['final_model_path'].replace(m.group(1), str(cfg['mdm']['abstract_step_size']))
+    fill_placeholders(cfg)
 
     # train
     if os.environ.get('LOG_RUN', 0):
