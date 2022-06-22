@@ -352,9 +352,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             prim_current['s'] = self.primitive_model.zero_s(d_batch, self.device)
         else:
             prim_current['s'] = init_s
-        if init_rnn_state is None:
-            prim_current['rnn_state'] = self.primitive_model.zero_h(d_batch, self.device)
-        else:
+        if init_rnn_state is not None:
             prim_current['rnn_state'] = init_rnn_state
 
         if ctx_high_level is None:
@@ -407,9 +405,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             abstr_current['s'] = self.abstract_model.zero_s(d_batch, self.device)
         else:
             abstr_current['s'] = init_s
-        if init_rnn_state is None:
-            abstr_current['rnn_state'] = self.abstract_model.zero_h(d_batch, self.device)
-        else:
+        if init_rnn_state is not None:
             abstr_current['rnn_state'] = init_rnn_state
 
         if mem is None:
