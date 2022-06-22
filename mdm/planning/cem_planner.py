@@ -1,10 +1,13 @@
 from enum import Enum
-from typing import Callable, Union, Tuple, Optional, Dict, Iterable, Sequence
+from typing import Callable, Union, Tuple, List, Optional, Dict, Iterable, Sequence, TypeVar
 from functools import reduce
 from math import ceil
 
 import torch
 import numpy as np
+
+
+TensorData = TypeVar('TensorData', torch.Tensor, Tuple[torch.Tensor, ...], List[torch.Tensor])
 
 
 def compute_episode_returns(step_rewards: torch.Tensor, disc_mat: Union[None, torch.Tensor]):
@@ -46,9 +49,9 @@ class CrossentropyPlanner:
             self._build_dist = self._build_categorical
 
     def plan(self,
-             rollout_fn: Callable[[Dict[Sequence], torch.Tensor],
+             rollout_fn: Callable[[Dict[str, TensorData], torch.Tensor],
                                   Tuple[torch.Tensor, Union[torch.Tensor, None], Dict[str, torch.Tensor]]],
-             init_data: Dict[Sequence],
+             init_data: Dict[str, TensorData],
              d_dist: int,
              n_plan_steps: int,
              n_evolution_steps: int,
