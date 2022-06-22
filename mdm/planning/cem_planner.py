@@ -7,7 +7,7 @@ import torch
 import numpy as np
 
 
-TensorData = TypeVar('TensorData', torch.Tensor, Tuple[torch.Tensor, ...], List[torch.Tensor])
+from mdm.utils.torch_tools import TensorData
 
 
 def compute_episode_returns(step_rewards: torch.Tensor, disc_mat: Union[None, torch.Tensor]):

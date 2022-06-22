@@ -1,4 +1,4 @@
-from typing import Tuple, Union, Iterable, List, Sequence
+from typing import Tuple, Union, Iterable, List, Sequence, TypeVar
 from enum import Enum
 from collections import namedtuple
 from functools import reduce, wraps
@@ -8,6 +8,7 @@ import torch
 import torch.jit as jit
 
 
+TensorData = TypeVar('TensorData', torch.Tensor, Tuple[torch.Tensor, ...], List[torch.Tensor])
 _Placeholder = namedtuple('placeholder', 'device')
 
 
