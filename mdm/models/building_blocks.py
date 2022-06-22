@@ -1,10 +1,13 @@
-from typing import Tuple, Optional, Sequence, Union
+from typing import Tuple, Optional, Sequence, Union, TypeVar
 from enum import Enum
 
 import torch
 import haste_pytorch as haste
 
 from mdm.utils.torch_tools import FuzzyDeviceMixin, layers_with_activation, add_time_dim, remove_time_dim
+
+
+RnnStateType = TypeVar('RnnStateType', torch.Tensor, Tuple[torch.Tensor, torch.Tensor])
 
 
 class AbstractActionModel(torch.nn.Module):
@@ -114,7 +117,7 @@ class RSSM(torch.nn.Module):
                   a: torch.Tensor,
                   x_hat: torch.Tensor,
                   ctx_high_level: torch.Tensor,
-                  rnn_state: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]):
+                  rnn_state: RnnStateType):
         inp = torch.concat([s, a, x_hat, ctx_high_level], dim=-1)
         inp = add_time_dim(inp)
         x_det, new_h = self._rnn(inp, rnn_state)
@@ -136,46 +139,46 @@ class RSSM(torch.nn.Module):
 
     def zero_s(self,
                d_batch: int,
-               device: torch.device):
+               device: torch.device) -> torch.Tensor:
         return torch.zeros(d_batch, self.d_state, device=device)
 
     def zero_o(self,
                d_batch: int,
-               device: torch.device):
+               device: torch.device) -> torch.Tensor:
         return torch.zeros(d_batch, self.d_observation, device=device)
 
     def zero_a(self,
                d_batch: int,
-               device: torch.device):
+               device: torch.device) -> torch.Tensor:
         return torch.zeros(d_batch, self.d_action, device=device)
 
     def zero_r(self,
                d_batch: int,
-               device: torch.device):
+               device: torch.device) -> torch.Tensor:
         return torch.zeros(d_batch, self.d_reward, device=device)
 
     def zero_term(self,
                   d_batch: int,
-                  device: torch.device):
+                  device: torch.device) -> torch.Tensor:
         return torch.zeros(d_batch, 1, device=device)
 
     def zero_h(self,
                d_batch: int,
-               device: torch.device):
-        h = torch.zeros(self.n_hidden_layers, d_batch, self.d_hidden, device=device)
+               device: torch.device) -> RnnStateType:
+        rnn_state = torch.zeros(self.n_hidden_layers, d_batch, self.d_hidden, device=device)
         if self.rnn_type == 'lstm':
-            return h, h
+            return rnn_state, rnn_state
         else:
-            return h
+            return rnn_state
 
     def zero_x_post(self,
                     d_batch: int,
-                    device: torch.device):
+                    device: torch.device) -> torch.Tensor:
         return torch.zeros(d_batch, self.d_low_level_ctx, device=device)
 
     def zero_ctx_high_level(self,
                             d_batch: int,
-                            device: torch.device):
+                            device: torch.device) -> torch.Tensor:
         return torch.zeros(d_batch, self.d_high_level_ctx, device=device)
 
     def forward(self,
@@ -184,7 +187,7 @@ class RSSM(torch.nn.Module):
                 x_hat: torch.Tensor,  # o, r, term from last prediction step (since is only implicitly contained in s)
                 x_post_groundtruth: torch.Tensor,  # ground truth o, r, term for this prediction step for the posterior
                 ctx_high_level: torch.Tensor,  # abstr_s, abstr_h in primitive model
-                rnn_state: Tuple[torch.Tensor, torch.Tensor],  # memory from previous step
+                rnn_state: RnnStateType,  # from previous step
                 use_posterior: bool = True,
                 sample: bool = True):
         h, next_rnn_state = self._det_core(s, a, x_hat, ctx_high_level, rnn_state)
@@ -230,7 +233,7 @@ class RSSM(torch.nn.Module):
     def _build_o_dist(self,
                       h: torch.Tensor,
                       s_smpl: torch.Tensor,
-                      sample: bool = True):
+                      sample: bool = True) -> Tuple[torch.distributions.Normal, torch.Tensor]:
         inp = torch.concat([h, s_smpl], dim=-1)
         o_params = self._o_dist(inp)
         mu, sigma = torch.tensor_split(o_params, 2, dim=-1)
