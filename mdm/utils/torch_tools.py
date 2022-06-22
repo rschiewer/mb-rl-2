@@ -265,7 +265,7 @@ def layers_with_activation(lws: Sequence[int], activation: str = 'relu', layer_n
 def add_time_dim(*xs: torch.Tensor,
                  batch_first: bool = True):
     i_unsqueeze = 1 if batch_first else 0
-    unsqueezed = [x.unsqueeze(i_unsqueeze) for x in xs]
+    unsqueezed = [x.unsqueeze(i_unsqueeze) if x.ndim > 1 else x.unsqueeze(0) for x in xs]
     if len(unsqueezed) == 1:
         unsqueezed = unsqueezed[0]
     return unsqueezed
