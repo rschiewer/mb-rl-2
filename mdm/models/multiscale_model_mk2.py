@@ -199,6 +199,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         mem['prim_s'].append(pred['s'])
         mem['prim_s_prior'].append(pred['s_prior'])
         mem['prim_s_post'].append(pred['s_post'])
+        mem['prim_rnn_state'].append(pred['rnn_state'])
         mem['prim_o'].append(pred['o'])
         mem['prim_r'].append(pred['r'])
         mem['prim_term'].append(pred['term'])
@@ -229,13 +230,15 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         mem['abstr_s'].append(pred['s'])
         mem['abstr_s_prior'].append(pred['s_prior'])
         mem['abstr_s_post'].append(pred['s_post'])
+        mem['abstr_rnn_state'].append(pred['rnn_state'])
         mem['abstr_r'].append(pred['r'])
         mem['abstr_term'].append(pred['term'])
 
     @staticmethod
     def gen_mem():
         mem = { 'prim_o': [], 'prim_r': [], 'prim_term': [], 'prim_s_prior': [], 'prim_s_post': [], 'prim_s': [],
-                'abstr_s_prior': [], 'abstr_s_post': [], 'abstr_s': [], 'abstr_r': [], 'abstr_term': []}
+                'prim_rnn_state': [], 'abstr_r': [], 'abstr_term': [], 'abstr_s_prior': [], 'abstr_s_post': [],
+                'abstr_s': [], 'abstr_rnn_state': []}
         return mem
 
     @staticmethod
