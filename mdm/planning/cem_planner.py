@@ -49,30 +49,28 @@ class CrossentropyPlanner:
             self._build_dist = self._build_categorical
 
     def plan(self,
-             rollout_fn: Callable[[Dict[str, TensorData], torch.Tensor],
-                                  Tuple[torch.Tensor, Union[torch.Tensor, None], Dict[str, torch.Tensor]]],
-             init_data: Dict[str, TensorData],
+             rollout_fn: Callable[[torch.Tensor], Tuple[torch.Tensor, Optional[torch.Tensor], Dict[str, TensorData]]],
              d_dist: int,
+             n_rollouts: int,
              n_plan_steps: int,
              n_evolution_steps: int,
              winning_perc: float,
              discount: float,
              act_noise: float = 0,
              init_act_params: Union[torch.Tensor, np.ndarray] = None):
-        d_batch = len(next(iter(init_data.values())))  # d_batch equals number of rollouts
-        n_winners = ceil(d_batch * winning_perc)
-        act_dist_params = self._init_params(d_batch, n_plan_steps, d_dist, init_act_params)
+        n_winners = ceil(n_rollouts * winning_perc)
+        act_dist_params = self._init_params(n_rollouts, n_plan_steps, d_dist, init_act_params)
 
         if discount != 0:
             exponents = torch.arange(n_plan_steps, device=self.device)
-            disc_mat = torch.tile(torch.pow(discount, exponents), (d_batch, 1))
+            disc_mat = torch.tile(torch.pow(discount, exponents), (n_rollouts, 1))
         else:
             disc_mat = None
 
         actions, i_winners, rollout_data = None, None, None
         for i_ev in range(n_evolution_steps):
             actions = self._build_dist(act_dist_params).sample()
-            criterion, rollout_disc_mat, rollout_data = rollout_fn(init_data, actions)
+            criterion, rollout_disc_mat, rollout_data = rollout_fn(actions)
 
             if rollout_disc_mat is not None:
                 disc_mat = rollout_disc_mat
