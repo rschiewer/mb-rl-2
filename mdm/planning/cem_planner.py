@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Callable, Union, Tuple, Optional, Dict
+from typing import Callable, Union, Tuple, Optional, Dict, Iterable, Sequence
 from functools import reduce
 from math import ceil
 
@@ -46,9 +46,9 @@ class CrossentropyPlanner:
             self._build_dist = self._build_categorical
 
     def plan(self,
-             rollout_fn: Callable[[torch.Tensor, torch.Tensor],
+             rollout_fn: Callable[[Dict[Sequence], torch.Tensor],
                                   Tuple[torch.Tensor, Union[torch.Tensor, None], Dict[str, torch.Tensor]]],
-             start_states: torch.Tensor,
+             init_data: Dict[Sequence],
              d_dist: int,
              n_plan_steps: int,
              n_evolution_steps: int,
@@ -56,10 +56,7 @@ class CrossentropyPlanner:
              discount: float,
              act_noise: float = 0,
              init_act_params: Union[torch.Tensor, np.ndarray] = None):
-        #if start_states.device != self.device:
-        #    raise ValueError(f'Expected device for start_states is {self.device} but was {start_states.device}')
-
-        d_batch = len(start_states)  # d_batch equals number of rollouts
+        d_batch = len(next(iter(init_data.values())))  # d_batch equals number of rollouts
         n_winners = ceil(d_batch * winning_perc)
         act_dist_params = self._init_params(d_batch, n_plan_steps, d_dist, init_act_params)
 
@@ -72,7 +69,7 @@ class CrossentropyPlanner:
         actions, i_winners, rollout_data = None, None, None
         for i_ev in range(n_evolution_steps):
             actions = self._build_dist(act_dist_params).sample()
-            criterion, rollout_disc_mat, rollout_data = rollout_fn(start_states, actions)
+            criterion, rollout_disc_mat, rollout_data = rollout_fn(init_data, actions)
 
             if rollout_disc_mat is not None:
                 disc_mat = rollout_disc_mat
