@@ -1,6 +1,6 @@
 from typing import Dict, Optional
 
-from mdm.models.building_blocks import AbstractActionModel, RSSM
+from mdm.models.building_blocks import AbstractActionModel, RSSM, RnnStateType
 from mdm.utils.torch_tools import *
 from mdm.models.dynamics_model import DynamicsModel
 
@@ -161,7 +161,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
     # this method is more of a note on how to work with arbitrary model hierarchies
     def _invoke_model(self,
                       mdl: RSSM,
-                      mdl_current: dict,
+                      mdl_current: Dict,
                       ctx_low_level: torch.Tensor,
                       ctx_high_level: torch.Tensor):
         if ctx_low_level is None:
@@ -176,9 +176,9 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         return pred
 
     def _invoke_primitive_model(self,
-                                prim_current: dict,
+                                prim_current: Dict,
                                 x_post: torch.Tensor,
-                                mem: Optional[dict],
+                                mem: Optional[Dict],
                                 ctx_high_level: torch.Tensor,
                                 use_posterior: bool = True,
                                 sample: bool = True):
@@ -204,9 +204,9 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         mem['prim_term'].append(pred['term'])
 
     def _invoke_abstract_model(self,
-                               abstr_current: dict,
+                               abstr_current: Dict,
                                x_post: torch.Tensor,
-                               mem: dict,
+                               mem: Dict,
                                use_posterior: bool = True,
                                sample: bool = True):
         d_batch = abstr_current['a'].shape[0]
@@ -308,7 +308,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         # laziness ahead
         return True, ''
 
-    def filter_rnn_h(self, h: Tuple[torch.Tensor, torch.Tensor]):
+    def filter_rnn_h(self, h: RnnStateType):
         #if self.primitive_model.rnn_type == 'lstm' and self.abstract_model.rnn_type == self.primitive_model.rnn_type:
         #    h = torch.concat(h, dim=0)  # concat h and c tensors of LSTM along the layer dimension, this is arbitrary
         #h = torch.transpose(h, 0, 1)  # bring batch dimension to front
@@ -318,8 +318,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             h = h[0]
         return h[-1]
 
-    def fuse_state(self, s: torch.Tensor, h: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]):
-        h_filtered = self.filter_rnn_h(h)
+    def fuse_state(self, s: torch.Tensor, rnn_state: RnnStateType):
+        h_filtered = self.filter_rnn_h(rnn_state)
         fused = torch.concat([s, h_filtered], dim=-1)
         return fused
 
@@ -329,12 +329,12 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                           init_r: Optional[torch.Tensor],
                           init_term: Optional[torch.Tensor],
                           init_s: Optional[torch.Tensor],
-                          init_rnn_state: Optional[Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]],
+                          init_rnn_state: Optional[RnnStateType],
                           ctx_high_level: Optional[torch.Tensor],
                           o_target: Optional[torch.Tensor],
                           r_target: Optional[torch.Tensor],
                           term_target: Optional[torch.Tensor],
-                          mem: Optional[dict],
+                          mem: Optional[Dict],
                           use_posterior: bool = True,
                           sample: bool = True):
         d_batch, n_steps = a.shape[:2]
@@ -385,11 +385,11 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                          init_r: Optional[torch.Tensor],
                          init_term: Optional[torch.Tensor],
                          init_s: Optional[torch.Tensor],
-                         init_rnn_state: Optional[Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]],
+                         init_rnn_state: Optional[RnnStateType],
                          ctx_low_level: Optional[torch.Tensor],
                          r_target: Optional[torch.Tensor],
                          term_target: Optional[torch.Tensor],
-                         mem: Optional[dict],
+                         mem: Optional[Dict],
                          use_posterior: bool = True,
                          sample: bool = True):
         d_batch, n_steps = a.shape[:2]
