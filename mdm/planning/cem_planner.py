@@ -10,7 +10,8 @@ import numpy as np
 from mdm.utils.torch_tools import TensorData
 
 
-def compute_episode_returns(step_rewards: torch.Tensor, disc_mat: Union[None, torch.Tensor]):
+def compute_episode_returns(step_rewards: torch.Tensor,
+                            disc_mat: Union[None, torch.Tensor]):
     # in case of multi-dim rewards, sum reward dimension to one scalar
     if step_rewards.ndim > 2 and step_rewards.shape[-1] > 1:
         step_rewards = step_rewards.sum(dim=(-1), keepdim=True)
@@ -22,6 +23,15 @@ def compute_episode_returns(step_rewards: torch.Tensor, disc_mat: Union[None, to
     else:
         discounted_returns = torch.sum(step_rewards * disc_mat, dim=1)
     return discounted_returns
+
+
+def process_terminal_flag_mat(terminal_flags: torch.Tensor,
+                              disc_mat: torch.Tensor):
+    # shift terminal flags matrix one to the right to not zero out final reward
+    terminal_flags = torch.roll(terminal_flags, shifts=1, dims=1)
+    terminal_flags[:, 0] = 0
+    disc_mat = (1 - terminal_flags) * disc_mat
+    return disc_mat
 
 
 class DistributionType(Enum):
@@ -61,8 +71,8 @@ class CrossentropyPlanner:
         n_winners = ceil(n_rollouts * winning_perc)
         act_dist_params = self._init_params(n_rollouts, n_plan_steps, d_dist, init_act_params)
 
+        exponents = torch.arange(n_plan_steps, device=self.device)
         if discount != 0:
-            exponents = torch.arange(n_plan_steps, device=self.device)
             disc_mat = torch.tile(torch.pow(discount, exponents), (n_rollouts, 1))
         else:
             disc_mat = None
@@ -70,10 +80,10 @@ class CrossentropyPlanner:
         actions, i_winners, rollout_data = None, None, None
         for i_ev in range(n_evolution_steps):
             actions = self._build_dist(act_dist_params).sample()
-            criterion, rollout_disc_mat, rollout_data = rollout_fn(actions)
+            criterion, terminal_flag_mat, rollout_data = rollout_fn(actions)
 
-            if rollout_disc_mat is not None:
-                disc_mat = rollout_disc_mat
+            if terminal_flag_mat is not None:
+                disc_mat = process_terminal_flag_mat(terminal_flag_mat, disc_mat)
             disc_ret = compute_episode_returns(criterion, disc_mat)
             disc_ret_sorted = torch.sort(disc_ret, dim=0, descending=True)
 
@@ -94,8 +104,7 @@ class CrossentropyPlanner:
                      n_time_steps: int,
                      d_dist: int):
         mu = 2 * torch.rand(d_batch, n_time_steps, d_dist, device=self.device) - 1
-        sigma = torch.maximum(torch.rand(d_batch, n_time_steps, d_dist, device=self.device),
-                              torch.tensor(0.25, device=self.device))
+        sigma = torch.rand(d_batch, n_time_steps, d_dist, device=self.device) + 0.01
         return torch.stack([mu, sigma], dim=0)
 
     def _build_normal(self,
@@ -112,10 +121,13 @@ class CrossentropyPlanner:
         noise = torch.tensor(noise, device=self.device)
         n_batch = dist_params.shape[1]
         n_winners = winner_actions.shape[0]
+        lower_bound = torch.tensor(0.01, device=actions.device)
 
         # compute prototype mu and sigma
         mu_ml = winner_actions.mean(dim=0)
-        sigma_ml = torch.sqrt(torch.mean((winner_actions - mu_ml.unsqueeze(0)) ** 2, dim=0))
+        sigma_ml = torch.sqrt(torch.mean((winner_actions - mu_ml.unsqueeze(0)) ** 2, dim=0)) + 0.001
+        #sigma_ml = winner_actions.var(dim=0, unbiased=False)
+        #sigma_ml = torch.where(sigma_ml == 0, sigma_ml + lower_bound, sigma_ml)
 
         # just copy prototype values along batch axis
         mu_ml = torch.tile(mu_ml, dims=(n_batch, 1, 1))
@@ -124,7 +136,7 @@ class CrossentropyPlanner:
         # add noise to diversify
         mu_ml_noise = mu_ml + (2 * torch.rand_like(mu_ml, device=self.device) - 1) * noise
         sigma_ml_noise = sigma_ml + (2 * torch.rand_like(sigma_ml, device=self.device) - 1) * noise
-        sigma_ml_noise = torch.where(sigma_ml_noise <= 0, sigma_ml, sigma_ml_noise)  # don't accidentally make sigma < 0
+        sigma_ml_noise = torch.where(sigma_ml_noise <= lower_bound, lower_bound, sigma_ml_noise)  # don't accidentally make sigma < 0
 
         return torch.stack([mu_ml_noise, sigma_ml_noise], dim=0)
 
