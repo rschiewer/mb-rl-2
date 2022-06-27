@@ -77,7 +77,7 @@ class CrossentropyPlanner:
         else:
             disc_mat = None
 
-        actions, i_winners, rollout_data = None, None, None
+        actions, i_winners, R_winners, rollout_data = None, None, None, None
         for i_ev in range(n_evolution_steps):
             actions = self._build_dist(act_dist_params).sample()
             criterion, terminal_flag_mat, rollout_data = rollout_fn(actions)
@@ -97,7 +97,7 @@ class CrossentropyPlanner:
 
         #print(disc_ret_sorted.values[:n_winners])
 
-        return actions, self._build_dist(act_dist_params), i_winners.tolist(), rollout_data
+        return actions, self._build_dist(act_dist_params), i_winners.tolist(), R_winners.tolist(), rollout_data
 
     def _init_normal(self,
                      d_batch: int,

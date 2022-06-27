@@ -35,12 +35,12 @@ class CrossentropyMethodPlanner(unittest.TestCase):
                 rewards[:, t] = torch.where(actions[:, t] == ground_truth_best_a[t], r_good, r_bad)
             return rewards, None, {}
 
-        actions, dist, i_winners, rollout_data = ce_planner.plan(rollout_fn=rollout_fn, d_dist=n_action,
-                                                                 n_rollouts=d_batch,
-                                                                 n_plan_steps=n_plan_steps,
-                                                                 n_evolution_steps=n_opt_steps,
-                                                                 winning_perc=winning_perc,
-                                                                 discount=discount, act_noise=act_noise)
+        actions, dist, i_winners, R_winners, rollout_data = ce_planner.plan(rollout_fn=rollout_fn, d_dist=n_action,
+                                                                            n_rollouts=d_batch,
+                                                                            n_plan_steps=n_plan_steps,
+                                                                            n_evolution_steps=n_opt_steps,
+                                                                            winning_perc=winning_perc,
+                                                                            discount=discount, act_noise=act_noise)
 
         champion_a = actions[i_winners[0]]
         champion_dist_mode = torch.argmax(dist.probs[i_winners[0]], dim=-1)
@@ -67,7 +67,7 @@ class CrossentropyMethodPlanner(unittest.TestCase):
             rewards = - torch.mean(torch.abs(actions - ground_truth_best_a.unsqueeze(0) ** 2), dim=2)
             return rewards, None, {}
 
-        actions, dist,i_winners, rollout_data = ce_planner.plan(rollout_fn=rollout_fn,
+        actions, dist,i_winners, R_winners, rollout_data = ce_planner.plan(rollout_fn=rollout_fn,
                                                                 n_rollouts=d_batch,
                                                                 d_dist=n_action, n_plan_steps=n_plan_steps,
                                                                 n_evolution_steps=n_opt_steps, winning_perc=winning_perc,
@@ -106,7 +106,7 @@ class CrossentropyMethodPlanner(unittest.TestCase):
             #terminal_flags = None
             return rewards, terminal_flags, {}
 
-        actions, dist, i_winners, rollout_data = ce_planner.plan(rollout_fn=rollout_fn,
+        actions, dist, i_winners, R_winners, rollout_data = ce_planner.plan(rollout_fn=rollout_fn,
                                                                  d_dist=batched_envs[0].action_space.n,
                                                                  n_rollouts=d_batch,
                                                                  n_plan_steps=n_plan_steps,
