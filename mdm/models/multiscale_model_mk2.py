@@ -66,13 +66,19 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         init_term_abstr = add_time_dim(self.abstract_model.zero_term(d_batch, self.device))
 
         # exclude first step trajectory data because it's never a prediction target
-        o = o[:, 1:]
-        r = r[:, 1:]
-        term = term[:, 1:]
+        o_target = o[:, 1:]
+        r_target = r[:, 1:]
+        term_target = term[:, 1:]
 
         for i_chunk in range(a_binned.shape[1]):
+            use_posterior_prim = True#torch.rand((1,)) > 0.5
+            use_posterior_abstr = True#torch.rand((1,)) > 0.5
+
             i_start = i_chunk * self.abstract_step_size
             i_end = min((i_chunk + 1) * self.abstract_step_size, n_steps_prim)
+
+            # zero out primitive model's information from past chunk
+            prim_current = self.primitive_model.gen_init_values(d_batch, self.device)
 
             # primitive model rollout
             ctx_high_level = self.fuse_state(abstr_current['s'], abstr_current['rnn_state'])
@@ -80,14 +86,19 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                                                        init_term=init_term, init_s=prim_current['s'],
                                                        init_rnn_state=prim_current['rnn_state'],
                                                        ctx_high_level=ctx_high_level,
-                                                       o_target=o[:, i_start: i_end], r_target=r[:, i_start: i_end],
-                                                       term_target=term[:, i_start: i_end],
-                                                       mem=mem, use_posterior=True, sample=True)
+                                                       o_target=o_target[:, i_start: i_end],
+                                                       r_target=r_target[:, i_start: i_end],
+                                                       term_target=term_target[:, i_start: i_end],
+                                                       mem=mem, use_posterior=use_posterior_prim, sample=True)
             # update init data for next chunk
-            init_o = add_time_dim(prim_current['o'])
-            init_r = add_time_dim(prim_current['r'])
-            init_term = add_time_dim(prim_current['term'])
+            #init_o = add_time_dim(prim_current['o'])
+            #init_r = add_time_dim(prim_current['r'])
+            #init_term = add_time_dim(prim_current['term'])
+            init_o = None
+            init_r = None
+            init_term = None
 
+            # input to abstr act mdl needs to be always of same length, so take a_binned instead of a[i_start: i_end]
             a_abstr = add_time_dim(self.abstract_action_model(a_binned[:, i_chunk]))
             x_posterior = add_time_dim(self.fuse_state(prim_current['s'], prim_current['rnn_state']))
             mem, abstr_current = self.rollout_abstract(a=a_abstr, init_r=init_r_abstr, init_term=init_term_abstr,
@@ -96,7 +107,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                                                        ctx_low_level=x_posterior,
                                                        r_target=add_time_dim(abstr_r[:, i_chunk]),
                                                        term_target=add_time_dim(abstr_term[:, i_chunk]),
-                                                       mem=mem, use_posterior=True, sample=True)
+                                                       mem=mem, use_posterior=use_posterior_abstr, sample=True)
 
         mem = self.pack_mem(mem)
         mem['prim_rnn_state'] = prim_current['rnn_state']
@@ -198,7 +209,10 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         # store things
         mem['prim_s'].append(pred['s'])
         mem['prim_s_prior'].append(pred['s_prior'])
-        mem['prim_s_post'].append(pred['s_post'])
+        if use_posterior:
+            mem['prim_s_post'].append(pred['s_post'])
+        else:  # hack for loss calculation
+            mem['prim_s_post'].append(pred['s_prior'])
         mem['prim_rnn_state'].append(pred['rnn_state'])
         mem['prim_o'].append(pred['o'])
         mem['prim_r'].append(pred['r'])
@@ -229,7 +243,10 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         # store things
         mem['abstr_s'].append(pred['s'])
         mem['abstr_s_prior'].append(pred['s_prior'])
-        mem['abstr_s_post'].append(pred['s_post'])
+        if use_posterior:
+            mem['abstr_s_post'].append(pred['s_post'])
+        else:  # hack for loss calculation
+            mem['abstr_s_post'].append(pred['s_prior'])
         mem['abstr_rnn_state'].append(pred['rnn_state'])
         mem['abstr_r'].append(pred['r'])
         mem['abstr_term'].append(pred['term'])
@@ -404,9 +421,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         if init_term is None:
             init_term = add_time_dim(self.abstract_model.zero_term(d_batch, self.device))
 
-        if init_s is None:
-            abstr_current['s'] = self.abstract_model.zero_s(d_batch, self.device)
-        else:
+        if init_s is not None:
             abstr_current['s'] = init_s
         if init_rnn_state is not None:
             abstr_current['rnn_state'] = init_rnn_state
