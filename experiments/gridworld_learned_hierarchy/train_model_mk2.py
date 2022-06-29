@@ -81,7 +81,7 @@ if __name__ == '__main__':
     if os.environ.get('LOG_RUN', 0):
         logger = NeptuneLogger(neptune_cfg['PROJECT_NAME'], api_token=neptune_cfg['NEPTUNE_API_TOKEN'])
         logger.setup()
-        logger.log(cfg, Scope.PARAMETERS())
+        logger.log(cfg, Scope.HYPERPARAMETERS())
     else:
         logger = None
 
