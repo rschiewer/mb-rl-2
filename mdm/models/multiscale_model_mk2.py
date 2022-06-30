@@ -1,5 +1,7 @@
 from typing import Dict, Optional
 
+import torch
+
 from mdm.models.building_blocks import AbstractActionModel, RSSM, RnnStateType
 from mdm.utils.torch_tools import *
 from mdm.models.dynamics_model import DynamicsModel
@@ -109,6 +111,10 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                                                        term_target=add_time_dim(abstr_term[:, i_chunk]),
                                                        mem=mem, use_posterior=use_posterior_abstr, sample=True)
 
+            # update init data for next chunk
+            init_r_abstr = add_time_dim(abstr_current['r'])
+            init_term_abstr = add_time_dim(abstr_current['term'])
+
         mem = self.pack_mem(mem)
         mem['prim_rnn_state'] = prim_current['rnn_state']
         mem['abstr_rnn_state'] = abstr_current['rnn_state']
@@ -194,6 +200,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                                 use_posterior: bool = True,
                                 sample: bool = True):
         x_hat = torch.concat([prim_current['o'], prim_current['r'], prim_current['term']], dim=-1)
+        #x_hat = torch.zeros_like(x_hat)
 
         # do prediction
         pred = self.primitive_model(s=prim_current['s'], a=prim_current['a'], x_hat=x_hat, x_post_groundtruth=x_post,
@@ -229,6 +236,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
         ctx_high_level = self.abstract_model.zero_ctx_high_level(d_batch, device)
         x_hat = torch.concat([abstr_current['r'], abstr_current['term']], dim=-1)
+        #x_hat = torch.zeros_like(x_hat)
 
         # do prediction
         pred = self.abstract_model(s=abstr_current['s'], a=abstr_current['a'], x_hat=x_hat,
