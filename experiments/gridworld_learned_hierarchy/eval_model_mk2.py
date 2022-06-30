@@ -97,14 +97,16 @@ if __name__ == '__main__':
         # assemble macro trajectory out of initial data and rollout results
         best_abstr_s = torch.concat([add_time_dim(plan_init['abstr_s']), plan_abstr['abstr_s']], dim=0)
         best_abstr_rnn_state = [plan_init['abstr_rnn_state']] + plan_abstr['abstr_rnn_state']
+        best_abstr_r = torch.concat([add_time_dim(plan_init['abstr_r']), plan_abstr['abstr_r']], dim=0)
+        best_abstr_term = torch.concat([add_time_dim(plan_init['abstr_term']), plan_abstr['abstr_term']], dim=0)
 
         actions = plan_init['prim_a']
         for t in range(pln_n_abstract_steps):
             plan_detail = plan_section(model=mdl, planner=planner_prim, env=env, abstr_s=best_abstr_s[t],
                                        abstr_rnn_state=best_abstr_rnn_state[t], abstr_s_next=best_abstr_s[t + 1],
+                                       abstr_r=best_abstr_r[t], abstr_term=best_abstr_term[t],
                                        n_rollouts=pln_d_batch, n_evolution_steps=pln_n_optim_steps_prim,
-                                       winning_perc=pln_winning_perc, discount=pln_discount,
-                                       act_noise=pln_act_noise_prim)
+                                       winning_perc=pln_winning_perc, act_noise=pln_act_noise_prim)
             actions = torch.concat([actions, plan_detail['prim_a']], dim=0)
 
         action_iter = iter(actions.detach().cpu().numpy().argmax(axis=-1))

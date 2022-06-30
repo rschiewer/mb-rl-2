@@ -137,16 +137,19 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
                  env: gym.Env,
                  abstr_s: torch.Tensor,
                  abstr_rnn_state: RnnStateType,
+                 abstr_r: torch.Tensor,
+                 abstr_term: torch.Tensor,
                  abstr_s_next: torch.Tensor,
                  n_rollouts: int,
                  n_evolution_steps: int,
                  winning_perc: float,
-                 discount: float,
                  act_noise: float):
     abstr_s = broadcast_to_batch(abstr_s, n_rollouts)
     abstr_rnn_state = broadcast_rnn_state_to_batch(abstr_rnn_state, model.abstract_model.rnn_type, n_rollouts)
-    ctx_high_level = model.fuse_state(abstr_s, abstr_rnn_state)
+    abstr_r = add_time_dim(broadcast_to_batch(abstr_r, n_rollouts))
+    abstr_term = add_time_dim(broadcast_to_batch(abstr_term, n_rollouts))
     abstr_s_next = broadcast_to_batch(abstr_s_next, n_rollouts)
+    ctx_high_level = model.fuse_state(abstr_s, abstr_rnn_state)
 
     def _rollout_detailed_fn(a_: torch.Tensor):
         a_ = to_onehot(a_, n_classes=model.d_action)
@@ -155,15 +158,14 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
                                                     ctx_high_level=ctx_high_level, o_target=None, r_target=None,
                                                     term_target=None, mem=None, use_posterior=False, sample=False)
         mem_ = model.pack_mem(mem_)
-        a_abstr = add_time_dim(model.abstract_action_model(a_))
-        r_target = mem_['prim_r'].sum(dim=1, keepdim=True)
-        term_target = mem_['prim_term'].max(dim=1, keepdim=True).values
-        ctx_low_level = add_time_dim(model.fuse_state(prim_final_['s'], prim_final_['rnn_state']))
-        # TODO: provide init_r and init_term!
-        mem_, abstr_current_ = model.rollout_abstract(a=a_abstr, init_r=None, init_term=None, init_s=abstr_s,
-                                                      init_rnn_state=abstr_rnn_state, ctx_low_level=ctx_low_level,
-                                                      r_target=r_target, term_target=term_target, mem=None,
-                                                      use_posterior=True, sample=False)
+        abstr_a_ = add_time_dim(model.abstract_action_model(a_))
+        abstr_r_target_ = mem_['prim_r'].sum(dim=1, keepdim=True)
+        abstr_term_target_ = mem_['prim_term'].max(dim=1, keepdim=True).values
+        ctx_low_level_ = add_time_dim(model.fuse_state(prim_final_['s'], prim_final_['rnn_state']))
+        mem_, abstr_current_ = model.rollout_abstract(a=abstr_a_, init_r=abstr_r, init_term=abstr_term, init_s=abstr_s,
+                                                      init_rnn_state=abstr_rnn_state, ctx_low_level=ctx_low_level_,
+                                                      r_target=abstr_r_target_, term_target=abstr_term_target_,
+                                                      mem=None, use_posterior=True, sample=False)
         overlap = - torch.sum(torch.abs(abstr_s_next - abstr_current_['s']) ** 2, dim=1)
         mem_ = model.pack_mem(mem_)
         return overlap, None, mem_
