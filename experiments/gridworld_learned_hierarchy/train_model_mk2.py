@@ -90,5 +90,12 @@ if __name__ == '__main__':
     trainer.train(n_train_steps=cfg['trainer']['n_train_steps'], progress_bar=True,
                   checkpoint_path=here() / cfg['checkpoint_path'])
 
-    model_path = f'{cfg["final_model_path"]}_{cfg["mdm"]["abstract_step_size"]}.ptmdl'
+    if logger:
+        model_path = f'{cfg["final_model_path"]}_{logger.run_id}.ptmdl'
+    else:
+        model_path = f'{cfg["final_model_path"]}.ptmdl'
+
     torch.save(model, Path(__file__).parent / model_path)
+
+    if logger:
+        print(logger.run_id)
