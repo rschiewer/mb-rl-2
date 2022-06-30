@@ -1,6 +1,6 @@
 from pathlib import Path
 import os
-import re
+import argparse
 
 import torch
 import numpy as np
@@ -17,6 +17,10 @@ from mdm.logging.logger import Scope
 from mdm.training.data_loader import ConcurrentDataLoader
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-log', default=False, action='store_true')
+    args = parser.parse_args()
+
     cfg = load_yaml(here() / 'model_mk2.yaml')
     env = Gridworld.from_cleartext(here() / cfg['env'])
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
@@ -78,7 +82,7 @@ if __name__ == '__main__':
     model_path = f'{cfg["final_model_path"]}_{cfg["mdm"]["abstract_step_size"]}.ptmdl'
 
     # train
-    if os.environ.get('LOG_RUN', 0):
+    if args.log:
         logger = NeptuneLogger(neptune_cfg['PROJECT_NAME'], api_token=neptune_cfg['NEPTUNE_API_TOKEN'])
         logger.setup()
         logger.log(cfg, Scope.HYPERPARAMETERS())
