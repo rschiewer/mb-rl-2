@@ -14,11 +14,12 @@ class NeptuneLogger(Logger):
     def __init__(self,
                  project: str,
                  run_handler: Run = None,
+                 run_id: str = None,
                  api_token: str = None):
         self._project = project
         self._run = run_handler
         self._token = api_token
-        self._run_id = None
+        self._run_id = run_id
 
     @property
     def project(self):
@@ -47,8 +48,11 @@ class NeptuneLogger(Logger):
 
     def setup(self):
         if not self._run:
-            self._run = neptune.init(project=self._project, api_token=self.token)
-            self._run_id = self._run['sys/id'].fetch()
+            if self._run_id:
+                self._run = neptune.init(project=self._project, run=self._run_id, api_token=self.token)
+            else:
+                self._run = neptune.init(project=self._project, api_token=self.token)
+                self._run_id = self._run['sys/id'].fetch()
 
     def teardown(self):
         if self._run:
