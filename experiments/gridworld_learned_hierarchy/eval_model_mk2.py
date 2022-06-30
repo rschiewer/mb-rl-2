@@ -1,38 +1,68 @@
-import re
+import argparse
 
 import torch
 import numpy as np
 from tqdm import tqdm
 
+
 from mdm.gridworld.gridworld import Gridworld
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.planning.cem_planner import CrossentropyPlanner, DistributionType
-from mdm.utils.utils import here, gen_macro_state_map, infer_position, transform_macro_s_init_history, gen_video
+from mdm.utils.utils import (here, load_yaml, gen_macro_state_map, infer_position, transform_macro_s_init_history,
+                             gen_video)
 from mdm.utils.planning_tools_mk2 import init_s_abstr, plan_section, plan_abstract
+from mdm.utils.torch_tools import add_time_dim
 from mdm.memory.trajectory_memory import TrajectoryMemory
-from mdm.utils.utils import load_yaml, fill_placeholders
+from mdm.logging.neptune_logger import NeptuneLogger
+from mdm.logging.logger import Scope
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Provide neptune run_id for loading the correct model')
+    parser.add_argument('id', type=str, nargs=1)
+    parser.add_argument('-render', action='store_true')
+    parser.add_argument('-log', action='store_true')
+    args = parser.parse_args()
+
     cfg = load_yaml(here() / 'model_mk2.yaml')
-    model_path = f'{cfg["final_model_path"]}_{cfg["mdm"]["abstract_step_size"]}.ptmdl'
+    neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
+
+    if len(args.id) == 0:
+        model_path = f'{cfg["final_model_path"]}.ptmdl'
+    else:
+        model_path = f'{cfg["final_model_path"]}_{args.id[0]}.ptmdl'
 
     env = Gridworld.from_cleartext(here() / '../../mdm/gridworld/8x8_v0.mapdata')
     mdl: MultiscaleDynamicsModelMK2 = torch.load(here() / model_path)
     mdl = mdl.to('cuda')
-    planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, device=mdl.device)
-    planner_abstr = CrossentropyPlanner(DistributionType.NORMAL, device=mdl.device)
+
+    if args.log:
+        logger = NeptuneLogger(neptune_cfg['PROJECT_NAME'], api_token=neptune_cfg['NEPTUNE_API_TOKEN'],
+                               run_id=args.id[0])
+        logger.setup()
+    else:
+        logger = None
 
     n_episodes = 10
     store_result_trajectories = False
-    pln_d_batch = 2000
-    pln_n_optim_steps_abstr = 20
-    pln_n_optim_steps_prim = 10
-    pln_winning_perc = 0.01
-    pln_discount = 0.90
-    pln_act_noise_abstr = 0.01
+    pln_d_batch = 1024
+    pln_n_optim_steps_abstr = 10
+    pln_n_optim_steps_prim = 20
+    pln_winning_perc = 0.25
+    pln_discount = 0.95
+    pln_act_noise_abstr = 0.001
     pln_act_noise_prim = 0.001
-    pln_n_abstract_steps = 100
+    pln_n_abstract_steps = 1
+
+    if logger:
+        logger.log({'pln_d_batch': pln_d_batch,
+                    'pln_n_optim_steps_abstr': 10,
+                    'pln_n_optim_steps_prim': 20,
+                    'pln_winning_perc': 0.25,
+                    'pln_discount': 0.95,
+                    'pln_act_noise_abstr': 0.001,
+                    'pln_act_noise_prim': 0.001,
+                    'pln_n_abstract_steps': 1}, Scope.HYPERPARAMETERS() / 'plan')
 
     #macro_s_init_mean, macro_s_init_std, macro_s_init_per_state_per_action = gen_macro_state_map(env, mdl, 3)
     #macro_ss_list, loc_list, act_seq_list = transform_macro_s_init_history(macro_s_init_per_state_per_action)
@@ -44,43 +74,48 @@ if __name__ == '__main__':
     n_steps = []
     action_stats = np.zeros(env.action_space.n)
     for i_ep in tqdm(range(n_episodes)):
+        planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, device=mdl.device)
+        planner_abstr = CrossentropyPlanner(DistributionType.NORMAL, device=mdl.device)
         s_mem, a_mem, r_mem, term_mem = [], [], [], []
 
         o = env.reset()
         s_mem.append(o)
 
         o_start = torch.from_numpy(o).to(mdl.device)
-        plan_init = init_s_abstr(model=mdl, planner=planner_prim, env=env, o_start=o_start, n_rollouts=pln_d_batch,
-                                 n_evolution_steps=pln_n_optim_steps_abstr, winning_perc=pln_winning_perc,
-                                 discount=pln_discount, act_noise=pln_act_noise_abstr)
+        plan_init = init_s_abstr(model=mdl, planner=planner_prim, env=env, o_start=o_start,
+                                 n_rollouts=pln_d_batch, n_evolution_steps=pln_n_optim_steps_abstr,
+                                 winning_perc=pln_winning_perc, discount=pln_discount,
+                                 act_noise=pln_act_noise_abstr)
 
         plan_abstr = plan_abstract(model=mdl, planner=planner_abstr, abstr_s_start=plan_init['abstr_s'],
-                                   abstr_s_start_dist=plan_init['abstr_s_post'],
+                                   abstr_rnn_state_start=plan_init['abstr_rnn_state'],
+                                   abstr_r_start=plan_init['abstr_r'], abstr_term_start=plan_init['abstr_term'],
                                    n_plan_steps=pln_n_abstract_steps, n_rollouts=pln_d_batch,
                                    n_evolution_steps=pln_n_optim_steps_abstr, winning_perc=pln_winning_perc,
                                    discount=pln_discount, act_noise=pln_act_noise_abstr)
         # assemble macro trajectory out of initial data and rollout results
-        best_abstr_s = torch.concat([plan_init['abstr_s'], plan_abstr['abstr_s']], dim=0)
+        best_abstr_s = torch.concat([add_time_dim(plan_init['abstr_s']), plan_abstr['abstr_s']], dim=0)
+        best_abstr_rnn_state = [plan_init['abstr_rnn_state']] + plan_abstr['abstr_rnn_state']
 
         actions = plan_init['prim_a']
         for t in range(pln_n_abstract_steps):
             plan_detail = plan_section(model=mdl, planner=planner_prim, env=env, abstr_s=best_abstr_s[t],
-                                       abstr_s_next=best_abstr_s[t + 1],
+                                       abstr_rnn_state=best_abstr_rnn_state[t], abstr_s_next=best_abstr_s[t + 1],
                                        n_rollouts=pln_d_batch, n_evolution_steps=pln_n_optim_steps_prim,
                                        winning_perc=pln_winning_perc, discount=pln_discount,
                                        act_noise=pln_act_noise_prim)
             actions = torch.concat([actions, plan_detail['prim_a']], dim=0)
 
-        action_iter = iter(actions.detach().cpu().numpy())
+        action_iter = iter(actions.detach().cpu().numpy().argmax(axis=-1))
         terminal = False
 
         i_step = 0
         while not terminal:
-            env.render()
+            if args.render:
+                env.render()
             i_step += 1
             try:
-                a_one_hot = next(action_iter)
-                a = np.argmax(a_one_hot, axis=-1)
+                a = next(action_iter)
                 s_, r, terminal, info = env.step(a)
 
                 s_mem.append(s_)
@@ -111,3 +146,9 @@ if __name__ == '__main__':
     print(succeeded/n_episodes)
     print(n_steps)
     print(action_stats)
+
+    if logger:
+        logger.log({'success_rate': succeeded/n_episodes,
+                    'n_steps': n_steps,
+                    'action_stats': action_stats}, Scope.TEST())
+        logger.teardown()
