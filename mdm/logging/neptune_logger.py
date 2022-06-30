@@ -3,7 +3,7 @@ import os
 
 import neptune.new as neptune
 from matplotlib.figure import Figure
-from neptune.new.run import Run
+from neptune.new.run import Run, InactiveRunException
 import numpy as np
 
 from mdm.logging.logger import Logger, Scope
@@ -13,11 +13,12 @@ class NeptuneLogger(Logger):
 
     def __init__(self,
                  project: str,
-                 run: Run = None,
+                 run_handler: Run = None,
                  api_token: str = None):
         self._project = project
-        self._run = run
+        self._run = run_handler
         self._token = api_token
+        self._run_id = None
 
     @property
     def project(self):
@@ -29,6 +30,10 @@ class NeptuneLogger(Logger):
         if self._run:
             raise ValueError('Can\'t change project during an active run')
         self._project = new_project
+
+    @property
+    def run_id(self):
+        return self._run_id
 
     @property
     def token(self):
@@ -43,6 +48,7 @@ class NeptuneLogger(Logger):
     def setup(self):
         if not self._run:
             self._run = neptune.init(project=self._project, api_token=self.token)
+            self._run_id = self._run['sys/id'].fetch()
 
     def teardown(self):
         if self._run:
