@@ -57,13 +57,13 @@ if __name__ == '__main__':
 
     if logger:
         logger.log({'pln_d_batch': pln_d_batch,
-                    'pln_n_optim_steps_abstr': 10,
-                    'pln_n_optim_steps_prim': 20,
-                    'pln_winning_perc': 0.25,
-                    'pln_discount': 0.95,
-                    'pln_act_noise_abstr': 0.001,
-                    'pln_act_noise_prim': 0.001,
-                    'pln_n_abstract_steps': 1}, Scope.HYPERPARAMETERS() / 'plan')
+                    'pln_n_optim_steps_abstr': pln_n_optim_steps_abstr,
+                    'pln_n_optim_steps_prim': pln_n_optim_steps_prim,
+                    'pln_winning_perc': pln_winning_perc,
+                    'pln_discount': pln_discount,
+                    'pln_act_noise_abstr': pln_act_noise_abstr,
+                    'pln_act_noise_prim': pln_act_noise_prim,
+                    'pln_n_abstract_steps': pln_n_abstract_steps}, Scope.HYPERPARAMETERS() / 'plan')
 
     #macro_s_init_mean, macro_s_init_std, macro_s_init_per_state_per_action = gen_macro_state_map(env, mdl, 3)
     #macro_ss_list, loc_list, act_seq_list = transform_macro_s_init_history(macro_s_init_per_state_per_action)
