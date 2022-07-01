@@ -1,3 +1,4 @@
+import argparse
 from itertools import product
 from math import ceil
 
@@ -8,54 +9,66 @@ import matplotlib.pyplot as plt
 import seaborn as sns; sns.set_theme()
 
 from mdm.gridworld.gridworld import Gridworld, CellType
-from mdm.models.multiscale_model import MultiscaleDynamicsModel
+from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.memory.trajectory_memory import TrajectoryMemory
 from mdm.training.offline_rl_driver import OfflineRLDriver
-from mdm.utils.utils import here
+from mdm.utils.utils import here, load_yaml
 
 
 if __name__ == '__main__':
-    env = Gridworld.from_cleartext(here() / '../../mdm/gridworld/8x8_v0.mapdata')
-    mdl: MultiscaleDynamicsModel = torch.load(here() / 'model.ptmdl')
-    mem = TrajectoryMemory.load(here() / 'gridworld_train.samples')
-    driver = OfflineRLDriver(mem)
+    parser = argparse.ArgumentParser(description='Provide neptune run_id for loading the correct model')
+    parser.add_argument('id', type=str, nargs=1)
+    parser.add_argument('-log', action='store_true')
+    args = parser.parse_args()
 
-    n_trials = 20
+    cfg = load_yaml(here() / 'model_mk2.yaml')
+    neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
+
+    if len(args.id) == 0:
+        model_path = f'{cfg["final_model_path"]}.ptmdl'
+    else:
+        model_path = f'{cfg["final_model_path"]}_{args.id[0]}.ptmdl'
+
+    env = Gridworld.from_cleartext(here() / '../../mdm/gridworld/8x8_v0.mapdata')
+    mdl: MultiscaleDynamicsModelMK2 = torch.load(here() / model_path)
+
+    n_trials = 10
 
     available_actions = list(range(env.action_space.n))
-    action_sequences = list(product(available_actions, repeat=mdl.macro_step_size))
+    action_sequences = list(product(available_actions, repeat=mdl.abstract_step_size))
     n_unique_sequences = len(action_sequences)
     action_sequences *= n_trials
     action_sequences = [torch.tensor(s) for s in action_sequences]
     action_sequences = torch.stack(action_sequences, dim=0).to(mdl.device)
     action_sequences = torch.nn.functional.one_hot(action_sequences, num_classes=mdl.d_action).to(dtype=torch.float32)
 
-    macro_actions = mdl.macro_action_model(action_sequences)
-    macro_actions = macro_actions.detach().cpu().numpy()
+    abstr_a = mdl.abstract_action_model(action_sequences)
+    abstr_a = abstr_a.detach().cpu().numpy()
     #histogram_x, histogram_y = np.unique(macro_actions, return_counts=True)
 
-    macro_actions = macro_actions.reshape(n_trials, n_unique_sequences, mdl.d_macro_action)
-    macro_actions = macro_actions.transpose(1, 0, 2)  # bring sequence index to front
-    macro_actions_mean = macro_actions.mean(axis=1)
-    macro_actions_var = macro_actions.std(axis=1)
+    abstr_a = abstr_a.reshape(n_trials, n_unique_sequences, mdl.d_abstract_action)
+    abstr_a = abstr_a.transpose(1, 0, 2)  # bring sequence index to front
+    abstr_a_mean = abstr_a.mean(axis=1)
+    abstr_a_var = abstr_a.std(axis=1)
 
     max_cols = 5
     n_rows = ceil(n_unique_sequences / max_cols)
     fig, axes = plt.subplots(n_rows, max_cols, figsize=(20, 14))
-    for ax, macro_a_mean, macro_a_std in zip(axes.flat, macro_actions_mean, macro_actions_var):
-        ax.bar(list(range(mdl.d_macro_action)), macro_a_mean, yerr=macro_a_std)
+    for ax, a_mean, a_var in zip(axes.flat, abstr_a_mean, abstr_a_var):
+        ax.bar(list(range(mdl.d_abstract_action)), a_mean, yerr=a_var)
     plt.tight_layout()
     plt.show()
 
-    mse = np.zeros((len(macro_actions_mean), len(macro_actions_mean)))
-    for i in range(len(macro_actions_mean)):
-        for j in range(i, len(macro_actions_mean)):
-            diff = np.sum((macro_actions_mean[i] - macro_actions_mean[j]) ** 2)
+    mse = np.zeros((len(abstr_a_mean), len(abstr_a_mean)))
+    for i in range(len(abstr_a_mean)):
+        for j in range(i, len(abstr_a_mean)):
+            diff = np.sum((abstr_a_mean[i] - abstr_a_mean[j]) ** 2)
             mse[i, j] = diff
 
     mse /= mse.max()
 
     plt.matshow(mse)
+    plt.colorbar()
     plt.show()
 
     #plt.bar(histogram_x, histogram_y)
