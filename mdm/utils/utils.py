@@ -14,9 +14,9 @@ import matplotlib.animation as animation
 import pandas as pd
 
 from mdm.gridworld.gridworld import Gridworld, CellType
-from mdm.models.multiscale_model import MultiscaleDynamicsModel
+from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.memory.trajectory_memory import flatten_and_unsqueeze
-from mdm.training.gym_driver import GymStepDriver
+from mdm.utils.torch_tools import add_time_dim
 
 
 def here() -> Path:
@@ -81,12 +81,12 @@ def np_one_hot(x: np.array,
 
 
 def gen_macro_state_map(env: Gridworld,
-                        mdl: MultiscaleDynamicsModel,
+                        mdl: MultiscaleDynamicsModelMK2,
                         n_trials: int,
                         available_actions: List[int] = None):
     # find all possible action sequences
     available_actions = list(range(env.action_space.n)) if available_actions is None else available_actions
-    action_sequences = list(product(available_actions, repeat=mdl.macro_step_size))
+    action_sequences = list(product(available_actions, repeat=mdl.abstract_step_size))
     n_unique_sequences = len(action_sequences)
 
     # find all possible starting locations
@@ -113,44 +113,51 @@ def gen_macro_state_map(env: Gridworld,
     #    assert(tuple(s_final) in free_locations)
 
     # convert to tensors
-    action_sequences_torch = [torch.tensor(s).to(mdl.device) for s in action_sequences]
-    action_sequences_torch = torch.stack(action_sequences_torch)
-    action_sequences_torch = torch.nn.functional.one_hot(action_sequences_torch, num_classes=mdl.d_action)
+    a_sequences = [torch.tensor(s).to(mdl.device) for s in action_sequences]
+    a_sequences = torch.stack(a_sequences)
+    #a_sequences = torch.nn.functional.one_hot(a_sequences, num_classes=mdl.d_action)
+    a_sequences = to_onehot(a_sequences, mdl.d_action)
+    abstr_a = add_time_dim(mdl.abstract_action_model(a_sequences))
     ss_start = torch.tensor(free_locations).to(mdl.device)
     ss_start = normalize_obs(ss_start, env)
 
     # do rollouts
-    macro_s_init_history = {}
+    abstr_s_init_history = {}
     for n in range(n_trials):
         for s_start, loc in zip(ss_start, free_locations):
             # prepare
             s_start = torch.tile(s_start, dims=(n_unique_sequences, 1))
             s_start = s_start.unsqueeze(1)
-            zero_macro_s = torch.zeros(n_unique_sequences, mdl.d_macro_state, device=mdl.device)
-            zero_macro_a = torch.zeros(n_unique_sequences, mdl.d_macro_action, device=mdl.device)
 
             # predict
-            pred_prim = mdl.rollout_single_step(s_start, action_sequences_torch)
-            pred_abstr = mdl.macro_next_posterior(zero_macro_s, zero_macro_a, pred_prim['h'])
-            macro_ss_next = pred_abstr['macro_s_next'].detach().cpu().numpy()
+            mem, pred_prim_final = mdl.rollout_primitive(a=a_sequences, init_o=s_start, use_posterior=False)
+            mem = mdl.pack_mem(mem)
+            abstr_r_target = mem['prim_r'].sum(dim=1, keepdim=True)
+            abstr_term_target = mem['prim_term'].max(dim=1, keepdim=True).values
+            ctx_low_level = add_time_dim(mdl.fuse_state(pred_prim_final['s'], pred_prim_final['rnn_state']))
+            _, pred_abstr_final = mdl.rollout_abstract(a=abstr_a, ctx_low_level=ctx_low_level,
+                                                       r_target=abstr_r_target, term_target=abstr_term_target,
+                                                       use_posterior=True)
+            #pred_abstr_final = mdl.macro_next_posterior(zero_abstr_s, zero_abstr_a, pred_prim['h'])
+            abstr_s_next_batch = pred_abstr_final['s'].detach().cpu().numpy()
 
             # store
-            loc_hash = macro_s_init_history.get(loc, {})
-            for a_seq, macro_s_next in zip(action_sequences, macro_ss_next):
-                macro_s_next_list = loc_hash.get(a_seq, [])
-                macro_s_next_list.append(macro_s_next)
-                loc_hash[a_seq] = macro_s_next_list
-            macro_s_init_history[loc] = loc_hash
+            loc_hash = abstr_s_init_history.get(loc, {})
+            for a_seq, abstr_s_next in zip(action_sequences, abstr_s_next_batch):
+                abstr_s_next_list = loc_hash.get(a_seq, [])
+                abstr_s_next_list.append(abstr_s_next)
+                loc_hash[a_seq] = abstr_s_next_list
+            abstr_s_init_history[loc] = loc_hash
 
     # compute statistics
     macro_s_init_mean = {pos: 0 for pos in free_locations}
     macro_s_init_std = {pos: 0 for pos in free_locations}
     for pos in free_locations:
-        macro_s_all_actions = np.concatenate([np.stack(trials) for trials in macro_s_init_history[pos].values()])
+        macro_s_all_actions = np.concatenate([np.stack(trials) for trials in abstr_s_init_history[pos].values()])
         macro_s_init_mean[pos] = np.mean(macro_s_all_actions, axis=0)
         macro_s_init_std[pos] = np.std(macro_s_all_actions, axis=0)
 
-    return macro_s_init_mean, macro_s_init_std, macro_s_init_history
+    return macro_s_init_mean, macro_s_init_std, abstr_s_init_history
 
 
 def transform_macro_s_init_history(macro_s_init_history):

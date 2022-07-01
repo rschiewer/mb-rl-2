@@ -1,3 +1,5 @@
+import argparse
+
 from math import ceil
 from random import shuffle
 from itertools import product
@@ -9,33 +11,44 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 import seaborn as sns; sns.set_theme()
 from mpl_toolkits.axes_grid1 import ImageGrid
-from sklearn.cluster import KMeans
-from sklearn.manifold import TSNE
 
 from mdm.gridworld.gridworld import Gridworld, CellType
-from mdm.models.multiscale_model import MultiscaleDynamicsModel
-from mdm.utils.utils import here, gen_macro_state_map
+from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
+from mdm.utils.utils import here, gen_macro_state_map, load_yaml
 from mdm.memory.trajectory_memory import TrajectoryMemory
 from mdm.training.offline_rl_driver import OfflineRLDriver
 from mdm.memory.trajectory_memory import flatten_and_unsqueeze
 
 if __name__ == '__main__':
-    env = Gridworld.from_cleartext(here() / '../../mdm/gridworld/8x8_v1.mapdata')
-    mdl: MultiscaleDynamicsModel = torch.load(here() / 'checkpoint.ptmdl')
+    parser = argparse.ArgumentParser(description='Provide neptune run_id for loading the correct model')
+    parser.add_argument('id', type=str, nargs=1)
+    parser.add_argument('-log', action='store_true')
+    args = parser.parse_args()
+
+    cfg = load_yaml(here() / 'model_mk2.yaml')
+    neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
+
+    if len(args.id) == 0:
+        model_path = f'{cfg["final_model_path"]}.ptmdl'
+    else:
+        model_path = f'{cfg["final_model_path"]}_{args.id[0]}.ptmdl'
+
+    env = Gridworld.from_cleartext(here() / '../../mdm/gridworld/8x8_v0.mapdata')
+    mdl: MultiscaleDynamicsModelMK2 = torch.load(here() / model_path)
+
     n_trials = 10
     normalize = 'per_dim'
 
-    available_actions = [1]
-    macro_s_init_mean, macro_s_init_std, macro_s_init_per_state_per_action = gen_macro_state_map(env, mdl, n_trials)
+    abstr_s_init_mean, abstr_s_init_std, abstr_s_init_per_state_per_action = gen_macro_state_map(env, mdl, n_trials)
     #macro_s_init_mean = macro_s_init_std
 
     valid_positions = np.full((env.grid_h, env.grid_w), False)
-    positions = np.array(list(macro_s_init_mean.keys()))
+    positions = np.array(list(abstr_s_init_mean.keys()))
     valid_positions[tuple(positions.transpose())] = True
     #valid_positions = np.tile(valid_positions, (mdl.d_macro_state, 1, 1))
 
-    plot_mats = np.zeros((env.grid_h, env.grid_w, mdl.d_macro_state))
-    for loc, data in macro_s_init_mean.items():
+    plot_mats = np.zeros((env.grid_h, env.grid_w, mdl.d_abstract_state))
+    for loc, data in abstr_s_init_mean.items():
         plot_mats[tuple(loc)] = data
     plot_mats = np.transpose(plot_mats, [2, 0, 1])
 
