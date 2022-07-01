@@ -133,12 +133,12 @@ class CrossentropyPlanner:
         mu_ml = torch.tile(mu_ml, dims=(n_batch, 1, 1))
         sigma_ml = torch.tile(sigma_ml, dims=(n_batch, 1, 1))
 
-        # add noise to diversify
-        mu_ml_noise = mu_ml + (2 * torch.rand_like(mu_ml, device=self.device) - 1) * noise
-        sigma_ml_noise = sigma_ml + (2 * torch.rand_like(sigma_ml, device=self.device) - 1) * noise
-        sigma_ml_noise = torch.where(sigma_ml_noise <= lower_bound, lower_bound, sigma_ml_noise)  # don't accidentally make sigma < 0
+        # add noise to diversify half of distributions
+        mu_ml[:n_batch//2] += (2 * torch.rand_like(mu_ml[:n_batch//2], device=self.device) - 1) * noise
+        sigma_ml[:n_batch//2] += (2 * torch.rand_like(sigma_ml[:n_batch//2], device=self.device) - 1) * noise
+        sigma_ml = torch.where(sigma_ml <= lower_bound, lower_bound, sigma_ml)  # don't accidentally make sigma < 0
 
-        return torch.stack([mu_ml_noise, sigma_ml_noise], dim=0)
+        return torch.stack([mu_ml, sigma_ml], dim=0)
 
     def _init_categorical(self,
                           d_batch: int,
