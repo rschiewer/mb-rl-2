@@ -46,11 +46,11 @@ if __name__ == '__main__':
 
     n_episodes = 10
     store_result_trajectories = False
-    pln_d_batch = 2048
+    pln_d_batch = 4096
     pln_n_optim_steps_abstr = 20
     pln_n_optim_steps_prim = 20
-    pln_winning_perc = 0.25
-    pln_discount = 0.95
+    pln_winning_perc = 0.20
+    pln_discount = 0.90
     pln_act_noise_abstr = 0.001
     pln_act_noise_prim = 0.001
     pln_n_abstract_steps = ceil(100 / mdl.abstract_step_size)
