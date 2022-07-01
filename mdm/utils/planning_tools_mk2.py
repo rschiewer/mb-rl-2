@@ -75,10 +75,8 @@ def init_s_abstr(model: MultiscaleDynamicsModelMK2,
     return {'prim_a': prim_a,
             'abstr_s': abstr_s,
             'abstr_rnn_state': abstr_rnn_state,
-            'abstr_r': r_target[0, 0],  # use predictions from primitive model
-            'abstr_term': term_target[0, 0]}
-            #'abstr_r': abstr_r,
-            #'abstr_term': abstr_term}
+            'abstr_r': abstr_r,
+            'abstr_term': abstr_term}
 
 
 def plan_abstract(model: MultiscaleDynamicsModelMK2,
@@ -178,7 +176,7 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
                                                               n_rollouts=n_rollouts,
                                                               n_plan_steps=model.abstract_step_size,
                                                               n_evolution_steps=n_evolution_steps,
-                                                              winning_perc=winning_perc,
+                                                              winning_perc=0.01,
                                                               discount=1,
                                                               act_noise=act_noise)
     i_best = i_winners[0]
