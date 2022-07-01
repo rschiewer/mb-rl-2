@@ -112,20 +112,6 @@ class RSSM(torch.nn.Module):
     def bottom_node(self):
         return self. self.d_observation > 0
 
-    def _det_core(self,
-                  s: torch.Tensor,
-                  a: torch.Tensor,
-                  x_hat: torch.Tensor,
-                  ctx_high_level: torch.Tensor,
-                  rnn_state: RnnStateType):
-        inp = torch.concat([s, a, x_hat, ctx_high_level], dim=-1)
-        inp = add_time_dim(inp)
-        x_det, new_h = self._rnn(inp, rnn_state)
-        x_det = remove_time_dim(x_det)
-        #if self.layer_norm:
-        #    new_h[0] = self.det_core_norm(new_h[0])
-        return x_det, new_h
-
     def gen_init_values(self,
                         d_batch: int,
                         device: torch.device):
@@ -180,6 +166,20 @@ class RSSM(torch.nn.Module):
                             d_batch: int,
                             device: torch.device) -> torch.Tensor:
         return torch.zeros(d_batch, self.d_high_level_ctx, device=device)
+
+    def _det_core(self,
+                  s: torch.Tensor,
+                  a: torch.Tensor,
+                  x_hat: torch.Tensor,
+                  ctx_high_level: torch.Tensor,
+                  rnn_state: RnnStateType):
+        inp = torch.concat([s, a, x_hat, ctx_high_level], dim=-1)
+        inp = add_time_dim(inp)
+        x_det, new_h = self._rnn(inp, rnn_state)
+        x_det = remove_time_dim(x_det)
+        #if self.layer_norm:
+        #    new_h[0] = self.det_core_norm(new_h[0])
+        return x_det, new_h
 
     def forward(self,
                 s: torch.Tensor,
