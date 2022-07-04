@@ -73,7 +73,7 @@ class RSSM(torch.nn.Module):
         self.rnn_type = rnn_type
 
         s_prior_lws = (d_hidden, *s_prior_lws, d_state * 2)
-        s_post_lws = (d_hidden + d_x_posterior, *s_post_lws, d_state * 2)
+        s_post_lws = (d_hidden + d_x_posterior + d_state * 2, *s_post_lws, d_state * 2)
         o_lws = (d_hidden + d_state, *o_lws, d_observation * 2)
         r_lws = (d_hidden + d_state, *r_lws, d_reward * 2)
         term_lws = (d_hidden + d_state, *term_lws, 1)
@@ -89,10 +89,6 @@ class RSSM(torch.nn.Module):
                                dropout=hidden_dropout)
         #self._det_core = haste.LayerNormLSTM(d_state + d_action + d_high_level_ctx, hidden_size=d_hidden,
         #                                    zoneout=0.05, dropout=hidden_dropout, batch_first=True)
-        if layer_norm:
-            self.det_core_norm = torch.nn.LayerNorm(d_hidden)
-        else:
-            self.det_core_norm = None
 
         self._s_prior = torch.nn.Sequential(*layers_with_activation(s_prior_lws, activation, layer_norm=layer_norm))
         self._s_post = torch.nn.Sequential(*layers_with_activation(s_post_lws, activation, layer_norm=layer_norm))
@@ -194,7 +190,7 @@ class RSSM(torch.nn.Module):
         s_prior = self.build_s_prior(h)
 
         if use_posterior:
-            s_post = self.build_s_post(h, x_post_groundtruth)
+            s_post = self.build_s_post(h, x_post_groundtruth, s_prior)
             s_dist = s_post
         else:
             s_post = None
@@ -222,8 +218,9 @@ class RSSM(torch.nn.Module):
 
     def build_s_post(self,
                      h: torch.Tensor,
-                     x_posterior: torch.Tensor) -> torch.distributions.Normal:
-        inp = torch.concat([h, x_posterior], dim=-1)
+                     x_posterior: torch.Tensor,
+                     s_prior: torch.distributions.Normal) -> torch.distributions.Normal:
+        inp = torch.concat([h, x_posterior, s_prior.loc, s_prior.scale], dim=-1)
         s_post_params = self._s_post(inp)
         mu, sigma = torch.tensor_split(s_post_params, 2, dim=-1)
         sigma = torch.abs(sigma) + self.epsilon
