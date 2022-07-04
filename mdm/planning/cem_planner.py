@@ -167,7 +167,7 @@ class CrossentropyPlanner:
         dist_params = torch.tile(dist_params, dims=(n_batch, 1, 1))  # this copies the list to all batch indices
         #dist_params[dist_params.shape[0] // 2 :] = torch.rand_like(dist_params[dist_params.shape[0] // 2:])
         # add noise to diversify
-        dist_params = dist_params + (2 * torch.rand_like(dist_params, device=self.device) - 1) * noise
+        dist_params[:n_batch//2] += (2 * torch.rand_like(dist_params[:n_batch//2], device=self.device) - 1) * noise
         dist_params = torch.clamp(dist_params, torch.tensor(0.0), torch.tensor(1.0))
         dist_params /= dist_params.sum(dim=-1, keepdim=True)
         return dist_params
