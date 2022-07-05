@@ -1,11 +1,12 @@
 from typing import Dict, Any, Union
 import os
 
-import matplotlib.figure
+from neptune.new.types import File
 import neptune.new as neptune
 from matplotlib.figure import Figure
 from neptune.new.run import Run, InactiveRunException
 import numpy as np
+from PIL import Image
 
 from mdm.logging.logger import Logger, Scope
 
@@ -79,7 +80,7 @@ class NeptuneLogger(Logger):
     def log_object(self, object: Any, scope: Union[Scope, str], time_step: int = None):
         pass
 
-    def log_plot(self, figure: Figure, scope: Union[Scope, str], time_step: int = None):
+    def log_plot(self, figure: Image, scope: Union[Scope, str], time_step: int = None):
         self._run[str(scope)].log(figure)
 
 
