@@ -1,6 +1,7 @@
 from typing import Dict, Any, Union
 import os
 
+import matplotlib.figure
 import neptune.new as neptune
 from matplotlib.figure import Figure
 from neptune.new.run import Run, InactiveRunException
@@ -70,6 +71,8 @@ class NeptuneLogger(Logger):
                     self._run[str(full_scope)].log(v, step=time_step)
             elif isinstance(value, dict):
                 self.log(value, full_scope, time_step=time_step)
+            elif isinstance(value, Figure):
+                self.log_plot(value, full_scope, time_step=time_step)
             else:
                 self._run[str(full_scope)].log(value, step=time_step)
 
@@ -77,4 +80,6 @@ class NeptuneLogger(Logger):
         pass
 
     def log_plot(self, figure: Figure, scope: Union[Scope, str], time_step: int = None):
-        pass
+        self._run[str(scope)].log(figure)
+
+
