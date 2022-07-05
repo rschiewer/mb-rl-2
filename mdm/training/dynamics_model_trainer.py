@@ -22,6 +22,7 @@ class DynamicsModelTrainer(ABC):
                  eval_interval: int = None,
                  scheduler: object = None,
                  logger: Logger = None,
+                 eval_callback: Callable[[int], None] = None,
                  **kwargs):
         self.model = model
         self.optimizer = optimizer
@@ -31,6 +32,7 @@ class DynamicsModelTrainer(ABC):
         self.eval_interval = eval_interval
         self.scheduler = scheduler
         self.logger = logger
+        self.eval_callback = eval_callback
 
     def train(self,
               n_train_steps: int,
@@ -88,8 +90,6 @@ class DynamicsModelTrainer(ABC):
                 last_eval_losses = eval_losses
 
                 if self.logger:
-                    r_stats = {'r_raw': r, 'r_sum_ep': r.sum(axis=1), 'r_sum': r.sum(), 'r_mean': r.mean()}
-                    #self.logger.log(self._to_np(r_stats), Scope.TEST, i_step)
                     self.logger.log(self._to_np(eval_losses), Scope.TEST(), i_step)
 
                     means, stds = {}, {}
@@ -97,13 +97,15 @@ class DynamicsModelTrainer(ABC):
                         if torch.numel(param) == 0:
                             continue
                         name = re.sub('[\s.]+', '_', name)
-                        np_param = param.detach().cpu().to(torch.float64).numpy()
                         means[name + '_mean'] = param.detach().mean().cpu().numpy()
                         stds[name + '_std'] = param.detach().std(unbiased=False).cpu().numpy()
                     means['MEAN_TOTAL'] = np.mean([v for v in means.values()])
                     stds['STD_TOTAL'] = np.std([v for v in stds.values()])
                     means.update(stds)
                     self.logger.log(means, Scope.PARAMETERS(), i_step)
+
+                if self.eval_callback:
+                    self.eval_callback(i_step)
 
         if self.logger:
             self.logger.teardown()
