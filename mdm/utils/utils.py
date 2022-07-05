@@ -135,7 +135,7 @@ def gen_macro_state_map(env: Gridworld,
             abstr_r_target = mem['prim_r'].sum(dim=1, keepdim=True)
             abstr_term_target = mem['prim_term'].max(dim=1, keepdim=True).values
             ctx_low_level = add_time_dim(mdl.fuse_state(pred_prim_final['s'], pred_prim_final['rnn_state']))
-            _, pred_abstr_final = mdl.rollout_abstract(a=abstr_a, ctx_low_level=ctx_low_level,
+            _, pred_abstr_final = mdl.rollout_abstract(a=abstr_a, o_target=ctx_low_level,
                                                        r_target=abstr_r_target, term_target=abstr_term_target,
                                                        use_posterior=True)
             #pred_abstr_final = mdl.macro_next_posterior(zero_abstr_s, zero_abstr_a, pred_prim['h'])
@@ -261,3 +261,41 @@ def prepare_data(s: Union[np.ndarray, torch.Tensor],
     terminal[:, 0] = 0
 
     return s, a, r, terminal
+
+
+def gen_discrete_mdl_stats(mdl: torch.nn.Module, n_inputs: int, seq_len: int, n_repetitions: int = 1):
+    device = next(mdl.parameters()).device
+
+    # generate all permutations of possible inputs
+    available_inputs = list(range(n_inputs))
+    input_sequences = list(product(available_inputs, repeat=seq_len))
+    input_sequences = torch.tensor(input_sequences).to(device)
+    input_sequences = to_onehot(input_sequences, n_inputs)
+    n_unique_sequences = len(input_sequences)
+    input_sequences = input_sequences.repeat(n_repetitions, 1, 1)
+
+    # query the model
+    Y = mdl(input_sequences)
+    d_out = Y.shape[-1]
+    Y = Y.reshape(n_unique_sequences, n_repetitions, d_out)
+
+    # per sequence mean and std
+    Y_mean = torch.mean(Y, dim=1)
+    Y_std = torch.std(Y, dim=1)
+
+    # similarity matrix
+    # note: torch tensors are row-major
+    diff = torch.repeat_interleave(Y_mean, len(Y_mean), dim=0) - Y_mean.repeat(len(Y_mean), 1)
+    diff = torch.sum(diff ** 2, dim=1)
+    #Y_mae = torch.matmul(torch.abs(Y_mean), torch.abs(Y_mean).transpose(0, 1))
+    Y_mae = diff.reshape(n_unique_sequences, n_unique_sequences)
+
+    # total mean and std
+    Y_mean = torch.mean(Y)
+    Y_std = torch.std(Y)
+
+    Y_mean = Y_mean.detach().cpu().numpy()
+    Y_std = Y_std.detach().cpu().numpy()
+    Y_mae = Y_mae.detach().cpu().numpy()
+
+    return Y_mean, Y_std, Y_mae

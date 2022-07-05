@@ -1,12 +1,14 @@
 from pathlib import Path
-import os
+import io
 import argparse
 
+import matplotlib.pyplot as plt
 import torch
 import numpy as np
+from PIL import Image
 
 from mdm.gridworld.gridworld import Gridworld
-from mdm.utils.utils import here, load_yaml, prepare_data, fill_placeholders
+from mdm.utils.utils import here, load_yaml, prepare_data, fill_placeholders, gen_discrete_mdl_stats
 from mdm.models.building_blocks import RSSM, AbstractActionModel
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.training.dynamics_model_trainer import DynamicsModelTrainer
@@ -29,18 +31,16 @@ if __name__ == '__main__':
     cfg['prim_mdl']['d_observation'] = env.observation_space.shape[0]
     cfg['prim_mdl']['d_action'] = env.action_space.n
     cfg['prim_mdl']['d_reward'] = 1
-    d_cell = 2 if cfg['prim_mdl']['rnn_type'] == 'lstm' else 1
-    # cfg['prim_mdl']['d_ctx_high_level'] = cfg['abstr_mdl']['d_state'] + cfg['abstr_mdl']['d_hidden'] \
-    #                                      * cfg['abstr_mdl']['n_hidden_layers'] * d_cell
-    cfg['prim_mdl']['d_ctx_high_level'] = cfg['abstr_mdl']['d_hidden'] + cfg['abstr_mdl']['d_state']
+    prim_d_cell = 2 if cfg['prim_mdl']['rnn_type'] == 'lstm' else 1
+    cfg['prim_mdl']['d_ctx_high_level'] = 0
     cfg['prim_mdl']['d_x_posterior'] = env.observation_space.shape[0] + 2  # observation, terminal flag and reward
 
-    cfg['abstr_mdl']['d_observation'] = 0
-    cfg['abstr_mdl']['o_lws'] = (0,)
+    cfg['abstr_mdl']['d_observation'] = cfg['prim_mdl']['d_state'] + cfg['prim_mdl']['d_hidden'] \
+                                        * cfg['prim_mdl']['n_hidden_layers'] * prim_d_cell
+
     cfg['abstr_mdl']['d_ctx_high_level'] = 0
-    d_cell = 2 if cfg['prim_mdl']['rnn_type'] == 'lstm' else 1
-    # cfg['abstr_mdl']['d_x_posterior'] = cfg['prim_mdl']['n_hidden_layers'] * cfg['prim_mdl']['d_hidden'] * d_cell
-    cfg['abstr_mdl']['d_x_posterior'] = cfg['prim_mdl']['d_hidden'] + cfg['prim_mdl']['d_state'] \
+    cfg['abstr_mdl']['d_x_posterior'] = cfg['prim_mdl']['d_state'] + cfg['prim_mdl']['d_hidden'] \
+                                        * cfg['prim_mdl']['n_hidden_layers'] * prim_d_cell \
                                         + cfg['abstr_mdl']['d_reward'] + 1
 
     cfg['abstr_act_mdl']['d_action'] = env.action_space.n
@@ -77,6 +77,22 @@ if __name__ == '__main__':
         return s, a, r, terminal
 
 
+    fig = plt.figure(figsize=(10, 10))
+    def eval_callback(i_step: int):
+        if model.abstract_step_size <= 10:
+            Y_mean, Y_std, Y_mae = gen_discrete_mdl_stats(model.abstract_action_model, env.action_space.n,
+                                                          model.abstract_step_size, 1)
+            plt.matshow(Y_mae, fignum=1)
+            plt.colorbar()
+            buffer = io.BytesIO()
+            fig.savefig(buffer)
+            buffer.seek(0)
+            logger.log_plot(Image.open(buffer), Scope.PARAMETERS() / 'abstr_a_stats/plots', i_step)
+            plt.clf()
+            logger.log({'abstr_a_mean': Y_mean.mean(), 'abstr_a_std': Y_std.mean()}, Scope.PARAMETERS()
+                       / 'abstr_a_stats', i_step)
+
+
     #loader_train = ConcurrentDataLoader(get_batch_train, queue_len=3)
     #loader_test = ConcurrentDataLoader(get_batch_test, queue_len=1)
     model_path = f'{cfg["final_model_path"]}_{cfg["mdm"]["abstract_step_size"]}.ptmdl'
@@ -90,7 +106,8 @@ if __name__ == '__main__':
         logger = None
 
     trainer = DynamicsModelTrainer(model=model, optimizer=optimizer, get_batch_train=get_batch_train,
-                                   get_batch_test=get_batch_test, logger=logger, **cfg['trainer'])
+                                   get_batch_test=get_batch_test, logger=logger, eval_callback=eval_callback,
+                                   **cfg['trainer'])
     trainer.train(n_train_steps=cfg['trainer']['n_train_steps'], progress_bar=True,
                   checkpoint_path=here() / cfg['checkpoint_path'])
 
