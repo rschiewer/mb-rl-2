@@ -55,6 +55,7 @@ class RSSM(torch.nn.Module):
                  r_lws: Sequence[int] = (32, 32),
                  term_lws: Sequence[int] = (32, 32),
                  layer_norm: bool = False,
+                 feed_back_last_prediction: bool = False,
                  activation: str = 'relu',
                  rnn_type: str = 'lstm'):
         super().__init__()
@@ -68,8 +69,9 @@ class RSSM(torch.nn.Module):
         self.d_hidden = d_hidden
         self.n_hidden_layers = n_hidden_layers
         self.epsilon = epsilon
-        self.activation = activation
         self.layer_norm = layer_norm
+        self.feed_back_last_prediction = feed_back_last_prediction
+        self.activation = activation
         self.rnn_type = rnn_type
 
         s_prior_lws = (d_hidden, *s_prior_lws, d_state * 2)
@@ -84,8 +86,11 @@ class RSSM(torch.nn.Module):
             rnn_constr = torch.nn.GRU
         else:
             raise ValueError(f'Unsupported rnn type: {rnn_type}')
-        self._rnn = rnn_constr(d_state + d_action + d_observation + d_reward + 1 + d_ctx_high_level,
-                               hidden_size=d_hidden, num_layers=n_hidden_layers, batch_first=True,
+
+        d_det_core = d_state + d_action + d_ctx_high_level
+        if feed_back_last_prediction:
+            d_det_core += d_observation + d_reward + 1
+        self._rnn = rnn_constr(d_det_core, hidden_size=d_hidden, num_layers=n_hidden_layers, batch_first=True,
                                dropout=hidden_dropout)
         #self._det_core = haste.LayerNormLSTM(d_state + d_action + d_high_level_ctx, hidden_size=d_hidden,
         #                                    zoneout=0.05, dropout=hidden_dropout, batch_first=True)
@@ -169,7 +174,10 @@ class RSSM(torch.nn.Module):
                   x_hat: torch.Tensor,
                   ctx_high_level: torch.Tensor,
                   rnn_state: RnnStateType):
-        inp = torch.concat([s, a, x_hat, ctx_high_level], dim=-1)
+        if self.feed_back_last_prediction:
+            inp = torch.concat([s, a, x_hat, ctx_high_level], dim=-1)
+        else:
+            inp = torch.concat([s, a, ctx_high_level], dim=-1)
         inp = add_time_dim(inp)
         x_det, new_h = self._rnn(inp, rnn_state)
         x_det = remove_time_dim(x_det)
