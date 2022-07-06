@@ -246,6 +246,7 @@ def prepare_data(s: Union[np.ndarray, torch.Tensor],
     s, a, r, terminal = flatten_and_unsqueeze(s, a, r, terminal)
     s = normalize_obs(s, env)
     a = to_onehot(a, env.action_space.n)
+    a[:, 0] = 0  # first timestep action is zero padding, which is falsely converted to [1, 0, 0, ...] vector
 
     # since a, r and terminal were padded with one element anyway, rotate it to the front and make it zero
     #if isinstance(a, torch.Tensor):
