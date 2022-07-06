@@ -76,23 +76,6 @@ if __name__ == '__main__':
         s, a, r, terminal = prepare_data(s, a, r, terminal, env)
         return s, a, r, terminal
 
-
-    fig = plt.figure(figsize=(10, 10))
-    def eval_callback(i_step: int):
-        if model.abstract_step_size <= 10:
-            Y_mean, Y_std, Y_mae = gen_discrete_mdl_stats(model.abstract_action_model, env.action_space.n,
-                                                          model.abstract_step_size, 1)
-            plt.matshow(Y_mae, fignum=1)
-            plt.colorbar()
-            buffer = io.BytesIO()
-            fig.savefig(buffer)
-            buffer.seek(0)
-            logger.log_plot(Image.open(buffer), Scope.PARAMETERS() / 'abstr_a_stats/plots', i_step)
-            plt.clf()
-            logger.log({'abstr_a_mean': Y_mean.mean(), 'abstr_a_std': Y_std.mean()}, Scope.PARAMETERS()
-                       / 'abstr_a_stats', i_step)
-
-
     #loader_train = ConcurrentDataLoader(get_batch_train, queue_len=3)
     #loader_test = ConcurrentDataLoader(get_batch_test, queue_len=1)
     model_path = f'{cfg["final_model_path"]}_{cfg["mdm"]["abstract_step_size"]}.ptmdl'
@@ -104,6 +87,23 @@ if __name__ == '__main__':
         logger.log(cfg, Scope.HYPERPARAMETERS())
     else:
         logger = None
+
+    fig = plt.figure(figsize=(10, 10))
+
+    def eval_callback(i_step: int):
+        if model.abstract_step_size <= 10 and logger:
+            Y_mean, Y_std, Y_mae = gen_discrete_mdl_stats(model.abstract_action_model, env.action_space.n,
+                                                          model.abstract_step_size, 1)
+            plt.matshow(Y_mae, fignum=1)
+            plt.colorbar()
+            buffer = io.BytesIO()
+            fig.savefig(buffer)
+            plt.clf()
+            buffer.seek(0)
+            logger.log_plot(Image.open(buffer), Scope.PARAMETERS() / 'abstr_a_stats/plots', i_step)
+            logger.log({'abstr_a_mean': Y_mean.mean(), 'abstr_a_std': Y_std.mean()},
+                       Scope.PARAMETERS() / 'abstr_a_stats', i_step)
+
 
     trainer = DynamicsModelTrainer(model=model, optimizer=optimizer, get_batch_train=get_batch_train,
                                    get_batch_test=get_batch_test, logger=logger, eval_callback=eval_callback,
