@@ -100,11 +100,17 @@ class TrajectoryMemory:
             if not self._shapes_match(self._shapes, data_shapes):
                 raise ValueError(f'Input has incompatible shape, expected {self._shapes}, found {data_shapes}')
             if not self._lengths_match(data_lengths):
-                raise ValueError(f'Input has incompatible lengths, expected a, r, terminal to have equal lengths and'
-                                 f' s to have on additional element')
+                raise ValueError(f'Input has incompatible lengths, expected s, a, r, terminal to have equal lengths')
             if not self._dtypes_match(self._dtypes, data_dtypes):
                 raise ValueError(f'Input has different dtypes than previously added content, expected {self._dtypes}, '
                                  f'found {data_dtypes}')
+
+        if not np.all(a[0] == 0):
+            raise ValueError('Expected first action to be zero by convention')
+        if not np.all(r[0] == 0):
+            raise ValueError('Expected first reward to be zero by convention')
+        if not np.all(terminal[0] == 0):
+            raise ValueError('Expected first terminal flag to be zero by convention')
 
         if len(s) > self._longest_trajectory:
             self._longest_trajectory = len(s)
@@ -189,7 +195,7 @@ class TrajectoryMemory:
 
     @staticmethod
     def _lengths_match(lengths) -> bool:
-        return lengths['a'] == lengths['r'] and lengths['a'] == lengths['terminal'] and lengths['s'] == lengths['a'] + 1
+        return lengths['a'] == lengths['r'] and lengths['a'] == lengths['terminal'] and lengths['a'] == lengths['s']
 
 
 def flatten_and_unsqueeze(*xs: Union[torch.Tensor, np.ndarray]) -> Union[Tuple[torch.Tensor], Tuple[np.ndarray]]:

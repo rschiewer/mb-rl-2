@@ -38,20 +38,24 @@ class GymEpisodeDriver(Driver):
 
         for i_ep in ep_iter:
             traj_s, traj_a, traj_r, traj_terminal = [], [], [], []
-            s = self._process_obs(self.env.reset())
 
+            traj_s.append(self._process_obs(self.env.reset()))
+            traj_a.append(np.zeros_like(self.env.action_space.sample()))
+            traj_r.append(0)
+            traj_terminal.append(False)
+
+            s = traj_s[0]
             terminal = False
             while not terminal:
                 a = self.policy(s)
                 s_, r, terminal, info = self._process_step(self.env.step(a))
 
-                traj_s.append(s)
+                traj_s.append(s_)
                 traj_a.append(a)
                 traj_r.append(r)
                 traj_terminal.append(terminal)
 
                 s = s_
-            traj_s.append(s)  # final observation
 
             mem.push(np.array(traj_s), np.array(traj_a), np.array(traj_r), np.array(traj_terminal))
 

@@ -21,8 +21,15 @@ class TrajectoryMemoryTest(unittest.TestCase):
             else:
                 return np.random.default_rng().uniform(size=size)
 
-        return {'s': _rand_tens(shapes['s'], t_len + 1, dtype), 'a': _rand_tens(shapes['a'], t_len, dtype),
-                'r': _rand_tens(shapes['r'], t_len, dtype), 'terminal': _rand_tens(shapes['terminal'], t_len, dtype)}
+        init_a = np.zeros((1, *shapes['a']), dtype=dtype)
+        init_r = np.zeros((1, *shapes['r']), dtype=dtype)
+        init_term = np.zeros((1, *shapes['terminal']), dtype=dtype)
+
+        s = _rand_tens(shapes['s'], t_len, dtype)
+        a = np.concatenate([init_a, _rand_tens(shapes['a'], t_len - 1, dtype)], axis=0)
+        r = np.concatenate([init_r, _rand_tens(shapes['r'], t_len - 1, dtype)], axis=0)
+        terminal = np.concatenate([init_term, _rand_tens(shapes['terminal'], t_len - 1, dtype)], axis=0)
+        return {'s': s, 'a': a, 'r': r, 'terminal': terminal}
 
     def setUp(self) -> None:
         n_trajectories = 100

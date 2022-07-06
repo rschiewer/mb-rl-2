@@ -130,7 +130,7 @@ def gen_macro_state_map(env: Gridworld,
             s_start = s_start.unsqueeze(1)
 
             # predict
-            mem, pred_prim_final = mdl.rollout_primitive(a=a_sequences, init_o=s_start, use_posterior=False)
+            mem, pred_prim_final = mdl.rollout_primitive(a=a_sequences, o=s_start, use_posterior=False)
             mem = mdl.pack_mem(mem)
             abstr_r_target = mem['prim_r'].sum(dim=1, keepdim=True)
             abstr_term_target = mem['prim_term'].max(dim=1, keepdim=True).values
@@ -245,20 +245,24 @@ def prepare_data(s: Union[np.ndarray, torch.Tensor],
                                         Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray]]:
     s, a, r, terminal = flatten_and_unsqueeze(s, a, r, terminal)
     s = normalize_obs(s, env)
-    a = a[:, :-1]  # last timestep is padding in any case, so omit it because we need one less action than o, r, term
     a = to_onehot(a, env.action_space.n)
 
-    # since r and terminal were padded with one element anyway, rotate it to the front and make it zero
-    if isinstance(r, torch.Tensor):
-        r = torch.roll(r, shifts=1, dims=1)
-    else:
-        r = np.roll(r, shift=1, axis=1)
-    r[:, 0] = 0
-    if isinstance(terminal, torch.Tensor):
-        terminal = torch.roll(terminal, shifts=1, dims=1)
-    else:
-        terminal = np.roll(terminal, shift=1, axis=1)
-    terminal[:, 0] = 0
+    # since a, r and terminal were padded with one element anyway, rotate it to the front and make it zero
+    #if isinstance(a, torch.Tensor):
+    #    a = torch.roll(a, shifts=1, dims=1)
+    #else:
+    #    a = np.roll(a, shift=1, axis=1)
+    #a[:, 0] = 0
+    #if isinstance(r, torch.Tensor):
+    #    r = torch.roll(r, shifts=1, dims=1)
+    #else:
+    #    r = np.roll(r, shift=1, axis=1)
+    #r[:, 0] = 0
+    #if isinstance(terminal, torch.Tensor):
+    #    terminal = torch.roll(terminal, shifts=1, dims=1)
+    #else:
+    #    terminal = np.roll(terminal, shift=1, axis=1)
+    #terminal[:, 0] = 0
 
     return s, a, r, terminal
 
