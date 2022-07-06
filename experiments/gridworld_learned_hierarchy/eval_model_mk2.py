@@ -46,10 +46,10 @@ if __name__ == '__main__':
 
     n_episodes = 10
     store_result_trajectories = False
-    pln_d_batch = 4096
-    pln_n_optim_steps_abstr = 20
+    pln_d_batch = 2048
+    pln_n_optim_steps_abstr = 30
     pln_n_optim_steps_prim = 20
-    pln_winning_perc = 0.20
+    pln_winning_perc = 0.2
     pln_discount = 0.90
     pln_act_noise_abstr = 0.001
     pln_act_noise_prim = 0.001
@@ -77,12 +77,12 @@ if __name__ == '__main__':
     for i_ep in tqdm(range(n_episodes)):
         planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, device=mdl.device)
         planner_abstr = CrossentropyPlanner(DistributionType.NORMAL, device=mdl.device)
-        s_mem, a_mem, r_mem, term_mem = [], [], [], []
+        o_mem, a_mem, r_mem, term_mem = [], [], [], []
 
-        o = env.reset()
-        s_mem.append(o)
+        o_start = env.reset()
+        o_mem.append(o_start)
 
-        o_start = torch.from_numpy(o).to(mdl.device)
+        o_start = torch.from_numpy(o_start).to(mdl.device)
         plan_init = init_s_abstr(model=mdl, planner=planner_prim, env=env, o_start=o_start,
                                  n_rollouts=pln_d_batch, n_evolution_steps=pln_n_optim_steps_abstr,
                                  winning_perc=pln_winning_perc, discount=pln_discount,
@@ -94,20 +94,37 @@ if __name__ == '__main__':
                                    n_plan_steps=pln_n_abstract_steps, n_rollouts=pln_d_batch,
                                    n_evolution_steps=pln_n_optim_steps_abstr, winning_perc=pln_winning_perc,
                                    discount=pln_discount, act_noise=pln_act_noise_abstr)
+
         # assemble macro trajectory out of initial data and rollout results
         best_abstr_s = torch.concat([add_time_dim(plan_init['abstr_s']), plan_abstr['abstr_s']], dim=0)
         best_abstr_rnn_state = [plan_init['abstr_rnn_state']] + plan_abstr['abstr_rnn_state']
         best_abstr_r = torch.concat([add_time_dim(plan_init['abstr_r']), plan_abstr['abstr_r']], dim=0)
         best_abstr_term = torch.concat([add_time_dim(plan_init['abstr_term']), plan_abstr['abstr_term']], dim=0)
+        best_abstr_o = torch.concat([add_time_dim(plan_init['abstr_o']), plan_abstr['abstr_o']], dim=0)
 
         actions = plan_init['prim_a']
+        prim_s = plan_init['prim_s']
+        prim_rnn_state = plan_init['prim_rnn_state']
+        init_prim_o = plan_init['prim_o']
+        init_prim_r = plan_init['prim_r']
+        init_prim_term = plan_init['prim_term']
         for t in range(pln_n_abstract_steps):
-            plan_detail = plan_section(model=mdl, planner=planner_prim, env=env, abstr_s=best_abstr_s[t],
-                                       abstr_rnn_state=best_abstr_rnn_state[t], abstr_s_next=best_abstr_s[t + 1],
+            #prim_s, prim_rnn_state = mdl.unfuse_state(best_abstr_o[t])  # use abstract model predictions for state inits
+            plan_detail = plan_section(model=mdl, planner=planner_prim, env=env,
+                                       init_prim_o=init_prim_o, init_prim_r=init_prim_r,
+                                       init_prim_term=init_prim_term, prim_s=prim_s, prim_rnn_state=prim_rnn_state,
+                                       subtraj_hist_target=best_abstr_o[t + 1],
+                                       abstr_s=best_abstr_s[t], abstr_rnn_state=best_abstr_rnn_state[t],
+                                       abstr_s_next=best_abstr_s[t + 1],
                                        abstr_r=best_abstr_r[t], abstr_term=best_abstr_term[t],
                                        n_rollouts=pln_d_batch, n_evolution_steps=pln_n_optim_steps_prim,
                                        winning_perc=pln_winning_perc, act_noise=pln_act_noise_prim)
             actions = torch.concat([actions, plan_detail['prim_a']], dim=0)
+            init_prim_o = plan_detail['prim_o']
+            init_prim_r = plan_detail['prim_r']
+            init_prim_term = plan_detail['prim_term']
+            prim_s = plan_detail['prim_s']
+            prim_rnn_state = plan_detail['prim_rnn_state']
 
         action_iter = iter(actions.detach().cpu().numpy().argmax(axis=-1))
         terminal = False
@@ -121,7 +138,7 @@ if __name__ == '__main__':
                 a = next(action_iter)
                 s_, r, terminal, info = env.step(a)
 
-                s_mem.append(s_)
+                o_mem.append(s_)
                 a_mem.append(a)
                 r_mem.append(r)
                 term_mem.append(terminal)
@@ -133,7 +150,7 @@ if __name__ == '__main__':
                 break
 
         n_steps.append(i_step)
-        mem.push(s_mem, a_mem, r_mem, term_mem)
+        mem.push(o_mem, a_mem, r_mem, term_mem)
 
         n_macro_steps = np.ceil(i_step  / mdl.abstract_step_size).astype(np.int32)
         best_macro_terms = plan_abstr['abstr_term']

@@ -55,7 +55,7 @@ class RSSM(torch.nn.Module):
                  r_lws: Sequence[int] = (32, 32),
                  term_lws: Sequence[int] = (32, 32),
                  layer_norm: bool = False,
-                 feed_back_last_prediction: bool = False,
+                 feed_back_last_prediction: bool = True,
                  activation: str = 'relu',
                  rnn_type: str = 'lstm'):
         super().__init__()

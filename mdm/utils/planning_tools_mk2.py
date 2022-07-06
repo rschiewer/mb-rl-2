@@ -32,49 +32,61 @@ def init_s_abstr(model: MultiscaleDynamicsModelMK2,
                                                     ctx_high_level=None, o_target=None, r_target=None,
                                                     term_target=None, mem=None, use_posterior=False, sample=False)
         mem_ = model.pack_mem(mem_)
-        mem_['rnn_state'] = prim_final_['rnn_state']
         return mem_['prim_r'].squeeze(-1), None, mem_
 
     # get best subtrajectory
     a, act_dist, i_winners, R_winners, rollout_data = planner.plan(rollout_fn=_rollout_init_fn,
-                                                        d_dist=env.action_space.n,
-                                                        n_rollouts=n_rollouts,
-                                                        n_plan_steps=model.abstract_step_size,
-                                                        n_evolution_steps=n_evolution_steps,
-                                                        winning_perc=winning_perc,
-                                                        discount=discount,
-                                                        act_noise=act_noise)
+                                                                   d_dist=env.action_space.n,
+                                                                   n_rollouts=n_rollouts,
+                                                                   n_plan_steps=model.abstract_step_size,
+                                                                   n_evolution_steps=n_evolution_steps,
+                                                                   winning_perc=winning_perc,
+                                                                   discount=discount,
+                                                                   act_noise=act_noise)
     i_bst = i_winners[0]
 
-    best_h = get_rnn_state_from_batch(rollout_data['rnn_state'], model.primitive_model.rnn_type, i_bst)
-    best_s = get_item_from_batch(rollout_data['prim_s'], i_bst)[:, -1]
-    best_ctx = add_time_dim(model.fuse_state(best_s, best_h))
+    best_prim_rnn_state = get_rnn_state_from_batch(rollout_data['prim_rnn_state'][-1], model.primitive_model.rnn_type,
+                                                   i_bst)
+    best_prim_s = get_item_from_batch(rollout_data['prim_s'], i_bst)[:, -1]
+    best_ctx = add_time_dim(model.fuse_state(best_prim_s, best_prim_rnn_state))
 
     best_prim_a = get_item_from_batch(a, i_bst)
     best_prim_a = to_onehot(best_prim_a, model.d_action)
-    best_prim_r = get_item_from_batch(rollout_data['prim_r'], i_bst)
-    best_prim_term = get_item_from_batch(rollout_data['prim_term'], i_bst)
+    best_prim_o = get_item_from_batch(rollout_data['prim_o'], i_bst)[:, -1]
+    best_prim_r = get_item_from_batch(rollout_data['prim_r'], i_bst)[:, -1]
+    best_prim_term = get_item_from_batch(rollout_data['prim_term'], i_bst)[:, -1]
 
     a_abstr = add_time_dim(model.abstract_action_model(best_prim_a))
-    r_target = best_prim_r.sum(dim=1, keepdim=True)
-    term_target = best_prim_term.max(dim=1, keepdim=True).values
+    r_target = add_time_dim(best_prim_r.sum(dim=1, keepdim=True))
+    term_target = add_time_dim(best_prim_term.max(dim=1, keepdim=True).values)
     mem, abstr_current = model.rollout_abstract(a=a_abstr, init_r=None, init_term=None, init_s=None,
-                                                init_rnn_state=None,
-                                                ctx_low_level=best_ctx, r_target=r_target,
+                                                init_rnn_state=None, o_target=best_ctx, r_target=r_target,
                                                 term_target=term_target, mem=None, use_posterior=True, sample=False)
     mem = model.pack_mem(mem)
 
     # remove batch dimensions before returning
     prim_a = best_prim_a[0]
+    prim_o = best_prim_o[0]
+    prim_r = best_prim_r[0]
+    prim_term = best_prim_term[0]
+    prim_rnn_state = get_rnn_state_from_batch(best_prim_rnn_state, model.primitive_model.rnn_type, 0, keep_dim=False)
+    prim_s = best_prim_s[0]
     abstr_s = abstr_current['s'][0]
     abstr_rnn_state = get_rnn_state_from_batch(abstr_current['rnn_state'], model.abstract_model.rnn_type, 0,
                                                keep_dim=False)
+    abstr_o = abstr_current['o'][0]
     abstr_r = abstr_current['r'][0]
     abstr_term = abstr_current['term'][0]
 
-    return {'prim_a': prim_a,
+    return {'prim_o': prim_o,
+            'prim_a': prim_a,
+            'prim_r': prim_r,
+            'prim_term': prim_term,
+            'prim_s': prim_s,
+            'prim_rnn_state': prim_rnn_state,
             'abstr_s': abstr_s,
             'abstr_rnn_state': abstr_rnn_state,
+            'abstr_o': abstr_o,
             'abstr_r': abstr_r,
             'abstr_term': abstr_term}
 
@@ -102,37 +114,45 @@ def plan_abstract(model: MultiscaleDynamicsModelMK2,
     def _rollout_abstract_fn(a_: torch.Tensor):
         mem_, abstr_final_ = model.rollout_abstract(a=a_, init_r=abstr_r_start, init_term=abstr_term_start,
                                                     init_s=abstr_s_start, init_rnn_state=abstr_rnn_state_start,
-                                                    ctx_low_level=None, r_target=None, term_target=None, mem=None,
+                                                    o_target=None, r_target=None, term_target=None, mem=None,
                                                     use_posterior=False, sample=False)
         mem_ = model.pack_mem(mem_)
         return mem_['abstr_r'].squeeze(-1), None, mem_
 
     abstr_a, a_dist, i_winners, R_winners, rollout_data = planner.plan(rollout_fn=_rollout_abstract_fn,
-                                                            d_dist=model.d_abstract_action,
-                                                            n_rollouts=n_rollouts,
-                                                            n_plan_steps=n_plan_steps,
-                                                            n_evolution_steps=n_evolution_steps,
-                                                            winning_perc=winning_perc,
-                                                            discount=discount,
-                                                            act_noise=act_noise)
+                                                                       d_dist=model.d_abstract_action,
+                                                                       n_rollouts=n_rollouts,
+                                                                       n_plan_steps=n_plan_steps,
+                                                                       n_evolution_steps=n_evolution_steps,
+                                                                       winning_perc=winning_perc,
+                                                                       discount=discount,
+                                                                       act_noise=act_noise)
     i_bst = i_winners[0]
     best_abstr_a = abstr_a[i_bst]
     best_abstr_rnn_state = [get_rnn_state_from_batch(h, model.abstract_model.rnn_type, 0, keep_dim=False)
                             for h in rollout_data['abstr_rnn_state']]
     best_abstr_s = rollout_data['abstr_s'][i_bst]
+    best_abstr_o = rollout_data['abstr_o'][i_bst]
     best_abstr_r = rollout_data['abstr_r'][i_bst]
     best_abstr_term = rollout_data['abstr_term'][i_bst]
 
-    return {'abstr_s': best_abstr_s,
-            'abstr_rnn_state': best_abstr_rnn_state,
+    return {'abstr_o': best_abstr_o,
             'abstr_a': best_abstr_a,
             'abstr_r': best_abstr_r,
-            'abstr_term': best_abstr_term}
+            'abstr_term': best_abstr_term,
+            'abstr_s': best_abstr_s,
+            'abstr_rnn_state': best_abstr_rnn_state}
 
 
 def plan_section(model: MultiscaleDynamicsModelMK2,
                  planner: CrossentropyPlanner,
                  env: gym.Env,
+                 init_prim_o: torch.Tensor,
+                 init_prim_r: torch.Tensor,
+                 init_prim_term: torch.Tensor,
+                 prim_s: torch.Tensor,
+                 prim_rnn_state: torch.Tensor,
+                 subtraj_hist_target: torch.Tensor,
                  abstr_s: torch.Tensor,
                  abstr_rnn_state: RnnStateType,
                  abstr_r: torch.Tensor,
@@ -142,47 +162,74 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
                  n_evolution_steps: int,
                  winning_perc: float,
                  act_noise: float):
-    abstr_s = broadcast_to_batch(abstr_s, n_rollouts)
-    abstr_rnn_state = broadcast_rnn_state_to_batch(abstr_rnn_state, model.abstract_model.rnn_type, n_rollouts)
-    abstr_r = add_time_dim(broadcast_to_batch(abstr_r, n_rollouts))
-    abstr_term = add_time_dim(broadcast_to_batch(abstr_term, n_rollouts))
-    abstr_s_next = broadcast_to_batch(abstr_s_next, n_rollouts)
-    ctx_high_level = model.fuse_state(abstr_s, abstr_rnn_state)
+    # Tile init data along batch dimension for rollouts
+    init_prim_o = add_time_dim(broadcast_to_batch(init_prim_o, n_rollouts))
+    init_prim_r = add_time_dim(broadcast_to_batch(init_prim_r, n_rollouts))
+    init_prim_term = add_time_dim(broadcast_to_batch(init_prim_term, n_rollouts))
+    prim_s = broadcast_to_batch(prim_s, n_rollouts)
+    prim_rnn_state = broadcast_rnn_state_to_batch(prim_rnn_state, model.primitive_model.rnn_type, n_rollouts)
+    #abstr_s = broadcast_to_batch(abstr_s, n_rollouts)
+    #abstr_rnn_state = broadcast_rnn_state_to_batch(abstr_rnn_state, model.abstract_model.rnn_type, n_rollouts)
+    #abstr_r = add_time_dim(broadcast_to_batch(abstr_r, n_rollouts))
+    #abstr_term = add_time_dim(broadcast_to_batch(abstr_term, n_rollouts))
+    #abstr_s_next = broadcast_to_batch(abstr_s_next, n_rollouts)
+    #ctx_high_level = model.fuse_state(abstr_s, abstr_rnn_state)
+    subtraj_hist_target = broadcast_to_batch(subtraj_hist_target, n_rollouts)
 
+    # The only changing part for every batch item will be the combination of prim_a
     def _rollout_detailed_fn(a_: torch.Tensor):
         a_ = to_onehot(a_, n_classes=model.d_action)
-        mem_, prim_final_ = model.rollout_primitive(a=a_, init_o=None, init_r=None, init_term=None,
-                                                    init_s=None, init_rnn_state=None,
-                                                    ctx_high_level=ctx_high_level, o_target=None, r_target=None,
+        mem_, prim_final_ = model.rollout_primitive(a=a_, init_o=init_prim_o, init_r=init_prim_r,
+                                                    init_term=init_prim_term, init_s=prim_s,
+                                                    init_rnn_state=prim_rnn_state,
+                                                    ctx_high_level=None, o_target=None, r_target=None,
                                                     term_target=None, mem=None, use_posterior=False, sample=False)
         mem_ = model.pack_mem(mem_)
-        abstr_a_ = add_time_dim(model.abstract_action_model(a_))
-        abstr_r_target_ = mem_['prim_r'].sum(dim=1, keepdim=True)
-        abstr_term_target_ = mem_['prim_term'].max(dim=1, keepdim=True).values
-        ctx_low_level_ = add_time_dim(model.fuse_state(prim_final_['s'], prim_final_['rnn_state']))
-        mem_, abstr_current_ = model.rollout_abstract(a=abstr_a_, init_r=abstr_r, init_term=abstr_term, init_s=abstr_s,
-                                                      init_rnn_state=abstr_rnn_state, ctx_low_level=ctx_low_level_,
-                                                      r_target=abstr_r_target_, term_target=abstr_term_target_,
-                                                      mem=None, use_posterior=True, sample=False)
-        overlap = - torch.sum(torch.abs(abstr_s_next - abstr_current_['s']) ** 2, dim=1)
-        mem_ = model.pack_mem(mem_)
+
+        ctx = model.fuse_state(prim_final_['s'], prim_final_['rnn_state'])
+        overlap = -torch.mean(torch.abs(ctx - subtraj_hist_target) ** 2, dim=1)
+        #abstr_a_ = add_time_dim(model.abstract_action_model(a_))
+        #abstr_r_target_ = mem_['prim_r'].sum(dim=1, keepdim=True)
+        #abstr_term_target_ = mem_['prim_term'].max(dim=1, keepdim=True).values
+        #ctx_low_level_ = add_time_dim(model.fuse_state(prim_final_['s'], prim_final_['rnn_state']))
+        #mem_, abstr_current_ = model.rollout_abstract(a=abstr_a_, init_r=abstr_r, init_term=abstr_term, init_s=abstr_s,
+        #                                              init_rnn_state=abstr_rnn_state, o_target=ctx_low_level_,
+        #                                              r_target=abstr_r_target_, term_target=abstr_term_target_,
+        #                                              mem=None, use_posterior=True, sample=False)
+        #overlap = - torch.sum(torch.abs(abstr_s_next - abstr_current_['s']) ** 2, dim=1)
+        #mem_ = model.pack_mem(mem_)
+
+        # CAUTION: overlap does not have the expected dimension of (n_rollouts, n_plan_steps) which will lead to
+        # a small error after calculating the discounted return during planning
         return overlap, None, mem_
 
     #R_winners = [torch.tensor(-10000, device=abstr_s.device)]
-    #best_a = None
+    #best_prim_a = None
     #while R_winners[0] < -0.1:
-    actions, act_dist, i_winners, R_winners, rollout_data = planner.plan(rollout_fn=_rollout_detailed_fn,
+    a, act_dist, i_winners, R_winners, rollout_data = planner.plan(rollout_fn=_rollout_detailed_fn,
                                                               d_dist=env.action_space.n,
                                                               n_rollouts=n_rollouts,
                                                               n_plan_steps=model.abstract_step_size,
                                                               n_evolution_steps=n_evolution_steps,
-                                                              winning_perc=0.01,
+                                                              winning_perc=0.1,
                                                               discount=1,
                                                               act_noise=act_noise)
-    i_best = i_winners[0]
-    best_a = torch.nn.functional.one_hot(actions[i_best], num_classes=model.d_action).float()
+    i_bst = i_winners[0]
+    best_prim_a = get_item_from_batch(a, i_bst, keep_dim=False)
+    best_prim_a = to_onehot(best_prim_a, model.d_action)
+    best_prim_o = get_item_from_batch(rollout_data['prim_o'], i_bst, keep_dim=False)[-1]
+    best_prim_r = get_item_from_batch(rollout_data['prim_r'], i_bst, keep_dim=False)[-1]
+    best_prim_term = get_item_from_batch(rollout_data['prim_term'], i_bst, keep_dim=False)[-1]
+    best_rnn_state = get_rnn_state_from_batch(rollout_data['prim_rnn_state'][-1], model.primitive_model.rnn_type,
+                                              i_bst, keep_dim=False)
+    best_s = get_item_from_batch(rollout_data['prim_s'], i_bst, keep_dim=False)[-1]
 
-    return {'prim_a': best_a}
+    return {'prim_o': best_prim_o,
+            'prim_a': best_prim_a,
+            'prim_r': best_prim_r,
+            'prim_term': best_prim_term,
+            'prim_s': best_s,
+            'prim_rnn_state': best_rnn_state}
 
 
 def get_item_from_batch(data_batch: torch.Tensor,
