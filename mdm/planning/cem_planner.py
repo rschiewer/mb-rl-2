@@ -25,12 +25,11 @@ def compute_episode_returns(step_rewards: torch.Tensor,
     return discounted_returns
 
 
-def process_terminal_flag_mat(terminal_flags: torch.Tensor,
-                              disc_mat: torch.Tensor):
+def process_terminal_flag_mat(terminal_flags: torch.Tensor):
     # shift terminal flags matrix one to the right to not zero out final reward
     terminal_flags = torch.roll(terminal_flags, shifts=1, dims=1)
     terminal_flags[:, 0] = 0
-    disc_mat = (1 - terminal_flags) * disc_mat
+    disc_mat = torch.cumprod(1 - terminal_flags, dim=1)
     return disc_mat
 
 
@@ -83,7 +82,7 @@ class CrossentropyPlanner:
             criterion, terminal_flag_mat, rollout_data = rollout_fn(actions)
 
             if terminal_flag_mat is not None:
-                disc_mat = process_terminal_flag_mat(terminal_flag_mat, disc_mat)
+                disc_mat = process_terminal_flag_mat(terminal_flag_mat)
             disc_ret = compute_episode_returns(criterion, disc_mat)
             disc_ret_sorted = torch.sort(disc_ret, dim=0, descending=True)
 
