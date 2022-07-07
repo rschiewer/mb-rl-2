@@ -72,7 +72,7 @@ def np_one_hot(x: np.array,
     if not np.issubdtype(x.dtype, np.integer):
         raise ValueError('Only integer arrays can be converted to one-hot encoding')
 
-    x = np.squeeze(x, axis=-1)  # remove possible redundant 1-dim data dimension
+    #x = np.squeeze(x, axis=-1)  # remove possible redundant 1-dim data dimension
     x_onehot = np.zeros((*x.shape, n_categories))
     x = x[..., np.newaxis]  # make sure x_onehot and x have same number of dimensions
     np.put_along_axis(x_onehot, x, 1, axis=-1)  # use x as index array for x_onehot and put 1 at respective indices
@@ -225,10 +225,13 @@ def to_onehot(actions: Union[torch.Tensor, np.ndarray],
               n_classes: int) -> Union[torch.Tensor, np.ndarray]:
     if (actions % 1 != 0).any():
         raise ValueError('All elements in actions must be ints or castable to int without loss of precision')
+    if actions.shape[-1] != 1:
+        raise ValueError('Expected actions vector containing integers with final redundant dimension of 1')
 
+    actions = actions.squeeze(-1)
     if isinstance(actions, torch.Tensor):
         actions = actions.to(dtype=torch.int64)
-        actions = actions[..., 0]  # remove dummy dimension
+        #actions = actions[..., 0]  # remove dummy dimension
         actions = torch.nn.functional.one_hot(actions, num_classes=n_classes)
         actions = actions.to(device=actions.device, dtype=torch.float32)
     else:
