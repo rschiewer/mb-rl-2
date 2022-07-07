@@ -82,8 +82,10 @@ class CrossentropyPlanner:
             criterion, terminal_flag_mat, rollout_data = rollout_fn(actions)
 
             if terminal_flag_mat is not None:
-                disc_mat = process_terminal_flag_mat(terminal_flag_mat)
-            disc_ret = compute_episode_returns(criterion, disc_mat)
+                final_disc_mat = process_terminal_flag_mat(terminal_flag_mat) * disc_mat
+            else:
+                final_disc_mat = disc_mat
+            disc_ret = compute_episode_returns(criterion, final_disc_mat)
             disc_ret_sorted = torch.sort(disc_ret, dim=0, descending=True)
 
             i_winners, R_winners = disc_ret_sorted.indices[:n_winners], disc_ret_sorted.values[:n_winners]
