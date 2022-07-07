@@ -280,6 +280,13 @@ def remove_time_dim(*xs: torch.Tensor,
     return squeezed
 
 
+def add_data_dim(*xs: torch.Tensor):
+    unsqueezed = [x.unsqueeze(-1) for x in xs]
+    if len(unsqueezed) == 1:
+        unsqueezed = unsqueezed[0]
+    return unsqueezed
+
+
 def make_time_constant(*xs: torch.Tensor,
                        n_timesteps: int,
                        batch_first: bool = True):
