@@ -52,9 +52,8 @@ def remove_duplicates_mp(mem: TrajectoryMemory, n_proc: int = 10):
     is_unique_check = TrajectoryIsUnique(mem)
 
     with Pool(n_proc) as p:
-        unique_flags = p.map(is_unique_check, mem)
-
-    uniques = [traj for unique, traj in zip(unique_flags, mem) if unique]
+        unique_flags = tqdm(p.imap(is_unique_check, mem, chunksize=50), desc='Filtering out duplicates', total=len(mem))
+        uniques = [traj for unique, traj in zip(unique_flags, mem) if unique]
 
     return TrajectoryMemory(uniques)
 
