@@ -225,13 +225,10 @@ def to_onehot(actions: Union[torch.Tensor, np.ndarray],
               n_classes: int) -> Union[torch.Tensor, np.ndarray]:
     if (actions % 1 != 0).any():
         raise ValueError('All elements in actions must be ints or castable to int without loss of precision')
-    if actions.shape[-1] != 1:
-        raise ValueError('Expected actions vector containing integers with final redundant dimension of 1')
 
     actions = actions.squeeze(-1)
     if isinstance(actions, torch.Tensor):
         actions = actions.to(dtype=torch.int64)
-        #actions = actions[..., 0]  # remove dummy dimension
         actions = torch.nn.functional.one_hot(actions, num_classes=n_classes)
         actions = actions.to(device=actions.device, dtype=torch.float32)
     else:
