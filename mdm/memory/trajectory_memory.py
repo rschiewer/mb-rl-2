@@ -198,7 +198,8 @@ class TrajectoryMemory:
         return lengths['a'] == lengths['r'] and lengths['a'] == lengths['terminal'] and lengths['a'] == lengths['s']
 
 
-def flatten_and_unsqueeze(*xs: Union[torch.Tensor, np.ndarray]) -> Union[Tuple[torch.Tensor], Tuple[np.ndarray]]:
+def flatten_and_unsqueeze(*xs: Union[torch.Tensor, np.ndarray]) -> Union[Tuple[torch.Tensor], Tuple[np.ndarray],
+                                                                         torch.Tensor, np.ndarray]:
     reshaped = []
     for x in xs:
         d_x = np.prod(x.shape[2:]) if len(x.shape) >= 3 else 1
