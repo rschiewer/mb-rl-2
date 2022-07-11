@@ -40,7 +40,7 @@ class GymEpisodeDriver(Driver):
             traj_s, traj_a, traj_r, traj_terminal = [], [], [], []
 
             traj_s.append(self._process_obs(self.env.reset()))
-            traj_a.append(np.zeros_like(self.env.action_space.sample()))
+            traj_a.append(np.zeros_like(self.env.action_space.sample()))  # by convention, make (a_0, r_0, t_0) = 0
             traj_r.append(0)
             traj_terminal.append(False)
 
