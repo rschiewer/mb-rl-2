@@ -1,6 +1,6 @@
 from inspect import stack
 from pathlib import Path
-from typing import Union, Dict, Tuple, List
+from typing import Union, Dict, Tuple, List, Optional
 from itertools import product, chain, repeat
 import sys
 import re
@@ -160,6 +160,43 @@ def gen_macro_state_map(env: Gridworld,
     return macro_s_init_mean, macro_s_init_std, abstr_s_init_history
 
 
+def gen_prim_state_map(env: Gridworld,
+                       mdl: MultiscaleDynamicsModelMK2,
+                       n_trials: int = 1):
+    # find all possible starting locations
+    free_locations = env.find_cell_type(CellType.FREE)
+    agent_locations = env.find_cell_type(CellType.AGENT)
+    if agent_locations.size == 2:
+        agent_locations = agent_locations[np.newaxis, ...]
+    free_locations = np.concatenate([free_locations, agent_locations], axis=0)
+    free_locations = [tuple(loc) for loc in free_locations]
+
+    o_start = torch.tensor(free_locations).to(mdl.device)
+    o_start = normalize_obs(o_start, env)
+    o_start = add_time_dim(o_start)
+    a_start = torch.zeros(o_start.shape[0], 1, env.action_space.n, device=mdl.device)
+    r_start = torch.zeros(o_start.shape[0], 1, 1, device=mdl.device)
+    term_start = torch.zeros(o_start.shape[0], 1, 1, device=mdl.device)
+
+    s_mem = []
+    for n in range(n_trials):
+        mem, prim_current = mdl.rollout_primitive(a=a_start, o=o_start, r=r_start, term=term_start)
+        s_mem.append(prim_current['s'])
+
+    s_mem = torch.stack(s_mem).transpose(0, 1)  # shape after this: (location, trial, state_dim)
+    s_mean = s_mem.mean(dim=1).detach().cpu().numpy()
+    s_std = s_mem.std(dim=1).detach().cpu().numpy()
+
+    map_mean = np.zeros((mdl.primitive_model.d_state, env.grid_h, env.grid_w), dtype=np.float32)
+    map_std = np.zeros_like(map_mean)
+
+    for loc, _s_mean, _s_std in zip(free_locations, s_mean, s_std):
+        map_mean[:, loc[0], loc[1]] = _s_mean
+        map_std[:, loc[0], loc[1]] = _s_std
+
+    return map_mean, map_std
+
+
 def transform_macro_s_init_history(macro_s_init_history):
     result_macro_ss, result_locs, result_act_sequences = [], [], []
     for loc, data in macro_s_init_history.items():
@@ -269,8 +306,8 @@ def prepare_data(s: Union[np.ndarray, torch.Tensor],
     return s, a, r, terminal
 
 
-def gen_discrete_mdl_stats(mdl: torch.nn.Module, n_inputs: int, seq_len: int, n_repetitions: int = 1):
-    device = next(mdl.parameters()).device
+def discrete_stats(module: torch.nn.Module, n_inputs: int, seq_len: int, n_repetitions: int = 1):
+    device = next(module.parameters()).device
 
     # generate all permutations of possible inputs
     available_inputs = list(range(n_inputs))
@@ -281,7 +318,7 @@ def gen_discrete_mdl_stats(mdl: torch.nn.Module, n_inputs: int, seq_len: int, n_
     input_sequences = input_sequences.repeat(n_repetitions, 1, 1)
 
     # query the model
-    Y = mdl(input_sequences)
+    Y = module(input_sequences)
     d_out = Y.shape[-1]
     Y = Y.reshape(n_unique_sequences, n_repetitions, d_out)
 
@@ -305,3 +342,34 @@ def gen_discrete_mdl_stats(mdl: torch.nn.Module, n_inputs: int, seq_len: int, n_
     Y_mae = Y_mae.detach().cpu().numpy()
 
     return Y_mean, Y_std, Y_mae
+
+
+def sensitivity_analysis(module: torch.nn.Module,
+                         const_input: torch.Tensor,
+                         input_mask: torch.Tensor,
+                         n_runs: int = 1,
+                         random_range_low: torch.Tensor = -1.0,
+                         random_range_high: torch.Tensor = 1.0):
+    assert const_input.shape == input_mask.shape, 'const_input should have the same shape as input_mask'
+    assert torch.all(torch.logical_or(input_mask == 0, input_mask == 1))
+
+    dims = [n_runs] + [1 for _ in range(const_input.ndim)]
+    const_input = torch.tile(const_input, dims=dims)
+    input_mask = torch.tile(input_mask, dims=dims)
+
+    rand_tens = torch.rand_like(const_input) * (random_range_high - random_range_low) + random_range_low
+    input = torch.where(input_mask, const_input, rand_tens)
+    output = module(input)
+
+    if isinstance(output, dict):
+        ret_mean = {k: v.mean(dims=0) for k, v in output.items()}
+        ret_std = {k: v.std(dims=0) for k, v in output.items()}
+    elif isinstance(output, tuple):
+        ret_mean = [x.mean(dims=0) for x in output]
+        ret_std = [x.std(dims=0) for x in output]
+    else:
+        ret_mean = torch.mean(output, dim=0)
+        ret_std = torch.std(output, dim=0)
+
+    return ret_mean, ret_std
+
