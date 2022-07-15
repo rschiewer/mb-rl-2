@@ -185,7 +185,7 @@ def gen_prim_state_map(env: Gridworld,
 
     s_mem = torch.stack(s_mem).transpose(0, 1)  # shape after this: (location, trial, state_dim)
     s_mean = s_mem.mean(dim=1).detach().cpu().numpy()
-    s_std = s_mem.std(dim=1).detach().cpu().numpy()
+    s_std = s_mem.std(dim=1, unbiased=False).detach().cpu().numpy()
 
     map_mean = np.zeros((mdl.primitive_model.d_state, env.grid_h, env.grid_w), dtype=np.float32)
     map_std = np.zeros_like(map_mean)
@@ -369,7 +369,7 @@ def sensitivity_analysis(module: torch.nn.Module,
         ret_std = [x.std(dims=0) for x in output]
     else:
         ret_mean = torch.mean(output, dim=0)
-        ret_std = torch.std(output, dim=0)
+        ret_std = torch.std(output, dim=0, unbiased=False)
 
     return ret_mean, ret_std
 
