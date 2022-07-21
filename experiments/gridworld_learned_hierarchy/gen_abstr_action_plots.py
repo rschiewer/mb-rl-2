@@ -12,7 +12,7 @@ from mdm.gridworld.gridworld import Gridworld, CellType
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.memory.trajectory_memory import TrajectoryMemory
 from mdm.training.offline_rl_driver import OfflineRLDriver
-from mdm.utils.utils import here, load_yaml, gen_discrete_mdl_stats
+from mdm.utils.utils import here, load_yaml, discrete_stats
 
 
 if __name__ == '__main__':
@@ -59,8 +59,8 @@ if __name__ == '__main__':
     plt.tight_layout()
     plt.show()
 
-    Y_mean, Y_std, Y_mae = gen_discrete_mdl_stats(mdl.abstract_action_model, env.action_space.n,
-                                                  mdl.abstract_step_size, 1)
+    Y_mean, Y_std, Y_mae = discrete_stats(mdl.abstract_action_model, env.action_space.n,
+                                          mdl.abstract_step_size, 1)
 
     plt.matshow(Y_mae)
     plt.colorbar()
