@@ -55,7 +55,6 @@ class RSSM(torch.nn.Module):
                  r_lws: Sequence[int] = (32, 32),
                  term_lws: Sequence[int] = (32, 32),
                  layer_norm: bool = False,
-                 feed_back_last_prediction: bool = False,
                  activation: str = 'relu',
                  rnn_type: str = 'lstm'):
         super().__init__()
@@ -70,7 +69,6 @@ class RSSM(torch.nn.Module):
         self.n_hidden_layers = n_hidden_layers
         self.epsilon = epsilon
         self.layer_norm = layer_norm
-        self.feed_back_last_prediction = feed_back_last_prediction
         self.activation = activation
         self.rnn_type = rnn_type
 
@@ -88,8 +86,6 @@ class RSSM(torch.nn.Module):
             raise ValueError(f'Unsupported rnn type: {rnn_type}')
 
         d_det_core = d_state + d_action + d_ctx_high_level
-        if feed_back_last_prediction:
-            d_det_core += d_observation + d_reward + 1
         self._rnn = rnn_constr(d_det_core, hidden_size=d_hidden, num_layers=n_hidden_layers, batch_first=True,
                                dropout=hidden_dropout)
         #self._det_core = haste.LayerNormLSTM(d_state + d_action + d_high_level_ctx, hidden_size=d_hidden,
@@ -171,39 +167,35 @@ class RSSM(torch.nn.Module):
     def _det_core(self,
                   s: torch.Tensor,
                   a: torch.Tensor,
-                  x_hat: torch.Tensor,
                   ctx_high_level: torch.Tensor,
                   rnn_state: RnnStateType):
-        if self.feed_back_last_prediction:
-            inp = torch.concat([s, a, x_hat, ctx_high_level], dim=-1)
-        else:
-            inp = torch.concat([s, a, ctx_high_level], dim=-1)
+        #if self.feed_back_last_prediction:
+        #    inp = torch.concat([s, a, x_hat, ctx_high_level], dim=-1)
+        #else:
+        #    inp = torch.concat([s, a, ctx_high_level], dim=-1)
+        inp = torch.concat([s, a, ctx_high_level], dim=-1)
         inp = add_time_dim(inp)
         x_det, new_h = self._rnn(inp, rnn_state)
         x_det = remove_time_dim(x_det)
-        #if self.layer_norm:
-        #    new_h[0] = self.det_core_norm(new_h[0])
         return x_det, new_h
 
     def forward(self,
                 s: torch.Tensor,
                 a: torch.Tensor,
-                x_hat: torch.Tensor,  # o, r, term from last prediction step (since is only implicitly contained in s)
-                x_post_groundtruth: torch.Tensor,  # ground truth o, r, term for this prediction step for the posterior
+                x_current_groundtruth: torch.Tensor,  # ground truth o, r, term for this prediction step for the posterior
                 ctx_high_level: torch.Tensor,  # abstr_s, abstr_h in primitive model
                 rnn_state: RnnStateType,  # from previous step
                 use_posterior: bool = True,
                 sample: bool = True):
-        h, next_rnn_state = self._det_core(s, a, x_hat, ctx_high_level, rnn_state)
+        h, next_rnn_state = self._det_core(s, a, ctx_high_level, rnn_state)
         s_prior = self.build_s_prior(h)
+        s_post = self.build_s_post(h, x_current_groundtruth, s_prior)
 
         if use_posterior:
-            s_post = self.build_s_post(h, x_post_groundtruth, s_prior)
             s_dist = s_post
         else:
-            s_post = None
             s_dist = s_prior
-
+            #s_post = s_prior  # TODO: only a test, remove this!
         if sample:
             s_smpl = s_dist.rsample()
         else:
@@ -213,8 +205,8 @@ class RSSM(torch.nn.Module):
         r_dist, r_smpl = self._build_r_dist(h, s_smpl, sample)
         term_smpl = self._build_terminal_dist(h, s_smpl)
 
-        return {'s': s_smpl, 's_prior': s_prior, 's_post': s_post, 'o': o_smpl, 'r': r_smpl, 'term': term_smpl,
-                'rnn_state': next_rnn_state}
+        return {'s': s_smpl, 's_prior': s_prior, 's_post': s_post, 'o_dist': o_dist, 'o': o_smpl, 'r_dist': r_dist,
+                'r': r_smpl, 'term': term_smpl, 'rnn_state': next_rnn_state}
 
     def build_s_prior(self,
                       h: torch.Tensor) -> torch.distributions.Normal:
