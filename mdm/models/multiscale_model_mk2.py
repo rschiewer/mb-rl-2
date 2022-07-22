@@ -63,13 +63,13 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
     def _warmup_prim(self) -> int:
         if isinstance(self.n_warmup_prim, int):
-            return random.randint(1, self.n_warmup_prim)
+            return self.n_warmup_prim
         else:
             return random.randint(self.n_warmup_prim[0], self.n_warmup_prim[1])
 
     def _warmup_abstr(self) -> int:
         if isinstance(self.n_warmup_abstr, int):
-            return random.randint(1, self.n_warmup_abstr)
+            return self.n_warmup_abstr
         else:
             return random.randint(self.n_warmup_abstr[0], self.n_warmup_abstr[1])
 
