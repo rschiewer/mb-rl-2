@@ -48,7 +48,7 @@ class NeptuneLogger(Logger):
             raise RuntimeError('Please specify NEPTUNE_API_TOKEN environment variable or provide the api token via '
                                'constructor argument')
 
-    def setup(self):
+    def start_session(self):
         if not self._run:
             if self._run_id:
                 self._run = neptune.init(project=self._project, run=self._run_id, api_token=self.token)
@@ -56,7 +56,7 @@ class NeptuneLogger(Logger):
                 self._run = neptune.init(project=self._project, api_token=self.token)
                 self._run_id = self._run['sys/id'].fetch()
 
-    def teardown(self):
+    def stop_session(self):
         if self._run:
             self._run.stop()
 

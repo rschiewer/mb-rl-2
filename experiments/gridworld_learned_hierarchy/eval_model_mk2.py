@@ -40,7 +40,7 @@ if __name__ == '__main__':
     if args.log:
         logger = NeptuneLogger(neptune_cfg['PROJECT_NAME'], api_token=neptune_cfg['NEPTUNE_API_TOKEN'],
                                run_id=args.id[0])
-        logger.setup()
+        logger.start_session()
     else:
         logger = None
 

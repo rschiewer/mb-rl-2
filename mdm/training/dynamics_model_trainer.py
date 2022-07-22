@@ -47,7 +47,7 @@ class DynamicsModelTrainer(ABC):
             step_iter = tqdm(step_iter, desc='Training Progress')
 
         if self.logger:
-            self.logger.setup()
+            self.logger.start_session()
 
         for i_step in step_iter:
             s, a, r, term = self.get_batch_train()
@@ -108,7 +108,7 @@ class DynamicsModelTrainer(ABC):
                     self.eval_callback(i_step)
 
         if self.logger:
-            self.logger.teardown()
+            self.logger.stop_session()
 
     @staticmethod
     def _update_progressbar_descr(eval_losses: Dict[str, torch.Tensor],

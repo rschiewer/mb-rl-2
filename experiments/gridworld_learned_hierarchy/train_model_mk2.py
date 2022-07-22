@@ -83,7 +83,7 @@ if __name__ == '__main__':
     # train
     if args.log:
         logger = NeptuneLogger(neptune_cfg['PROJECT_NAME'], api_token=neptune_cfg['NEPTUNE_API_TOKEN'])
-        logger.setup()
+        logger.start_session()
         logger.log(cfg, Scope.HYPERPARAMETERS())
     else:
         logger = None

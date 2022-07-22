@@ -61,12 +61,15 @@ class Scope:
 
 class Logger(ABC):
 
+    def __del__(self):
+        self.stop_session()
+
     @abstractmethod
-    def setup(self):
+    def start_session(self):
         pass
 
     @abstractmethod
-    def teardown(self):
+    def stop_session(self):
         pass
 
     @abstractmethod
