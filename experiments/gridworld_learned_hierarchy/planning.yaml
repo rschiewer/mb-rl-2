@@ -1,0 +1,9 @@
+---
+n_episodes: 20
+pln_d_batch: 2048
+pln_n_optim_steps_abstr: 15
+pln_n_optim_steps_prim: 3
+pln_winning_perc: 0.3
+pln_discount: 0.9
+pln_act_noise_abstr: 0.001
+pln_act_noise_prim: 0.001
