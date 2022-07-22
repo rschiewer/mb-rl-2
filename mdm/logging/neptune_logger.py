@@ -56,6 +56,9 @@ class NeptuneLogger(Logger):
             else:
                 self._run = neptune.init(project=self._project, api_token=self.token)
                 self._run_id = self._run['sys/id'].fetch()
+                if self._run_id.startswith('https'):
+                    i_start = self._run_id.rindex('/')
+                    self._run_id = self._run_id[i_start+1:]
 
     def stop_session(self):
         if self._run:
