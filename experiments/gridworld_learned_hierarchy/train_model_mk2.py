@@ -77,6 +77,8 @@ if __name__ == '__main__':
 
     #loader_train = ConcurrentDataLoader(get_batch_train, queue_len=3)
     #loader_test = ConcurrentDataLoader(get_batch_test, queue_len=1)
+    #get_batch_train = loader_train.get_batch
+    #get_batch_test = loader_test.get_batch
     model_path = f'{cfg["final_model_path"]}_{cfg["mdm"]["abstract_step_size"]}.ptmdl'
 
     # train
@@ -117,7 +119,7 @@ if __name__ == '__main__':
 
     torch.save(model, here() / model_path)
     logger.start_session()
-    logger.log_file(here() / model_path, Scope.MISC())
+    logger.log_file(here() / model_path, Scope.DATA() / 'final_weights')
 
     if logger:
         print(logger.run_id)
