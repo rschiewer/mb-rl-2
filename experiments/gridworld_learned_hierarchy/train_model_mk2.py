@@ -8,7 +8,7 @@ import numpy as np
 from PIL import Image
 
 from mdm.gridworld.gridworld import Gridworld
-from mdm.utils.utils import here, load_yaml, prepare_data, fill_placeholders, gen_discrete_mdl_stats
+from mdm.utils.utils import here, load_yaml, prepare_data, fill_placeholders, discrete_stats
 from mdm.models.building_blocks import RSSM, AbstractActionModel
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.training.dynamics_model_trainer import DynamicsModelTrainer
@@ -35,13 +35,12 @@ if __name__ == '__main__':
     cfg['prim_mdl']['d_ctx_high_level'] = 0
     cfg['prim_mdl']['d_x_posterior'] = env.observation_space.shape[0] + 2  # observation, terminal flag and reward
 
-    cfg['abstr_mdl']['d_observation'] = cfg['prim_mdl']['d_state'] + cfg['prim_mdl']['d_hidden'] \
-                                        * cfg['prim_mdl']['n_hidden_layers'] * prim_d_cell
+    #cfg['abstr_mdl']['d_observation'] = cfg['prim_mdl']['d_state'] + cfg['prim_mdl']['d_hidden'] \
+    #                                    * cfg['prim_mdl']['n_hidden_layers'] * prim_d_cell
+    cfg['abstr_mdl']['d_observation'] = cfg['prim_mdl']['d_state']
 
     cfg['abstr_mdl']['d_ctx_high_level'] = 0
-    cfg['abstr_mdl']['d_x_posterior'] = cfg['prim_mdl']['d_state'] + cfg['prim_mdl']['d_hidden'] \
-                                        * cfg['prim_mdl']['n_hidden_layers'] * prim_d_cell \
-                                        + cfg['abstr_mdl']['d_reward'] + 1
+    cfg['abstr_mdl']['d_x_posterior'] = cfg['abstr_mdl']['d_observation'] + cfg['abstr_mdl']['d_reward'] + 1
 
     cfg['abstr_act_mdl']['d_action'] = env.action_space.n
     cfg['abstr_act_mdl']['abstract_step_size'] = cfg['mdm']['abstract_step_size']
@@ -92,8 +91,8 @@ if __name__ == '__main__':
 
     def eval_callback(i_step: int):
         if model.abstract_step_size <= 10 and logger:
-            Y_mean, Y_std, Y_mae = gen_discrete_mdl_stats(model.abstract_action_model, env.action_space.n,
-                                                          model.abstract_step_size, 1)
+            Y_mean, Y_std, Y_mae = discrete_stats(model.abstract_action_model, env.action_space.n,
+                                                  model.abstract_step_size, 1)
             plt.matshow(Y_mae, fignum=1)
             plt.colorbar()
             buffer = io.BytesIO()

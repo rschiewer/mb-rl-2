@@ -98,48 +98,56 @@ def gen_macro_state_map(env: Gridworld,
     free_locations = [tuple(loc) for loc in free_locations]
 
     # find all possible destination locations
-    groundtruth_s_final = {}
+    # TODO: rewrite this to collect init data like in init_s_prim
+    # CAUTION: mind that initial aciton must be zero
+    # CAUTION: if done, add zero padding to memories
+    init_chunk_groundtruth = {}
     for loc in free_locations:
-        groundtruth_s_final[loc] = {}
+        init_chunk_groundtruth[loc] = {}
         for a_seq in action_sequences:
-            s_ = env.reset()  # TODO: check!
             env.teleport_agent(loc)
-            for a in a_seq:
-                s_, r, done, _ = env.step(a)
+            o_mem, r_mem, term_mem = [env.reset()], [0.0], [False]
+            a_mem = [0] + a_seq
+            for a in a_mem[1:]:
+                o, r, done, _ = env.step(a)
+                o_mem.append(tuple(o))
+                r_mem.append(r)
+                term_mem.append(done)
                 if done: break
-            groundtruth_s_final[loc][a_seq] = tuple(s_)
+            init_chunk_groundtruth[loc][a_seq] = {'o': o_mem, 'a': a_mem, 'r': r_mem, 'term': term_mem}
 
-    #for s_final in groundtruth_s_final:
+    #for s_final in init_chunk_groundtruth:
     #    assert(tuple(s_final) in free_locations)
 
     # convert to tensors
-    a_sequences = [torch.tensor(s).to(mdl.device) for s in action_sequences]
-    a_sequences = torch.stack(a_sequences)
-    #a_sequences = torch.nn.functional.one_hot(a_sequences, num_classes=mdl.d_action)
+    #a_sequences = [torch.tensor(o).to(mdl.device) for o in action_sequences]
+    #a_sequences = torch.stack(a_sequences)
+    a_sequences = torch.tensor(action_sequences).to(mdl.device)
     a_sequences = to_onehot(a_sequences, mdl.d_action)
-    abstr_a = add_time_dim(mdl.abstract_action_model(a_sequences))
-    ss_start = torch.tensor(free_locations).to(mdl.device)
-    ss_start = normalize_obs(ss_start, env)
+    abstr_a = mdl.abstract_action_model(a_sequences)
+    abstr_a = add_time_dim(abstr_a)
+    o_start = torch.tensor(free_locations).to(mdl.device)
+    o_start = normalize_obs(o_start, env)
 
     # do rollouts
     abstr_s_init_history = {}
     for n in range(n_trials):
-        for s_start, loc in zip(ss_start, free_locations):
+        for o, loc in zip(o_start, free_locations):
             # prepare
-            s_start = torch.tile(s_start, dims=(n_unique_sequences, 1))
-            s_start = s_start.unsqueeze(1)
+            o = torch.tile(o, dims=(n_unique_sequences, 1))
+            o = o.unsqueeze(1)
 
             # predict
-            mem, pred_prim_final = mdl.rollout_primitive(a=a_sequences, o=s_start, use_posterior=False)
+            mem, pred_prim_final = mdl.rollout_primitive(a=a_sequences, o=o)
             mem = mdl.pack_mem(mem)
             abstr_r_target = mem['prim_r'].sum(dim=1, keepdim=True)
             abstr_term_target = mem['prim_term'].max(dim=1, keepdim=True).values
-            ctx_low_level = add_time_dim(mdl.fuse_state(pred_prim_final['s'], pred_prim_final['rnn_state']))
+            ctx_low_level = add_time_dim(mdl.fuse_state(pred_prim_final['o'], pred_prim_final['rnn_state']))
             _, pred_abstr_final = mdl.rollout_abstract(a=abstr_a, o_target=ctx_low_level,
                                                        r_target=abstr_r_target, term_target=abstr_term_target,
                                                        use_posterior=True)
             #pred_abstr_final = mdl.macro_next_posterior(zero_abstr_s, zero_abstr_a, pred_prim['h'])
-            abstr_s_next_batch = pred_abstr_final['s'].detach().cpu().numpy()
+            abstr_s_next_batch = pred_abstr_final['o'].detach().cpu().numpy()
 
             # store
             loc_hash = abstr_s_init_history.get(loc, {})
@@ -284,6 +292,8 @@ def prepare_data(s: Union[np.ndarray, torch.Tensor],
     s, a, r, terminal = flatten_and_unsqueeze(s, a, r, terminal)
     s = normalize_obs(s, env)
     a = to_onehot(a, env.action_space.n)
+    # don't care about the first action being [1, 0, ... ] if it's always this way
+    # TODO: comment this out
     a[:, 0] = 0  # first timestep action is zero padding, which is falsely converted to [1, 0, 0, ...] vector
 
     # since a, r and terminal were padded with one element anyway, rotate it to the front and make it zero
