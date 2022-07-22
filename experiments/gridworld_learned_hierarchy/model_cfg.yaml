@@ -8,11 +8,11 @@ final_model_path: "model"
 
 # model in general
 mdm:
-  abstract_step_size: 5
-  beta_kl_primitive: 0.1
-  beta_reg_primitive: 0.0000
-  beta_kl_abstract: 0.1
-  beta_reg_abstract: 0.0000
+  abstract_step_size: 3
+  beta_kl_primitive: 1.0
+  beta_reg_primitive: 0.001
+  beta_kl_abstract: 1.0
+  beta_reg_abstract: 0.001
   n_warmup_prim: 3
   n_warmup_abstr: 1
   detach_posteriors: False
@@ -24,24 +24,24 @@ prim_mdl:
   d_hidden: 64
   n_hidden_layers: 2
   hidden_dropout: 0.1
-  epsilon: 0.01
-  s_prior_lws: [32, 32]
-  s_post_lws: [32, 32]
-  o_lws: [32, 32]
-  r_lws: [32, 32]
-  term_lws: [32, 32]
+  epsilon: 0.001
+  s_prior_lws: [64, 64]
+  s_post_lws: [64, 64]
+  o_lws: [64, 64]
+  r_lws: [64, 64]
+  term_lws: [64, 64]
   layer_norm: True
   activation: "relu"
   rnn_type: "lstm"
 
 abstr_mdl:
-  d_state: 32
+  d_state: 64
   d_hidden: 128
   d_action: 3
   d_reward: 1
   n_hidden_layers: 2
   hidden_dropout: 0.1
-  epsilon: 0.01
+  epsilon: 0.001
   s_prior_lws: [128, 128]
   s_post_lws: [128, 128]
   o_lws: [128, 64]
@@ -52,16 +52,15 @@ abstr_mdl:
   rnn_type: "lstm"
 
 abstr_act_mdl:
-  lws: [64, 64]
+  lws: [128, 64]
   activation: "relu"
   layer_norm: True
 
 optim:
-  lr: 0.003
+  lr: 0.005
 
 trainer:
-  n_warmup_steps: 3
   n_train_steps: 10000
-  eval_interval: 50
-  d_batch: 2048
+  eval_interval: 100
+  d_batch: 4096
   pad_last_terminal_flag: False

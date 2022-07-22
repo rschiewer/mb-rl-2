@@ -23,7 +23,7 @@ if __name__ == '__main__':
     parser.add_argument('-log', default=False, action='store_true')
     args = parser.parse_args()
 
-    cfg = load_yaml(here() / 'model_mk2.yaml')
+    cfg = load_yaml(here() / 'model_cfg.yaml')
     env = Gridworld.from_cleartext(here() / cfg['env'])
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 

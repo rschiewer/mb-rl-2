@@ -27,9 +27,9 @@ if __name__ == '__main__':
     parser.add_argument('-log', action='store_true')
     args = parser.parse_args()
 
-    cfg = load_yaml(here() / 'model_mk2.yaml')
+    cfg = load_yaml(here() / 'model_cfg.yaml')
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
-    planning_cfg = load_yaml(here() / 'planning.yaml')
+    planning_cfg = load_yaml(here() / 'planning_cfg.yaml')
 
     if len(args.id) == 0:
         model_path = f'{cfg["final_model_path"]}.ptmdl'
