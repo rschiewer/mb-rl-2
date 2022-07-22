@@ -15,6 +15,7 @@ class Scope:
     _TEST = 'test'
     _PARAMETERS = 'parameters'
     _HYPERPARAMETERS = 'hyperparameters'
+    _DATA = 'data'
     _MISC = 'misc'
     scope_check = re.compile('^[a-zA-Z0-9_/]+$')
 
@@ -54,6 +55,10 @@ class Scope:
     @staticmethod
     def HYPERPARAMETERS():
         return Scope(Scope._HYPERPARAMETERS)
+
+    @staticmethod
+    def DATA():
+        return Scope(Scope._DATA)
 
     @staticmethod
     def MISC():
