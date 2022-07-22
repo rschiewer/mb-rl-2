@@ -18,8 +18,7 @@ class DynamicsModel(torch.nn.Module, ABC):
                    a_ground_truth: torch.Tensor,
                    r_ground_truth: torch.Tensor,
                    term_ground_truth: torch.Tensor,
-                   optimizer: torch.optim.Optimizer,
-                   n_warmup: int = 1) -> Dict[str, torch.Tensor]:
+                   optimizer: torch.optim.Optimizer) -> Dict[str, torch.Tensor]:
         pass
 
     @abstractmethod
@@ -27,8 +26,7 @@ class DynamicsModel(torch.nn.Module, ABC):
                   o_ground_truth: torch.Tensor,
                   a_ground_truth: torch.Tensor,
                   r_ground_truth: torch.Tensor,
-                  term_ground_truth: torch.Tensor,
-                  n_warmup: int = 1) -> Dict[str, torch.Tensor]:
+                  term_ground_truth: torch.Tensor) -> Dict[str, torch.Tensor]:
         pass
 
     @abstractmethod

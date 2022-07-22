@@ -229,10 +229,9 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                    a_ground_truth: torch.Tensor,
                    r_ground_truth: torch.Tensor,
                    term_ground_truth: torch.Tensor,
-                   optimizer: torch.optim.Optimizer,
-                   n_warmup: int = 1) -> Dict[str, torch.Tensor]:
+                   optimizer: torch.optim.Optimizer) -> Dict[str, torch.Tensor]:
         optimizer.zero_grad(set_to_none=True)
-        losses = self.eval_step(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, n_warmup)
+        losses = self.eval_step(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth)
         losses['total'].backward()
         optimizer.step()
 
@@ -242,8 +241,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                   o_ground_truth: torch.Tensor,
                   a_ground_truth: torch.Tensor,
                   r_ground_truth: torch.Tensor,
-                  term_ground_truth: torch.Tensor,
-                  n_warmup: int = 1) -> Dict[str, torch.Tensor]:
+                  term_ground_truth: torch.Tensor) -> Dict[str, torch.Tensor]:
         device = self._device
 
         # sum makes sense for rewards, use padding=0 to not affect sum for last element
