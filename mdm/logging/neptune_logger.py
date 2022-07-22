@@ -59,6 +59,7 @@ class NeptuneLogger(Logger):
     def stop_session(self):
         if self._run:
             self._run.stop()
+        self._run = None
 
     def log(self,
             message: Dict[str, Any],
@@ -78,7 +79,7 @@ class NeptuneLogger(Logger):
                 self._run[str(full_scope)].log(value, step=time_step)
 
     def log_object(self, object: Any, scope: Union[Scope, str], time_step: int = None):
-        pass
+        self._run[str(scope)].upload(object)
 
     def log_plot(self, figure: Image, scope: Union[Scope, str], time_step: int = None):
         self._run[str(scope)].log(figure)
