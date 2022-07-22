@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 import re
 from typing import Any, Dict, Union
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
@@ -84,6 +85,13 @@ class Logger(ABC):
                    object: Any,
                    scope: Scope,
                    time_step: int = None):
+        pass
+
+    @abstractmethod
+    def log_file(self,
+                 path: Union[str, Path],
+                 scope: Scope,
+                 time_step: int = None):
         pass
 
     @abstractmethod

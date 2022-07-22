@@ -115,7 +115,9 @@ if __name__ == '__main__':
     else:
         model_path = f'{cfg["final_model_path"]}.ptmdl'
 
-    torch.save(model, Path(__file__).parent / model_path)
+    torch.save(model, here() / model_path)
+    logger.start_session()
+    logger.log_file(here() / model_path, Scope.MISC())
 
     if logger:
         print(logger.run_id)

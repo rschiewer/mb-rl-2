@@ -1,5 +1,6 @@
 from typing import Dict, Any, Union
 import os
+from pathlib import Path
 
 from neptune.new.types import File
 import neptune.new as neptune
@@ -79,7 +80,13 @@ class NeptuneLogger(Logger):
                 self._run[str(full_scope)].log(value, step=time_step)
 
     def log_object(self, object: Any, scope: Union[Scope, str], time_step: int = None):
-        self._run[str(scope)].upload(object)
+        raise NotImplementedError('Directly logging objects is not supported')
+
+    def log_file(self,
+                 path: Union[str, Path],
+                 scope: Scope,
+                 time_step: int = None):
+        self._run[str(scope)].upload(str(path))
 
     def log_plot(self, figure: Image, scope: Union[Scope, str], time_step: int = None):
         self._run[str(scope)].log(figure)
