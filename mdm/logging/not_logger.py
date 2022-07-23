@@ -1,4 +1,5 @@
-from typing import Any, Dict
+from pathlib import Path
+from typing import Any, Dict, Union
 
 from matplotlib.figure import Figure
 
@@ -13,12 +14,27 @@ class NotLogger(Logger):
     def stop_session(self):
         pass
 
-    def log(self, message: Dict[str, Any], scope: Scope, time_step: int = None):
+    def log(self,
+            message: Dict[str, Any],
+            scope: Scope,
+            time_step: int = None):
         pass
 
-    def log_object(self, object: Any, scope: Scope, time_step: int = None):
+    def log_object(self,
+                   object: Any,
+                   scope: Scope,
+                   time_step: int = None):
         pass
 
-    def log_plot(self, figure: Figure, scope: Scope, time_step: int = None):
+    def log_plot(self,
+                 figure: Figure,
+                 scope: Scope,
+                 time_step: int = None):
+        pass
+
+    def log_file(self,
+                 path: Union[str, Path],
+                 scope: Scope,
+                 time_step: int = None):
         pass
 
