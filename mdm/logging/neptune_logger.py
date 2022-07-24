@@ -62,8 +62,9 @@ class NeptuneLogger(Logger):
 
     def stop_session(self):
         if self._run:
+            self._run.wait()
             self._run.stop()
-        self._run = None
+            self._run = None
 
     def log(self,
             message: Dict[str, Any],

@@ -121,5 +121,6 @@ if __name__ == '__main__':
     logger.start_session()
     logger.log_file(here() / model_path, Scope.DATA() / 'final_weights')
 
+    logger.stop_session()
     if logger:
         print(logger.run_id)
