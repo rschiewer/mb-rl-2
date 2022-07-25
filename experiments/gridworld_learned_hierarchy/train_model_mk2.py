@@ -15,6 +15,7 @@ from mdm.training.dynamics_model_trainer import DynamicsModelTrainer
 from mdm.memory.trajectory_memory import TrajectoryMemory
 from mdm.training.offline_rl_driver import OfflineRLDriver
 from mdm.logging.neptune_logger import NeptuneLogger
+from mdm.logging.not_logger import NotLogger
 from mdm.logging.logger import Scope
 from mdm.training.data_loader import ConcurrentDataLoader
 
@@ -87,13 +88,13 @@ if __name__ == '__main__':
         logger.start_session()
         logger.log(cfg, Scope.HYPERPARAMETERS())
     else:
-        logger = None
+        logger = NotLogger()
 
     fig = plt.figure(figsize=(10, 10))
 
 
     def eval_callback(i_step: int):
-        if model.abstract_step_size <= 10 and logger:
+        if model.abstract_step_size <= 10:
             Y_mean, Y_std, Y_mae = discrete_stats(model.abstract_action_model, env.action_space.n,
                                                   model.abstract_step_size, 1)
             plt.matshow(Y_mae, fignum=1)
