@@ -13,6 +13,10 @@ class DynamicsModel(torch.nn.Module, ABC):
         super(DynamicsModel, self).__init__()
 
     @abstractmethod
+    def prepare_for_training(self):
+        pass
+
+    @abstractmethod
     def train_step(self,
                    o_ground_truth: torch.Tensor,
                    a_ground_truth: torch.Tensor,

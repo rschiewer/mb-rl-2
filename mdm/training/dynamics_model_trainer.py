@@ -47,6 +47,7 @@ class DynamicsModelTrainer(ABC):
         if self.logger:
             self.logger.start_session()
 
+        self.model.prepare_for_training()
         for i_step in step_iter:
             s, a, r, term = self.get_batch_train()
             s, a, r, term = [torch.from_numpy(x).to(device=device, dtype=torch.float32) for x in (s, a, r, term)]
