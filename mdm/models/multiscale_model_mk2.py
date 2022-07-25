@@ -113,13 +113,14 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         prim_current = self.primitive_model.gen_init_values(d_batch, self.device)
         abstr_current = self.abstract_model.gen_init_values(d_batch, self.device)
 
-        n_warmup_prim = self.warmup_steps_prim(n_steps_prim)
-        n_warmup_abstr = self.warmup_steps_abstr(n_steps_prim)
+        warmup_steps_prim_left = self.warmup_steps_prim(n_steps_prim)
+        warmup_steps_abstr_left = self.warmup_steps_abstr(n_steps_prim)
         for i_chunk in range(a_binned.shape[1]):
             i_start = i_chunk * self.abstract_step_size
             i_end = min((i_chunk + 1) * self.abstract_step_size, n_steps_prim)
 
             # primitive model rollout
+            n_warmup_prim = min(warmup_steps_prim_left, self.abstract_step_size)
             ctx_high_level = self.primitive_model.zero_ctx_high_level(d_batch, self.device)
             mem, prim_current = self.rollout_primitive(a=a[:, i_start: i_end], o=o[:, i_start: i_end],
                                                        r=r[:, i_start: i_end], term=term[:, i_start: i_end],
@@ -136,12 +137,13 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             ctx_low_level = self.fuse_state(prim_current['s'], prim_current['rnn_state']).detach()
             mem['ctx_low_level'].append(ctx_low_level)
 
+            n_warmup_abstr = 1 if warmup_steps_abstr_left > 0 else 0
             mem, abstr_current = self.rollout_abstract(a=add_time_dim(abstr_a), r=add_time_dim(abstr_r[:, i_chunk]),
                                                        term=add_time_dim(abstr_term[:, i_chunk]),
                                                        primitive_history=add_time_dim(ctx_low_level),
                                                        s=abstr_current['s'],
                                                        rnn_state=abstr_current['rnn_state'],
-                                                       n_posterior_steps=1 if n_warmup_abstr > 0 else 0,
+                                                       n_posterior_steps=n_warmup_abstr,
                                                        mem=mem, sample=True)
 
             # exchange primitive model's internal state with prediction from abstract model
@@ -150,8 +152,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             #prim_current['rnn_state'] = prim_rnn_state
 
             # warmup should only happen at first sequence chunk
-            n_warmup_prim = max(n_warmup_prim - self.abstract_step_size, 0)
-            n_warmup_abstr = max(n_warmup_abstr - 1, 0)
+            warmup_steps_prim_left = max(warmup_steps_prim_left - self.abstract_step_size, 0)
+            warmup_steps_abstr_left = max(warmup_steps_abstr_left - 1, 0)
 
         mem = self.pack_mem(mem)
 
