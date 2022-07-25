@@ -70,16 +70,20 @@ class CrossentropyPlanner:
         n_winners = ceil(n_rollouts * winning_perc)
         act_dist_params = self._init_params(n_rollouts, n_plan_steps, d_dist, init_act_params)
 
-        exponents = torch.arange(n_plan_steps, device=self.device)
-        if discount != 0:
-            disc_mat = torch.tile(torch.pow(discount, exponents), (n_rollouts, 1))
-        else:
-            disc_mat = None
+        #exponents = torch.arange(n_plan_steps, device=self.device)
+        #if discount != 0:
+        #    disc_mat = torch.tile(torch.pow(discount, exponents), (n_rollouts, 1))
+        #else:
+        #    disc_mat = None
 
         actions, i_winners, R_winners, rollout_data = None, None, None, None
         for i_ev in range(n_evolution_steps):
             actions = self._build_dist(act_dist_params).sample()
             criterion, terminal_flag_mat, rollout_data = rollout_fn(actions)
+
+            disc_mat = torch.cumprod(torch.full_like(criterion, fill_value=discount), dim=1)
+            disc_mat = torch.roll(disc_mat, 1, dims=1)
+            disc_mat[:, 0] = 1
 
             if terminal_flag_mat is not None:
                 final_disc_mat = process_terminal_flag_mat(terminal_flag_mat) * disc_mat
