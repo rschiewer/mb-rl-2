@@ -294,7 +294,7 @@ def prepare_data(s: Union[np.ndarray, torch.Tensor],
     a = to_onehot(a, env.action_space.n)
     # don't care about the first action being [1, 0, ... ] if it's always this way
     # TODO: comment this out
-    a[:, 0] = 0  # first timestep action is zero padding, which is falsely converted to [1, 0, 0, ...] vector
+    #a[:, 0] = 0  # first timestep action is zero padding, which is falsely converted to [1, 0, 0, ...] vector
 
     # since a, r and terminal were padded with one element anyway, rotate it to the front and make it zero
     #if isinstance(a, torch.Tensor):
