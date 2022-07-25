@@ -190,8 +190,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         mem['prim_s_prior'].append(pred['s_prior'])
         if use_posterior:
             mem['prim_s_post'].append(pred['s_post'])
-        else:  # hack for loss calculation
-            mem['prim_s_post'].append(pred['s_prior'])  # TODO: test this here with original s_post and see what happens
+        else:  # hack for loss calculation, essentially removes the current time step's KL_loss(s_prior, s_post)
+            mem['prim_s_post'].append(pred['s_prior'])
         mem['prim_rnn_state'].append(pred['rnn_state'])
         mem['prim_o'].append(pred['o'])
         mem['prim_r'].append(pred['r'])
@@ -405,6 +405,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             n_groundtruth_available = 0
         else:
             assert o is not None and r is not None and term is not None, 'Need o, r, and term groundtruth'
+            assert o.shape[1] == r.shape[1] == term.shape[1], 'All groundtruth data has to have the same length'
             n_groundtruth_available = o.shape[1]
 
         # default argument means we use as much ground truth data as possible with the posterior
