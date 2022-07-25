@@ -23,6 +23,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                  beta_abstract_action: float = 1.0,
                  n_warmup_prim: Union[int, Sequence[int]] = 1,
                  n_warmup_abstr: Union[int, Sequence[int]] = 1,
+                 n_warmup_schedule: int = 0,
                  detach_posteriors: bool = False):
         super().__init__()
         self.primitive_model = primitive_model
@@ -44,6 +45,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         self.beta_abstract_action = beta_abstract_action
         self.n_warmup_prim = n_warmup_prim
         self.n_warmup_abstr = n_warmup_abstr
+        self.n_warmup_schedule = n_warmup_schedule
+        self._current_train_step = None
         self.detach_posteriors = detach_posteriors
         self.context_projector = torch.nn.Sequential(
             torch.nn.Linear(primitive_model.d_hidden, 2),
@@ -61,17 +64,35 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             assert n_warmup_abstr[0] < n_warmup_abstr[1]
             assert 1 <= n_warmup_abstr[0]
 
-    def _warmup_prim(self) -> int:
-        if isinstance(self.n_warmup_prim, int):
-            return self.n_warmup_prim
+    def warmup_steps_prim(self,
+                          n_timesteps_total: int) -> int:
+        if self._current_train_step < self.n_warmup_schedule:
+            n_warmup_steps = round((1 - self._current_train_step / self.n_warmup_schedule) * n_timesteps_total)
         else:
-            return random.randint(self.n_warmup_prim[0], self.n_warmup_prim[1])
+            n_warmup_steps = 0  # just set zero here so actual warmup_steps after warmup schedule is set below
 
-    def _warmup_abstr(self) -> int:
-        if isinstance(self.n_warmup_abstr, int):
-            return self.n_warmup_abstr
+        if isinstance(self.n_warmup_prim, int):
+            n_warmup_steps = max(self.n_warmup_prim, n_warmup_steps)
         else:
-            return random.randint(self.n_warmup_abstr[0], self.n_warmup_abstr[1])
+            n_warmup_steps = max(random.randint(self.n_warmup_prim[0], self.n_warmup_prim[1]), n_warmup_steps)
+        return n_warmup_steps
+
+    def warmup_steps_abstr(self,
+                           n_timesteps_total: int) -> int:
+        if self._current_train_step < self.n_warmup_schedule:
+            n_timesteps_abstr = ceil(n_timesteps_total / self.abstract_step_size)
+            n_warmup_steps = round((1 - self._current_train_step / self.n_warmup_schedule) * n_timesteps_abstr)
+        else:
+            n_warmup_steps = 0
+
+        if isinstance(self.n_warmup_abstr, int):
+            n_warmup_steps = max(self.n_warmup_abstr, n_warmup_steps)
+        else:
+            n_warmup_steps = max(random.randint(self.n_warmup_abstr[0], self.n_warmup_abstr[1]), n_warmup_steps)
+        return n_warmup_steps
+
+    def prepare_for_training(self):
+        self._current_train_step = 0
 
     def forward(self,
                 o: torch.Tensor,
@@ -83,7 +104,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         assert o.shape[1] == r.shape[1] == term.shape[1] == a.shape[1]
         assert torch.all(r[:, 0] == 0)
         assert torch.all(term[:, 0] == 0)
-        assert torch.all(a[:, 0] == 0)
+        #assert torch.all(a[:, 0] == 0)
 
         mem = self.gen_mem()
         d_batch, n_steps_prim = a.shape[:2]
@@ -92,8 +113,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         prim_current = self.primitive_model.gen_init_values(d_batch, self.device)
         abstr_current = self.abstract_model.gen_init_values(d_batch, self.device)
 
-        n_warmup_prim = self._warmup_prim()
-        n_warmup_abstr = self._warmup_abstr()
+        n_warmup_prim = self.warmup_steps_prim(n_steps_prim)
+        n_warmup_abstr = self.warmup_steps_abstr(n_steps_prim)
         for i_chunk in range(a_binned.shape[1]):
             i_start = i_chunk * self.abstract_step_size
             i_end = min((i_chunk + 1) * self.abstract_step_size, n_steps_prim)
@@ -112,7 +133,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             mem['abstr_a'].append(abstr_a)
 
             # abstract model rollout
-            ctx_low_level = self.fuse_state(prim_current['s'], prim_current['rnn_state'])#.detach()
+            ctx_low_level = self.fuse_state(prim_current['s'], prim_current['rnn_state']).detach()
             mem['ctx_low_level'].append(ctx_low_level)
 
             mem, abstr_current = self.rollout_abstract(a=add_time_dim(abstr_a), r=add_time_dim(abstr_r[:, i_chunk]),
@@ -129,7 +150,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             #prim_current['rnn_state'] = prim_rnn_state
 
             # warmup should only happen at first sequence chunk
-            n_warmup_prim = 0
+            n_warmup_prim = max(n_warmup_prim - 1, 0)
             n_warmup_abstr = max(n_warmup_abstr - 1, 0)
 
         mem = self.pack_mem(mem)
@@ -168,7 +189,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         if use_posterior:
             mem['prim_s_post'].append(pred['s_post'])
         else:  # hack for loss calculation
-            mem['prim_s_post'].append(pred['s_prior'])
+            mem['prim_s_post'].append(pred['s_prior'])  # TODO: test this here with original s_post and see what happens
         mem['prim_rnn_state'].append(pred['rnn_state'])
         mem['prim_o'].append(pred['o'])
         mem['prim_r'].append(pred['r'])
@@ -235,6 +256,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         losses['total'].backward()
         optimizer.step()
 
+        self._current_train_step += 1
         return losses
 
     def eval_step(self,
