@@ -21,6 +21,7 @@ class DynamicsModelTrainer(ABC):
                  eval_interval: int = None,
                  scheduler: object = None,
                  logger: Logger = None,
+                 train_callback: Callable[[int], None] = None,
                  eval_callback: Callable[[int], None] = None,
                  **kwargs):
         self.model = model
@@ -30,6 +31,7 @@ class DynamicsModelTrainer(ABC):
         self.eval_interval = eval_interval
         self.scheduler = scheduler
         self.logger = logger
+        self.train_callback = train_callback
         self.eval_callback = eval_callback
 
     def train(self,
@@ -105,6 +107,9 @@ class DynamicsModelTrainer(ABC):
 
                 if self.eval_callback:
                     self.eval_callback(i_step)
+
+            if self.train_callback:
+                self.train_callback(i_step)
 
         if self.logger:
             self.logger.stop_session()

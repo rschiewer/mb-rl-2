@@ -91,6 +91,7 @@ if __name__ == '__main__':
 
     fig = plt.figure(figsize=(10, 10))
 
+
     def eval_callback(i_step: int):
         if model.abstract_step_size <= 10 and logger:
             Y_mean, Y_std, Y_mae = discrete_stats(model.abstract_action_model, env.action_space.n,
@@ -106,8 +107,15 @@ if __name__ == '__main__':
                        Scope.PARAMETERS() / 'abstr_a_stats', i_step)
 
 
+    def train_callback(i_step: int):
+        logger.log({'n_warmup_prim': model.warmup_steps_prim(env.time_limit),
+                    'n_warmup_abstr': model.warmup_steps_abstr(env.time_limit)},
+                   Scope.TRAIN(), i_step)
+
+
     trainer = DynamicsModelTrainer(model=model, optimizer=optimizer, get_batch_train=get_batch_train,
-                                   get_batch_test=get_batch_test, logger=logger, eval_callback=eval_callback,
+                                   get_batch_test=get_batch_test, logger=logger, train_callback=train_callback,
+                                   eval_callback=eval_callback,
                                    **cfg['trainer'])
     trainer.train(n_train_steps=cfg['trainer']['n_train_steps'], progress_bar=True,
                   checkpoint_path=here() / cfg['checkpoint_path'])
@@ -120,7 +128,7 @@ if __name__ == '__main__':
     torch.save(model, here() / model_path)
     logger.start_session()
     logger.log_file(here() / model_path, Scope.DATA() / 'final_weights')
-
     logger.stop_session()
+
     if logger:
         print(logger.run_id)
