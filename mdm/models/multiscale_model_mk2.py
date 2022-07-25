@@ -150,7 +150,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             #prim_current['rnn_state'] = prim_rnn_state
 
             # warmup should only happen at first sequence chunk
-            n_warmup_prim = max(n_warmup_prim - 1, 0)
+            n_warmup_prim = max(n_warmup_prim - self.abstract_step_size, 0)
             n_warmup_abstr = max(n_warmup_abstr - 1, 0)
 
         mem = self.pack_mem(mem)
