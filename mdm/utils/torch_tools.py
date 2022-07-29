@@ -8,6 +8,9 @@ import torch
 import torch.jit as jit
 
 
+RnnStateType = TypeVar('RnnStateType', torch.Tensor, Tuple[torch.Tensor, torch.Tensor])
+
+
 TensorData = TypeVar('TensorData', torch.Tensor, Tuple[torch.Tensor, ...], List[torch.Tensor])
 _Placeholder = namedtuple('placeholder', 'device')
 
@@ -210,9 +213,54 @@ class ContinuousBernoulliBlock(FeedforwardBlock):
         return x_dist
 
 
+def make_gaussian_params(params: torch.Tensor,
+                         epsilon: float) -> torch.Tensor:
+    assert params.shape[-1] % 2 == 0
+    mu, sigma = torch.tensor_split(params, 2, dim=-1)
+    sigma = torch.abs(sigma) + epsilon
+    return torch.concat([mu, sigma], dim=-1)
+
+
+def build_gaussian(params: torch.Tensor) -> torch.distributions.Normal:
+    assert params.shape[-1] % 2 == 0
+    mu, sigma = torch.tensor_split(params, 2, dim=-1)
+    dist = torch.distributions.Normal(loc=mu, scale=sigma)
+    return dist
+
+
+def sample_from_gaussian(params: torch.Tensor,
+                         gradient: bool = True) -> torch.Tensor:
+    assert params.shape[-1] % 2 == 0
+    mu, sigma = torch.tensor_split(params, 2, dim=-1)
+    dist = torch.distributions.Normal(loc=mu, scale=sigma)
+    if gradient:
+        return dist.rsample()
+    else:
+        return dist.sample()
+
+
+def get_mu(gaussian_params: torch.Tensor) -> torch.Tensor:
+    assert gaussian_params.shape[-1] % 2 == 0
+    i_end = gaussian_params.shape[-1] // 2
+    mu = gaussian_params[..., :i_end]
+    return mu
+
+
+def get_sigma(gaussian_params: torch.Tensor) -> torch.Tensor:
+    assert gaussian_params.shape[-1] % 2 == 0
+    i_start = gaussian_params.shape[-1] // 2
+    sigma = gaussian_params[..., i_start:]
+    return sigma
+
+
+def build_bernoulli(params: torch.Tensor) -> torch.distributions.ContinuousBernoulli:
+    torch.all(torch.logical_and(0 <= params, params <= 1))
+    dist = torch.distributions.ContinuousBernoulli(probs=params)
+    return dist
+
+
 def bin_every_k_steps(data: torch.Tensor,
                       k: int,
-                      device: torch.device,
                       padding_val: Union[int, float, None] = None):
     d_batch, d_time, d_data = data.shape
     n_macro_steps = ceil(d_time / k)
@@ -223,7 +271,7 @@ def bin_every_k_steps(data: torch.Tensor,
         padding_val = torch.mean(data[:, last_valid:], dim=1, keepdim=True)
         padding = torch.repeat_interleave(padding_val, d_padding, dim=1)
     else:
-        padding = torch.full((d_batch, d_padding, d_data), fill_value=padding_val, dtype=data.dtype, device=device)
+        padding = torch.full((d_batch, d_padding, d_data), fill_value=padding_val, dtype=data.dtype, device=data.device)
     data_padded = torch.concat([data, padding], dim=1)
     binned = data_padded.reshape(d_batch, (d_time + d_padding) // k, k, d_data)
 
@@ -365,3 +413,23 @@ def kl_regularizer_bernoulli(priors: List[torch.distributions.ContinuousBernoull
     for prior in priors:
         l += torch.distributions.kl.kl_divergence(prior, uniform_bernoulli)
     return torch.mean(l)
+
+
+def unpack_rnn_state(rnn_state_packed: torch.Tensor):
+    if rnn_state_packed.shape[-2] == 2:
+        h, c = rnn_state_packed.unbind(-2)
+        h, c = h.transpose(0, 1), c.transpose(0, 1)
+        h, c = h.contiguous(), c.contiguous()
+        return h, c
+    else:
+        h = rnn_state_packed.squeeze(-2)
+        h = h.transpose(0, 1)
+        h = h.contiguous()
+        return h
+
+def pack_rnn_state(rnn_state: RnnStateType):
+    if isinstance(rnn_state, tuple):
+        return torch.stack([rnn_state[0].transpose(0, 1), rnn_state[1].transpose(0, 1)], dim=-2)
+    else:
+        return torch.stack([rnn_state.transpose(0, 1)], dim=-2)
+
