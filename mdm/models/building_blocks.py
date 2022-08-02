@@ -4,10 +4,8 @@ from enum import Enum
 import torch
 import haste_pytorch as haste
 
-from mdm.utils.torch_tools import FuzzyDeviceMixin, layers_with_activation, add_time_dim, remove_time_dim
-
-
-RnnStateType = TypeVar('RnnStateType', torch.Tensor, Tuple[torch.Tensor, torch.Tensor])
+from mdm.utils.torch_tools import (layers_with_activation, add_time_dim, remove_time_dim, sample_from_gaussian,
+                                   make_gaussian_params, get_mu, get_sigma, RnnStateType)
 
 
 class AbstractActionModel(torch.nn.Module):
@@ -117,7 +115,7 @@ class RSSM(torch.nn.Module):
         a = self.zero_a(d_batch, device)
         r = self.zero_r(d_batch, device)
         term = self.zero_term(d_batch, device)
-        rnn_state = self.zero_h(d_batch, device)
+        rnn_state = self.zero_rnn_state(d_batch, device)
         return {'s': s, 'o': o, 'a': a, 'r': r, 'term': term, 'rnn_state': rnn_state}
 
     def zero_s(self,
@@ -145,14 +143,14 @@ class RSSM(torch.nn.Module):
                   device: torch.device) -> torch.Tensor:
         return torch.zeros(d_batch, 1, device=device)
 
-    def zero_h(self,
-               d_batch: int,
-               device: torch.device) -> RnnStateType:
-        rnn_state = torch.zeros(self.n_hidden_layers, d_batch, self.d_hidden, device=device)
+    def zero_rnn_state(self,
+                       d_batch: int,
+                       device: torch.device) -> RnnStateType:
         if self.rnn_type == 'lstm':
-            return rnn_state, rnn_state
+            return (torch.zeros(self.n_hidden_layers, d_batch, self.d_hidden, device=device),
+                    torch.zeros(self.n_hidden_layers, d_batch, self.d_hidden, device=device))
         else:
-            return rnn_state
+            return torch.zeros(d_batch, self.n_hidden_layers, self.d_hidden, device=device)
 
     def zero_x_post(self,
                     d_batch: int,
@@ -168,23 +166,23 @@ class RSSM(torch.nn.Module):
                   s: torch.Tensor,
                   a: torch.Tensor,
                   ctx_high_level: torch.Tensor,
-                  rnn_state: RnnStateType):
+                  rnn_state: torch.Tensor):
         #if self.feed_back_last_prediction:
         #    inp = torch.concat([s, a, x_hat, ctx_high_level], dim=-1)
         #else:
         #    inp = torch.concat([s, a, ctx_high_level], dim=-1)
         inp = torch.concat([s, a, ctx_high_level], dim=-1)
         inp = add_time_dim(inp)
-        x_det, new_h = self._rnn(inp, rnn_state)
+        x_det, next_rnn_state = self._rnn(inp, rnn_state)
         x_det = remove_time_dim(x_det)
-        return x_det, new_h
+        return x_det, next_rnn_state
 
     def forward(self,
                 s: torch.Tensor,
                 a: torch.Tensor,
                 x_current_groundtruth: torch.Tensor,  # ground truth o, r, term for this prediction step for the posterior
                 ctx_high_level: torch.Tensor,  # abstr_s, abstr_h in primitive model
-                rnn_state: RnnStateType,  # from previous step
+                rnn_state: RnnStateType,
                 use_posterior: bool = True,
                 sample: bool = True):
         h, next_rnn_state = self._det_core(s, a, ctx_high_level, rnn_state)
@@ -195,61 +193,57 @@ class RSSM(torch.nn.Module):
             s_dist = s_post
         else:
             s_dist = s_prior
-            #s_post = s_prior  # TODO: only a test, remove this!
         if sample:
-            s_smpl = s_dist.rsample()
+            s_smpl = sample_from_gaussian(s_dist)
         else:
-            s_smpl = s_dist.loc
+            s_smpl = get_mu(s_dist)
 
-        o_dist, o_smpl = self._build_o_dist(h, s_smpl, sample)
-        r_dist, r_smpl = self._build_r_dist(h, s_smpl, sample)
-        term_smpl = self._build_terminal_dist(h, s_smpl)
+        o_dist = self._build_o_dist(h, s_smpl)
+        r_dist = self._build_r_dist(h, s_smpl)
+        term_dist = self._build_terminal_dist(h, s_smpl)
 
+        if sample:
+            o_smpl = sample_from_gaussian(o_dist)
+            r_smpl = sample_from_gaussian(r_dist)
+        else:
+            o_smpl = get_mu(o_dist)
+            r_smpl = get_mu(r_dist)
+
+        term_smpl = term_dist
         return {'s': s_smpl, 's_prior': s_prior, 's_post': s_post, 'o_dist': o_dist, 'o': o_smpl, 'r_dist': r_dist,
                 'r': r_smpl, 'term': term_smpl, 'rnn_state': next_rnn_state}
 
     def build_s_prior(self,
-                      h: torch.Tensor) -> torch.distributions.Normal:
+                      h: torch.Tensor) -> torch.Tensor:
         s_prior_params = self._s_prior(h)
-        mu, sigma = torch.tensor_split(s_prior_params, 2, dim=-1)
-        sigma = torch.abs(sigma) + self.epsilon
-        s_prior = torch.distributions.Normal(loc=mu, scale=sigma)
-        return s_prior
+        s_prior_params = make_gaussian_params(s_prior_params, self.epsilon)
+        return s_prior_params
 
     def build_s_post(self,
                      h: torch.Tensor,
                      x_posterior: torch.Tensor,
-                     s_prior: torch.distributions.Normal) -> torch.distributions.Normal:
-        inp = torch.concat([h, x_posterior, s_prior.loc, s_prior.scale], dim=-1)
+                     s_prior: torch.Tensor) -> torch.Tensor:
+        inp = torch.concat([h, x_posterior, get_mu(s_prior), get_sigma(s_prior)], dim=-1)
         s_post_params = self._s_post(inp)
-        mu, sigma = torch.tensor_split(s_post_params, 2, dim=-1)
-        sigma = torch.abs(sigma) + self.epsilon
-        s_post = torch.distributions.Normal(loc=mu, scale=sigma)
-        return s_post
+        s_post_params = make_gaussian_params(s_post_params, self.epsilon)
+        return s_post_params
 
     def _build_o_dist(self,
                       h: torch.Tensor,
-                      s_smpl: torch.Tensor,
-                      sample: bool = True) -> Tuple[torch.distributions.Normal, torch.Tensor]:
+                      s_smpl: torch.Tensor) -> torch.Tensor:
         inp = torch.concat([h, s_smpl], dim=-1)
         o_params = self._o_dist(inp)
-        mu, sigma = torch.tensor_split(o_params, 2, dim=-1)
-        sigma = torch.abs(sigma) + self.epsilon
-        o_dist = torch.distributions.Normal(loc=mu, scale=sigma)
-        o_smpl = o_dist.rsample() if sample else mu
-        return o_dist, o_smpl
+        o_params = make_gaussian_params(o_params, self.epsilon)
+        return o_params
 
     def _build_r_dist(self,
                       h: torch.Tensor,
                       s_smpl: torch.Tensor,
-                      sample: bool = True) -> Tuple[torch.distributions.Normal, torch.Tensor]:
+                      sample: bool = True) -> torch.Tensor:
         x_in = torch.concat([h, s_smpl], dim=-1)
         r_params = self._r_dist(x_in)
-        mu, sigma = torch.tensor_split(r_params, 2, dim=-1)
-        sigma = torch.abs(sigma) + self.epsilon
-        r_dist = torch.distributions.Normal(loc=mu, scale=sigma)
-        r_smpl = r_dist.rsample() if sample else mu
-        return r_dist, r_smpl
+        r_params = make_gaussian_params(r_params, self.epsilon)
+        return r_params
 
     def _build_terminal_dist(self,
                              h: torch.Tensor,
