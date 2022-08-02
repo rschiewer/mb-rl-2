@@ -12,7 +12,7 @@ from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.planning.cem_planner import CrossentropyPlanner, DistributionType
 from mdm.utils.utils import (here, load_yaml, gen_macro_state_map, infer_position, transform_macro_s_init_history,
                              gen_video, gen_prim_state_map)
-from mdm.utils.planning_tools_mk2 import init_s_abstr, plan_section, plan_section_2, plan_abstract, init_s_prim, broadcast_to_batch, broadcast_rnn_state_to_batch
+from mdm.utils.planning_tools_mk2 import *
 from mdm.utils.torch_tools import add_time_dim
 from mdm.memory.trajectory_memory import TrajectoryMemory
 from mdm.logging.neptune_logger import NeptuneLogger
@@ -47,16 +47,14 @@ if __name__ == '__main__':
     else:
         logger = NotLogger()
 
+    """
     trajectory_history = {'o': [], 'r': [], 'term': [], 'prim_o': [], 'prim_o_dist': [], 'prim_r': [],
                           'prim_r_dist': [], 'prim_term': [], 'prim_s': [], 'prim_s_dist': [], 'prim_rnn_state': [],
                           'abstr_o': [], 'abstr_o_dist': [], 'abstr_r': [], 'abstr_r_dist': [], 'abstr_term': [],
                           'abstr_s': [], 'abstr_s_dist': [], 'abstr_rnn_state': []}
+    """
 
-    if isinstance(mdl.n_warmup_prim, int):
-        planning_cfg['n_warmup_steps'] = mdl.n_warmup_prim
-    else:
-        planning_cfg['n_warmup_steps'] = mdl.n_warmup_prim[1]
-    planning_cfg['pln_n_abstract_steps'] = ceil(100 / mdl.abstract_step_size)
+    planning_cfg['n_abstract_steps'] = ceil(100 / mdl.abstract_step_size) - planning_cfg['n_warmup_abstr']
     logger.log(planning_cfg, Scope.HYPERPARAMETERS() / 'plan')
 
     #macro_s_init_mean, macro_s_init_std, macro_s_init_per_state_per_action = gen_macro_state_map(env, mdl, 3)
@@ -74,41 +72,68 @@ if __name__ == '__main__':
         planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, device=mdl.device)
         planner_abstr = CrossentropyPlanner(DistributionType.NORMAL, device=mdl.device)
 
-        plan_init_prim = init_s_prim(mdl, env, planning_cfg['n_warmup_steps'], trajectory_history)
+        #ret = init_model(mdl, env, mdl.n_warmup_prim, mdl.n_warmup_abstr, planner_prim, planning_cfg['n_rollouts'],
+        #                 planning_cfg['n_optim_steps_prim'], planning_cfg['winning_perc'],
+        #                 planning_cfg['discount'], planning_cfg['act_noise_prim'])
 
-        plan_init_abstr = init_s_abstr(model=mdl,
-                                       planner=planner_prim,
-                                       env=env,
-                                       s_start=plan_init_prim['s'],
-                                       rnn_state_start=plan_init_prim['rnn_state'],
-                                       n_rollouts=planning_cfg['pln_d_batch'],
-                                       n_evolution_steps=planning_cfg['pln_n_optim_steps_abstr'],
-                                       winning_perc=planning_cfg['pln_winning_perc'],
-                                       discount=planning_cfg['pln_discount'],
-                                       act_noise=planning_cfg['pln_act_noise_abstr'])
+        trajectory_history = init_prim_s(mdl, env, planning_cfg['n_warmup_prim'])
+        trajectory_history = init_abstr_s(mdl, trajectory_history, planning_cfg['n_warmup_abstr'], planner_prim,
+                                          planning_cfg['n_rollouts'],
+                                          planning_cfg['n_optim_steps_prim'], planning_cfg['winning_perc'],
+                                          planning_cfg['discount'],
+                                          planning_cfg['act_noise_prim'])
+        #print(f'After prim init: {trajectory_history["prim_o"].shape[1]}')
+        trajectory_history = plan_abstract(mdl, trajectory_history, planner_abstr, planning_cfg['n_abstract_steps'],
+                                           planning_cfg['n_rollouts'],
+                                           planning_cfg['n_optim_steps_abstr'], planning_cfg['winning_perc'],
+                                           planning_cfg['discount'],
+                                           planning_cfg['act_noise_abstr'])
+        #print(f'After abstr init: {trajectory_history["prim_o"].shape[1]}')
+        for i_sec in range(planning_cfg['n_abstract_steps']):
+            trajectory_history = plan_section(mdl, trajectory_history, planner_prim,
+                                              planning_cfg['n_rollouts'],
+                                              planning_cfg['n_optim_steps_prim'], planning_cfg['winning_perc'],
+                                              planning_cfg['discount'],
+                                              planning_cfg['act_noise_prim'])
+            #print(f'After section {i_sec}: {trajectory_history["prim_o"].shape[1]}')
+        actions = trajectory_history['prim_a'][0]
+        quit()
 
-        plan_abstr = plan_abstract(model=mdl,
-                                   planner=planner_abstr,
-                                   abstr_s_start=plan_init_abstr['abstr_s'],
-                                   abstr_rnn_state_start=plan_init_abstr['abstr_rnn_state'],
-                                   abstr_r_start=plan_init_abstr['abstr_r'],
-                                   abstr_term_start=plan_init_abstr['abstr_term'],
-                                   n_plan_steps=planning_cfg['pln_n_abstract_steps'],
-                                   n_rollouts=planning_cfg['pln_d_batch'],
-                                   n_evolution_steps=planning_cfg['pln_n_optim_steps_abstr'],
-                                   winning_perc=planning_cfg['pln_winning_perc'],
-                                   discount=planning_cfg['pln_discount'],
-                                   act_noise=planning_cfg['pln_act_noise_abstr'])
-
-        # assemble macro trajectory out of initial data and rollout results
-        best_abstr_s = torch.concat([add_time_dim(plan_init_abstr['abstr_s']), plan_abstr['abstr_s']], dim=0)
-        best_abstr_rnn_state = [plan_init_abstr['abstr_rnn_state']] + plan_abstr['abstr_rnn_state']
-        best_abstr_r = torch.concat([add_time_dim(plan_init_abstr['abstr_r']), plan_abstr['abstr_r']], dim=0)
-        best_abstr_term = torch.concat([add_time_dim(plan_init_abstr['abstr_term']), plan_abstr['abstr_term']], dim=0)
-        best_abstr_o = torch.concat([add_time_dim(plan_init_abstr['abstr_o']), plan_abstr['abstr_o']], dim=0)
-
-        abstract_rewards.append(best_abstr_r.detach().cpu().numpy().squeeze())
-        abstract_terminals.append(best_abstr_term.detach().cpu().numpy().squeeze())
+        # plan_init_prim = init_s_prim(mdl, env, planning_cfg['n_warmup_prim'], trajectory_history)
+        #
+        # plan_init_abstr = init_s_abstr(model=mdl,
+        #                                planner=planner_prim,
+        #                                env=env,
+        #                                s_start=plan_init_prim['s'],
+        #                                rnn_state_start=plan_init_prim['rnn_state'],
+        #                                n_rollouts=planning_cfg['n_rollouts'],
+        #                                n_evolution_steps=planning_cfg['n_optim_steps_abstr'],
+        #                                winning_perc=planning_cfg['winning_perc'],
+        #                                discount=planning_cfg['discount'],
+        #                                act_noise=planning_cfg['act_noise_abstr'])
+        #
+        # plan_abstr = plan_abstract(model=mdl,
+        #                            planner=planner_abstr,
+        #                            abstr_s_start=plan_init_abstr['abstr_s'],
+        #                            abstr_rnn_state_start=plan_init_abstr['abstr_rnn_state'],
+        #                            abstr_r_start=plan_init_abstr['abstr_r'],
+        #                            abstr_term_start=plan_init_abstr['abstr_term'],
+        #                            n_plan_steps=planning_cfg['n_abstract_steps'],
+        #                            n_rollouts=planning_cfg['n_rollouts'],
+        #                            n_evolution_steps=planning_cfg['n_optim_steps_abstr'],
+        #                            winning_perc=planning_cfg['winning_perc'],
+        #                            discount=planning_cfg['discount'],
+        #                            act_noise=planning_cfg['act_noise_abstr'])
+        #
+        # # assemble macro trajectory out of initial data and rollout results
+        # best_abstr_s = torch.concat([add_time_dim(plan_init_abstr['abstr_s']), plan_abstr['abstr_s']], dim=0)
+        # best_abstr_rnn_state = [plan_init_abstr['abstr_rnn_state']] + plan_abstr['abstr_rnn_state']
+        # best_abstr_r = torch.concat([add_time_dim(plan_init_abstr['abstr_r']), plan_abstr['abstr_r']], dim=0)
+        # best_abstr_term = torch.concat([add_time_dim(plan_init_abstr['abstr_term']), plan_abstr['abstr_term']], dim=0)
+        # best_abstr_o = torch.concat([add_time_dim(plan_init_abstr['abstr_o']), plan_abstr['abstr_o']], dim=0)
+        #
+        # abstract_rewards.append(best_abstr_r.detach().cpu().numpy().squeeze())
+        # abstract_terminals.append(best_abstr_term.detach().cpu().numpy().squeeze())
 
         # TODO: move this to eval callback
         # test if abstract actions actually make a difference w.r.t. the output
@@ -128,34 +153,34 @@ if __name__ == '__main__':
         #logger.log({'randomized_action_abstract_s_avg': final_s.mean(),
         #            'randomized_action_abstract_s_std': final_s.std()}, Scope.TEST())
 
-        actions = plan_init_abstr['prim_a']
-        prim_s = plan_init_abstr['prim_s']
-        prim_rnn_state = plan_init_abstr['prim_rnn_state']
-        init_prim_o = plan_init_abstr['prim_o']
-        init_prim_r = plan_init_abstr['prim_r']
-        init_prim_term = plan_init_abstr['prim_term']
-        for t in range(planning_cfg['pln_n_abstract_steps']):
-            #prim_s, prim_rnn_state = mdl.unfuse_state(best_abstr_o[t])  # use abstract model predictions for state inits
-            plan_detail = plan_section_2(model=mdl, planner=planner_prim, env=env,
-                                       init_prim_o=init_prim_o, init_prim_r=init_prim_r,
-                                       init_prim_term=init_prim_term, prim_s=prim_s, prim_rnn_state=prim_rnn_state,
-                                       subtraj_hist_target=best_abstr_o[t + 1],
-                                       abstr_s=best_abstr_s[t], abstr_rnn_state=best_abstr_rnn_state[t],
-                                       abstr_s_next=best_abstr_s[t + 1],
-                                       abstr_r=best_abstr_r[t], abstr_term=best_abstr_term[t],
-                                       n_rollouts=planning_cfg['pln_d_batch'], n_evolution_steps=planning_cfg['pln_n_optim_steps_prim'],
-                                       winning_perc=planning_cfg['pln_winning_perc'], act_noise=planning_cfg['pln_act_noise_prim'])
-            actions = torch.concat([actions, plan_detail['prim_a']], dim=0)
-            init_prim_o = plan_detail['prim_o']
-            init_prim_r = plan_detail['prim_r']
-            init_prim_term = plan_detail['prim_term']
-            prim_s = plan_detail['prim_s']
-            prim_rnn_state = plan_detail['prim_rnn_state']
+        # actions = plan_init_abstr['prim_a']
+        # prim_s = plan_init_abstr['prim_s']
+        # prim_rnn_state = plan_init_abstr['prim_rnn_state']
+        # init_prim_o = plan_init_abstr['prim_o']
+        # init_prim_r = plan_init_abstr['prim_r']
+        # init_prim_term = plan_init_abstr['prim_term']
+        # for t in range(planning_cfg['n_abstract_steps']):
+        #     #prim_s, prim_rnn_state = mdl.unfuse_state(best_abstr_o[t])  # use abstract model predictions for state inits
+        #     plan_detail = plan_section(model=mdl, planner=planner_prim, env=env,
+        #                                init_prim_o=init_prim_o, init_prim_r=init_prim_r,
+        #                                init_prim_term=init_prim_term, prim_s=prim_s, prim_rnn_state=prim_rnn_state,
+        #                                subtraj_hist_target=best_abstr_o[t + 1],
+        #                                abstr_s=best_abstr_s[t], abstr_rnn_state=best_abstr_rnn_state[t],
+        #                                abstr_s_next=best_abstr_s[t + 1],
+        #                                abstr_r=best_abstr_r[t], abstr_term=best_abstr_term[t],
+        #                                n_rollouts=planning_cfg['n_rollouts'], n_evolution_steps=planning_cfg['n_optim_steps_prim'],
+        #                                winning_perc=planning_cfg['winning_perc'], act_noise=planning_cfg['act_noise_prim'])
+        #     actions = torch.concat([actions, plan_detail['prim_a']], dim=0)
+        #     init_prim_o = plan_detail['prim_o']
+        #     init_prim_r = plan_detail['prim_r']
+        #     init_prim_term = plan_detail['prim_term']
+        #     prim_s = plan_detail['prim_s']
+        #     prim_rnn_state = plan_detail['prim_rnn_state']
 
         action_iter = iter(actions.detach().cpu().numpy().argmax(axis=-1))
         terminal = False
 
-        i_step = planning_cfg['n_warmup_steps']
+        i_step = planning_cfg['n_warmup_prim']
         while not terminal:
             if args.render:
                 env.render()
@@ -173,7 +198,7 @@ if __name__ == '__main__':
         n_steps.append(i_step)
 
         n_macro_steps = np.ceil(i_step  / mdl.abstract_step_size).astype(np.int32)
-        best_macro_terms = plan_abstr['abstr_term']
+        #best_macro_terms = plan_abstr['abstr_term']
         #plot_mats = infer_position(env, best_macro_ss[:n_macro_steps], best_macro_terms[:n_macro_steps], macro_ss_list, loc_list, act_seq_list)
         #ani = gen_video(plot_mats, 1000, 2000)
         #ani.save(f'animation_{i_ep}.mp4')

@@ -1,9 +1,11 @@
 ---
-n_episodes: 20
-pln_d_batch: 2048
-pln_n_optim_steps_abstr: 15
-pln_n_optim_steps_prim: 3
-pln_winning_perc: 0.3
-pln_discount: 0.9
-pln_act_noise_abstr: 0.001
-pln_act_noise_prim: 0.001
+n_episodes: 50
+n_rollouts: 1024
+n_optim_steps_abstr: 15
+n_optim_steps_prim: 15
+winning_perc: 0.2
+discount: 0.9
+act_noise_abstr: 0.001
+act_noise_prim: 0.001
+n_warmup_prim: 3
+n_warmup_abstr: 1
