@@ -25,7 +25,7 @@ prim_mdl:
   d_hidden: 128
   n_hidden_layers: 3
   hidden_dropout: 0.1
-  epsilon: 0.01
+  epsilon: 0.001
   s_prior_lws: [64,  64]
   s_post_lws: [64, 64, 64]
   o_lws: [64, 128, 64]
@@ -38,11 +38,11 @@ prim_mdl:
 abstr_mdl:
   d_state: 64
   d_hidden: 256
-  d_action: 3
+  d_action: 32
   d_reward: 1
   n_hidden_layers: 3
   hidden_dropout: 0.1
-  epsilon: 0.01
+  epsilon: 0.001
   s_prior_lws: [128, 128, 128]
   s_post_lws: [128, 128, 128]
   o_lws: [128, 256, 128]

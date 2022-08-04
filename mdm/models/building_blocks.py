@@ -28,9 +28,9 @@ class AbstractActionModel(torch.nn.Module):
         # actions.shape = (d_batch, n_abstract_steps, d_action)
         macro_action = self.flatten_layer(actions)
         macro_action = self.det_mdl(macro_action)
-        macro_action = torch.tanh(macro_action)
+        #macro_action = torch.tanh(macro_action)
         # macro_action = torch.softmax(macro_action, dim=-1)
-        # macro_action = F.gumbel_softmax(macro_action, hard=True)
+        macro_action = torch.nn.functional.gumbel_softmax(macro_action, hard=True)
         return macro_action
 
 
