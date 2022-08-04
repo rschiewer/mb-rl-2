@@ -37,8 +37,7 @@ if __name__ == '__main__':
         model_path = f'{cfg["final_model_path"]}_{args.id[0]}.ptmdl'
 
     env = Gridworld.from_cleartext(here() / '../../mdm/gridworld/8x8_v0.mapdata')
-    mdl: MultiscaleDynamicsModelMK2 = torch.load(here() / model_path)
-    mdl = mdl.to('cuda')
+    mdl: MultiscaleDynamicsModelMK2 = torch.load(here() / model_path).to('cuda')
 
     if args.log:
         logger = NeptuneLogger(neptune_cfg['PROJECT_NAME'], api_token=neptune_cfg['NEPTUNE_API_TOKEN'],
@@ -47,14 +46,10 @@ if __name__ == '__main__':
     else:
         logger = NotLogger()
 
-    """
-    trajectory_history = {'o': [], 'r': [], 'term': [], 'prim_o': [], 'prim_o_dist': [], 'prim_r': [],
-                          'prim_r_dist': [], 'prim_term': [], 'prim_s': [], 'prim_s_dist': [], 'prim_rnn_state': [],
-                          'abstr_o': [], 'abstr_o_dist': [], 'abstr_r': [], 'abstr_r_dist': [], 'abstr_term': [],
-                          'abstr_s': [], 'abstr_s_dist': [], 'abstr_rnn_state': []}
-    """
-
     planning_cfg['n_abstract_steps'] = ceil(100 / mdl.abstract_step_size) - planning_cfg['n_warmup_abstr']
+
+    #planning_cfg['n_abstract_steps'] = 0
+    #planning_cfg['n_warmup_abstr'] = 33
     logger.log(planning_cfg, Scope.HYPERPARAMETERS() / 'plan')
 
     #macro_s_init_mean, macro_s_init_std, macro_s_init_per_state_per_action = gen_macro_state_map(env, mdl, 3)
@@ -70,13 +65,13 @@ if __name__ == '__main__':
     abstract_terminals = []
     for i_ep in tqdm(range(planning_cfg['n_episodes'])):
         planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, device=mdl.device)
-        planner_abstr = CrossentropyPlanner(DistributionType.NORMAL, device=mdl.device)
+        #planner_abstr = CrossentropyPlanner(DistributionType.NORMAL, device=mdl.device)
+        planner_abstr = CrossentropyPlanner(DistributionType.CATEGORICAL, device=mdl.device)
+        env.reset()
 
-        #ret = init_model(mdl, env, mdl.n_warmup_prim, mdl.n_warmup_abstr, planner_prim, planning_cfg['n_rollouts'],
-        #                 planning_cfg['n_optim_steps_prim'], planning_cfg['winning_perc'],
-        #                 planning_cfg['discount'], planning_cfg['act_noise_prim'])
-
-        trajectory_history = init_prim_s(mdl, env, planning_cfg['n_warmup_prim'])
+        trajectory_history = mdl.gen_mem()
+        trajectory_history = collect_groundtruth_data(mdl, trajectory_history, env, planning_cfg['n_warmup_prim'])
+        trajectory_history = init_prim_s(mdl, trajectory_history)
         trajectory_history = init_abstr_s(mdl, trajectory_history, planning_cfg['n_warmup_abstr'], planner_prim,
                                           planning_cfg['n_rollouts'],
                                           planning_cfg['n_optim_steps_prim'], planning_cfg['winning_perc'],
@@ -97,7 +92,10 @@ if __name__ == '__main__':
                                               planning_cfg['act_noise_prim'])
             #print(f'After section {i_sec}: {trajectory_history["prim_o"].shape[1]}')
         actions = trajectory_history['prim_a'][0]
-        quit()
+        actions = actions[planning_cfg['n_warmup_prim']:]  # remove the first default and the warmup actions
+
+        abstract_rewards.append(trajectory_history['abstr_r'].detach().cpu().numpy())
+        abstract_terminals.append(trajectory_history['abstr_term'].detach().cpu().numpy())
 
         # plan_init_prim = init_s_prim(mdl, env, planning_cfg['n_warmup_prim'], trajectory_history)
         #
@@ -178,9 +176,8 @@ if __name__ == '__main__':
         #     prim_rnn_state = plan_detail['prim_rnn_state']
 
         action_iter = iter(actions.detach().cpu().numpy().argmax(axis=-1))
-        terminal = False
-
         i_step = planning_cfg['n_warmup_prim']
+        terminal = False
         while not terminal:
             if args.render:
                 env.render()

@@ -23,12 +23,13 @@ def update_history(history: Dict[str, torch.Tensor],
     return history
 
 
-def init_prim_s(model: MultiscaleDynamicsModelMK2,
-                env: gym.Env,
-                n_warmup_prim: int):
+def collect_groundtruth_data(model: MultiscaleDynamicsModelMK2,
+                             history: Dict[str, torch.Tensor],
+                             env: gym.Env,
+                             n_warmup: int):
     # prepare actions and first step's data (note: only the initial observation contains real environment info)
     groundtruth_data = {'a': [], 'o': [], 'r': [], 'term': []}
-    groundtruth_data['a'] += [0] + [env.action_space.sample() for _ in range(n_warmup_prim - 1)]
+    groundtruth_data['a'] += [0] + [env.action_space.sample() for _ in range(n_warmup - 1)]
     groundtruth_data['o'].append(env.reset())
     groundtruth_data['r'].append(0.0)
     groundtruth_data['term'].append(0.0)
@@ -43,34 +44,53 @@ def init_prim_s(model: MultiscaleDynamicsModelMK2,
             raise RuntimeError('Environment terminated during warmup')
 
     # prepare groundtruth data
-    a_start = torch.tensor(groundtruth_data['a']).to(model.device)
-    o_start = torch.from_numpy(np.stack(groundtruth_data['o'])).to(model.device)
-    r_start = torch.tensor(groundtruth_data['r']).to(model.device)
-    term_start = torch.tensor(groundtruth_data['term']).to(model.device)
+    o = torch.from_numpy(np.stack(groundtruth_data['o']))
+    a = torch.tensor(groundtruth_data['a'])
+    r = torch.tensor(groundtruth_data['r'])
+    term = torch.tensor(groundtruth_data['term'])
 
-    # do primitive model rollout with groundtruth data posterior to produce h and s
-    a_start_batch = a_start.unsqueeze(0)
-    o_start_batch = o_start.unsqueeze(0)
-    r_start_batch = r_start.unsqueeze(0)
-    term_start_batch = term_start.unsqueeze(0)
-    o_start_batch, a_start_batch, r_start_batch, term_start_batch = prepare_data(o_start_batch, a_start_batch,
-                                                                                 r_start_batch, term_start_batch, env)
+    o, a, r, term = o.to(model.device), a.to(model.device), r.to(model.device), term.to(model.device)
+    o, a, r, term = o.unsqueeze(0), a.unsqueeze(0), r.unsqueeze(0), term.unsqueeze(0)  # need batch dim for preparation
+    o, a, r, term = prepare_data(o, a, r, term, env)
+
+    history['prim_o'] = o
+    history['prim_a'] = a
+    history['prim_r'] = r
+    history['prim_term'] = term
+
+    return history
+
+
+def init_prim_s(model: MultiscaleDynamicsModelMK2,
+                history: Dict[str, torch.Tensor]):
+    o_start_batch = history['prim_o']
+    a_start_batch = history['prim_a']
+    r_start_batch = history['prim_r']
+    term_start_batch = history['prim_term']
 
     mem, prim_current = model.rollout_primitive(a=a_start_batch, o=o_start_batch, r=r_start_batch,
-                                                term=term_start_batch, n_posterior_steps=n_warmup_prim, sample=False)
+                                                term=term_start_batch, n_posterior_steps= -1, sample=False)
     mem = model.pack_mem(mem)
-    return mem
+
+    # remove the rollout data from mem that is already present as groundtruth data
+    mem['prim_o'] = []
+    mem['prim_a'] = []
+    mem['prim_r'] = []
+    mem['prim_term'] = []
+
+    history = update_history(history, mem)
+    return history
 
 
 def init_abstr_s(model: MultiscaleDynamicsModelMK2,
-                  history: Dict[str, torch.Tensor],
-                  n_warmup_abstr: int,
-                  planner_prim: CrossentropyPlanner,
-                  n_rollouts: int,
-                  n_evolution_steps: int,
-                  winning_perc: float,
-                  discount: float,
-                  a_noise_prim: float):
+                 history: Dict[str, torch.Tensor],
+                 n_warmup_abstr: int,
+                 planner_prim: CrossentropyPlanner,
+                 n_rollouts: int,
+                 n_evolution_steps: int,
+                 winning_perc: float,
+                 discount: float,
+                 a_noise_prim: float):
     history_length = history['prim_a'].shape[1]
     required_steps = model.abstract_step_size * n_warmup_abstr
     remaining_steps = required_steps - history_length
@@ -339,10 +359,14 @@ def plan_abstract(model: MultiscaleDynamicsModelMK2,
                   winning_perc: float,
                   discount: float,
                   a_noise_abstr: float):
+    if n_plan_steps == 0:
+        return history
+
     abstr_s_start = history['abstr_s'][:, -1].repeat(n_rollouts, 1)
     abstr_rnn_state_start = unpack_rnn_state(history['abstr_rnn_state'][:, -1].repeat(n_rollouts, 1, 1, 1))
 
     def _rollout_fn(_a: torch.Tensor):
+        _a = to_onehot(_a, model.abstract_model.d_action)
         _mem, _abstr_final = model.rollout_abstract(_a, s=abstr_s_start, rnn_state=abstr_rnn_state_start, sample=False,
                                                     n_posterior_steps=0)
         _mem = model.pack_mem(_mem)
@@ -387,7 +411,7 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
         _mem, _prim_final = model.rollout_primitive(a=_a, s=s_start, rnn_state=rnn_state_start, sample=False)
         _mem = model.pack_mem(_mem)
 
-        _criterion = torch.mean((_mem['prim_s'][:, 0] - s_goal) ** 2, dim=1, keepdim=True)
+        _criterion = - torch.mean((_mem['prim_s'][:, 0] - s_goal) ** 2, dim=1, keepdim=True)
         _discount = None
         return _criterion, _discount, _mem
 
@@ -406,19 +430,18 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
     return history
 
 
-
 def plan_abstract_old(model: MultiscaleDynamicsModelMK2,
-                  planner: CrossentropyPlanner,
-                  abstr_s_start: torch.Tensor,
-                  abstr_rnn_state_start: RnnStateType,
-                  abstr_r_start: torch.Tensor,
-                  abstr_term_start: torch.Tensor,
-                  n_plan_steps: int,
-                  n_rollouts: int,
-                  n_evolution_steps: int,
-                  winning_perc: float,
-                  discount: float,
-                  act_noise: float):
+                      planner: CrossentropyPlanner,
+                      abstr_s_start: torch.Tensor,
+                      abstr_rnn_state_start: RnnStateType,
+                      abstr_r_start: torch.Tensor,
+                      abstr_term_start: torch.Tensor,
+                      n_plan_steps: int,
+                      n_rollouts: int,
+                      n_evolution_steps: int,
+                      winning_perc: float,
+                      discount: float,
+                      act_noise: float):
     abstr_s_start = broadcast_to_batch(abstr_s_start, n_rollouts)
     abstr_rnn_state_start = broadcast_rnn_state_to_batch(abstr_rnn_state_start, model.abstract_model.rnn_type,
                                                          n_rollouts)
@@ -460,23 +483,23 @@ def plan_abstract_old(model: MultiscaleDynamicsModelMK2,
 
 
 def plan_section_old(model: MultiscaleDynamicsModelMK2,
-                 planner: CrossentropyPlanner,
-                 env: gym.Env,
-                 init_prim_o: torch.Tensor,
-                 init_prim_r: torch.Tensor,
-                 init_prim_term: torch.Tensor,
-                 prim_s: torch.Tensor,
-                 prim_rnn_state: torch.Tensor,
-                 subtraj_hist_target: torch.Tensor,
-                 abstr_s: torch.Tensor,
-                 abstr_rnn_state: RnnStateType,
-                 abstr_r: torch.Tensor,
-                 abstr_term: torch.Tensor,
-                 abstr_s_next: torch.Tensor,
-                 n_rollouts: int,
-                 n_evolution_steps: int,
-                 winning_perc: float,
-                 act_noise: float):
+                     planner: CrossentropyPlanner,
+                     env: gym.Env,
+                     init_prim_o: torch.Tensor,
+                     init_prim_r: torch.Tensor,
+                     init_prim_term: torch.Tensor,
+                     prim_s: torch.Tensor,
+                     prim_rnn_state: torch.Tensor,
+                     subtraj_hist_target: torch.Tensor,
+                     abstr_s: torch.Tensor,
+                     abstr_rnn_state: RnnStateType,
+                     abstr_r: torch.Tensor,
+                     abstr_term: torch.Tensor,
+                     abstr_s_next: torch.Tensor,
+                     n_rollouts: int,
+                     n_evolution_steps: int,
+                     winning_perc: float,
+                     act_noise: float):
     # Tile init data along batch dimension for rollouts
     # init_prim_o = add_time_dim(broadcast_to_batch(init_prim_o, n_rollouts))
     # init_prim_r = add_time_dim(broadcast_to_batch(init_prim_r, n_rollouts))
