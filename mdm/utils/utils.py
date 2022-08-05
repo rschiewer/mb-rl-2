@@ -241,12 +241,33 @@ def infer_position(env: Gridworld,
     return np.stack(plot_mats)
 
 
+def visualize_plan(trajectory_history: Dict[str, torch.Tensor], env: Gridworld, mdl: MultiscaleDynamicsModelMK2):
+    assert trajectory_history['abstr_o'].shape[0] == 1, 'Batch size of trajectory history should be 1'
+
+    map_mean, map_std = gen_prim_state_map(env, mdl)
+    map_flat = map_mean.reshape((mdl.primitive_model.d_state, -1))
+    map_flat = np.transpose(map_flat, (1, 0))
+    total_positions = map_mean.shape[1] * map_mean.shape[2]
+    similarity_maps = []
+
+    for predicted_prim_s in trajectory_history['abstr_o'][0]:  # remove batch size
+        predicted_prim_s = predicted_prim_s.detach().cpu().numpy()
+        predicted_prim_s_batch = predicted_prim_s[None, ...].repeat(total_positions, axis=0)
+        mse = np.mean((predicted_prim_s_batch - map_flat) ** 2, axis=1)
+        similarity_maps.append(mse.reshape(map_mean.shape[1], map_mean.shape[2]))
+
+    similarity_maps = np.stack(similarity_maps)  # time is first dimension now
+    gen_video(similarity_maps, 100, 1)
+    return similarity_maps
+
+
 def gen_video(frames: np.ndarray, interval: int, repeat_delay: int):
-    fig = plt.figure()
+    fig, ax = plt.subplots()
     ims = []
-    for frame in frames:
-        im = plt.imshow(frame, animated=True)
-        ims.append([im])
+    for t, frame in enumerate(frames):
+        im = ax.imshow(frame, animated=True)
+        label = ax.text(0.01, 0.01, f'{t}', transform=ax.transAxes, color='red')
+        ims.append([im, label])
     ani = animation.ArtistAnimation(fig, ims, interval=interval, blit=True, repeat_delay=repeat_delay)
     plt.show()
     return ani
@@ -289,28 +310,7 @@ def prepare_data(s: Union[np.ndarray, torch.Tensor],
                                         Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray]]:
     s, a, r, terminal = flatten_and_unsqueeze(s, a, r, terminal)
     s = normalize_obs(s, env)
-    a = to_onehot(a, env.action_space.n)
-    # don't care about the first action being [1, 0, ... ] if it's always this way
-    # TODO: comment this out
-    #a[:, 0] = 0  # first timestep action is zero padding, which is falsely converted to [1, 0, 0, ...] vector
-
-    # since a, r and terminal were padded with one element anyway, rotate it to the front and make it zero
-    #if isinstance(a, torch.Tensor):
-    #    a = torch.roll(a, shifts=1, dims=1)
-    #else:
-    #    a = np.roll(a, shift=1, axis=1)
-    #a[:, 0] = 0
-    #if isinstance(r, torch.Tensor):
-    #    r = torch.roll(r, shifts=1, dims=1)
-    #else:
-    #    r = np.roll(r, shift=1, axis=1)
-    #r[:, 0] = 0
-    #if isinstance(terminal, torch.Tensor):
-    #    terminal = torch.roll(terminal, shifts=1, dims=1)
-    #else:
-    #    terminal = np.roll(terminal, shift=1, axis=1)
-    #terminal[:, 0] = 0
-
+    a = to_onehot(a, env.action_space.n)  # don't care about the action being [1, 0, ... ] if it's always this way
     return s, a, r, terminal
 
 
@@ -338,7 +338,6 @@ def discrete_stats(module: torch.nn.Module, n_inputs: int, seq_len: int, n_repet
     # note: torch tensors are row-major
     diff = torch.repeat_interleave(Y_mean, len(Y_mean), dim=0) - Y_mean.repeat(len(Y_mean), 1)
     diff = torch.sum(diff ** 2, dim=1)
-    #Y_mae = torch.matmul(torch.abs(Y_mean), torch.abs(Y_mean).transpose(0, 1))
     Y_mae = diff.reshape(n_unique_sequences, n_unique_sequences)
 
     # total mean and std
