@@ -16,7 +16,7 @@ import pandas as pd
 from mdm.gridworld.gridworld import Gridworld, CellType
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.memory.trajectory_memory import flatten_and_unsqueeze
-from mdm.utils.torch_tools import add_time_dim
+from mdm.utils.torch_tools import add_time_dim, get_mu, get_sigma
 
 
 def here() -> Path:
@@ -169,8 +169,7 @@ def gen_macro_state_map(env: Gridworld,
 
 
 def gen_prim_state_map(env: Gridworld,
-                       mdl: MultiscaleDynamicsModelMK2,
-                       n_trials: int = 1):
+                       mdl: MultiscaleDynamicsModelMK2):
     # find all possible starting locations
     free_locations = env.find_cell_type(CellType.FREE)
     agent_locations = env.find_cell_type(CellType.AGENT)
@@ -182,18 +181,17 @@ def gen_prim_state_map(env: Gridworld,
     o_start = torch.tensor(free_locations).to(mdl.device)
     o_start = normalize_obs(o_start, env)
     o_start = add_time_dim(o_start)
-    a_start = torch.zeros(o_start.shape[0], 1, env.action_space.n, device=mdl.device)
+    a_start = torch.zeros(o_start.shape[0], 1, 1, device=mdl.device)
+    a_start = to_onehot(a_start, env.action_space.n)
     r_start = torch.zeros(o_start.shape[0], 1, 1, device=mdl.device)
     term_start = torch.zeros(o_start.shape[0], 1, 1, device=mdl.device)
 
-    s_mem = []
-    for n in range(n_trials):
-        mem, prim_current = mdl.rollout_primitive(a=a_start, o=o_start, r=r_start, term=term_start)
-        s_mem.append(prim_current['s'])
+    mem, prim_current = mdl.rollout_primitive(a=a_start, o=o_start, r=r_start, term=term_start, n_posterior_steps=1)
+    mem = mdl.pack_mem(mem)
 
-    s_mem = torch.stack(s_mem).transpose(0, 1)  # shape after this: (location, trial, state_dim)
-    s_mean = s_mem.mean(dim=1).detach().cpu().numpy()
-    s_std = s_mem.std(dim=1, unbiased=False).detach().cpu().numpy()
+    # remove time dimension and get distribution parameters
+    s_mean = get_mu(mem['prim_s_post'][:, 0]).detach().cpu().numpy()
+    s_std = get_sigma(mem['prim_s_post'][:, 0]).detach().cpu().numpy()
 
     map_mean = np.zeros((mdl.primitive_model.d_state, env.grid_h, env.grid_w), dtype=np.float32)
     map_std = np.zeros_like(map_mean)

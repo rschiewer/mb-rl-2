@@ -37,7 +37,7 @@ if __name__ == '__main__':
     env = Gridworld.from_cleartext(here() / '../../mdm/gridworld/8x8_v0.mapdata')
     mdl: MultiscaleDynamicsModelMK2 = torch.load(here() / model_path)
 
-    map_s_mean, map_s_std = gen_prim_state_map(env, mdl, 100)
+    map_s_mean, map_s_std = gen_prim_state_map(env, mdl)
 
     all_values = np.concatenate([map_s_mean, map_s_std])
     v_min = all_values.min()
