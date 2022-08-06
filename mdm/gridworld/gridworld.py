@@ -119,12 +119,12 @@ class Gridworld(gym.Env):
         done = False
         info = {}
 
-        if dest_type == CellType.FREE:
+        if dest_type == CellType.FREE or dest_type == CellType.REWARD:
             self._grid[tuple(pos_agent)] = CellType.FREE
             self._grid[tuple(dest_pos_clipped)] = CellType.AGENT
-        elif dest_type == CellType.REWARD:
-            reward += self.reward
-            done = True
+            if dest_type == CellType.REWARD:
+                reward += self.reward
+                done = True
 
         self._grid.flags.writeable = False
 

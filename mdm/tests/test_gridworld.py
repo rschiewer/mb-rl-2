@@ -212,7 +212,6 @@ class GridworldTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 world.enact_sequence(s_mem, a_mem, r_mem, terminal_mem_cp, False, 0)
 
-
     def test_teleport_agent(self):
         world = Gridworld.from_cleartext(here() / 'testmap_multi_start_pos.mapdata')
         world.reset()
@@ -228,24 +227,33 @@ class GridworldTest(unittest.TestCase):
     def test_reward(self):
         world = self.world
 
+        actions = [0, 0, 1, 1]
+        rewards = [-0.01, -0.01, -0.01, 0.99]
+        observations = [np.array([1, 2]), np.array([0, 2]), np.array([0, 3]), np.array([0, 4])]
+        dones = [False, False, False, True]
+
         world.reset()
-        rewards = []
-        for t in range(world.time_limit):
-            o, r, done, info = world.step(0)
-            rewards.append(r)
-            self.assertEqual(r, -0.01)
+        for a, gt_o, gt_r, gt_done in zip(actions,observations, rewards, dones):
+            o, r, done, info = world.step(a)
+
+            self.assertTrue(np.all(gt_o == o))
+            self.assertEqual(gt_r, r)
+            self.assertEqual(gt_done, done)
+
 
     @unittest.skip
     def test_render(self):
         world = self.world
 
         world.reset()
+        world.render()
         for t in range(10):
-            world.render()
             o, r, done, info = world.step(world.action_space.sample())
+            world.render()
+            sleep(1)
             if done:
                 break
-            sleep(1)
+
 
 if __name__ == '__main__':
     unittest.main()
