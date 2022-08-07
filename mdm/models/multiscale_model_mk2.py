@@ -191,8 +191,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         mem['prim_s_prior'].append(pred['s_prior'])
         if use_posterior:
             mem['prim_s_post'].append(pred['s_post'])
-        else:  # hack for loss calculation, essentially removes the current time step's KL_loss(s_prior, s_post)
-            mem['prim_s_post'].append(pred['s_prior'])
+        #else:  # hack for loss calculation, essentially removes the current time step's KL_loss(s_prior, s_post)
+        #    mem['prim_s_post'].append(pred['s_prior'])
         mem['prim_rnn_state'].append(pred['rnn_state'])
         mem['prim_a'].append(prim_current['a'])
         mem['prim_o'].append(pred['o'])
@@ -229,8 +229,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         mem['abstr_s_prior'].append(pred['s_prior'])
         if use_posterior:
             mem['abstr_s_post'].append(pred['s_post'])
-        else:  # hack for loss calculation
-            mem['abstr_s_post'].append(pred['s_prior'])
+        #else:  # hack for loss calculation
+        #    mem['abstr_s_post'].append(pred['s_prior'])
         mem['abstr_rnn_state'].append(pred['rnn_state'])
         mem['abstr_a'].append(abstr_current['a'])
         mem['abstr_o'].append(pred['o'])
@@ -297,7 +297,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         #prim_rec_o = - build_gaussian(pred['prim_o_dist']).log_prob(o_ground_truth).mean()
         #prim_rec_r = - build_gaussian(pred['prim_r_dist']).log_prob(r_ground_truth).mean()
         #prim_rec_term = - build_bernoulli(pred['prim_term']).log_prob(term_ground_truth).mean()
-        prim_s_prior = build_gaussian(pred['prim_s_prior'])
+        available_post_steps = pred['prim_s_post'].shape[1]
+        prim_s_prior = build_gaussian(pred['prim_s_prior'][:, :available_post_steps])
         prim_s_post = build_gaussian(pred['prim_s_post'])
         unit_gaussian_prim = torch.distributions.Normal(loc=torch.zeros_like(prim_s_post.loc),
                                                    scale=torch.ones_like(prim_s_post.scale))
@@ -310,7 +311,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         abstr_rec_o = torch.nn.functional.mse_loss(pred['abstr_o'], pred['ctx_low_level'])
         abstr_rec_r = torch.nn.functional.mse_loss(pred['abstr_r'], abstr_r_ground_truth)
         abstr_rec_term = torch.nn.functional.binary_cross_entropy(pred['abstr_term'], abstr_term_ground_truth)
-        abstr_s_prior = build_gaussian(pred['abstr_s_prior'])
+        available_post_steps = pred['abstr_s_post'].shape[1]
+        abstr_s_prior = build_gaussian(pred['abstr_s_prior'][:, :available_post_steps])
         abstr_s_post = build_gaussian(pred['abstr_s_post'])
         unit_gaussian_abstr = torch.distributions.Normal(loc=torch.zeros_like(abstr_s_post.loc),
                                                    scale=torch.ones_like(abstr_s_post.scale))
