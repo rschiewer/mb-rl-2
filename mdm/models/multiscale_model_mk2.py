@@ -136,7 +136,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             #ctx_low_level = self.fuse_state(prim_current['s'], prim_current['rnn_state']).detach()
             #mem['ctx_low_level'].append(ctx_low_level)
             ctx_low_level = prim_current['s'].detach()
-            mem['ctx_low_level'].append(mem['prim_s_post'][-1].detach())  # this actually stores this double
+            mem['ctx_low_level'].append(ctx_low_level)  # actually stores this double but we need a detached version
 
             n_warmup_abstr = 1 if warmup_steps_abstr_left > 0 else 0
             mem, abstr_current = self.rollout_abstract(a=add_time_dim(abstr_a), r=add_time_dim(abstr_r[:, i_chunk]),
@@ -288,7 +288,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
         pred = self(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, abstr_r_ground_truth,
                     abstr_term_ground_truth)
-        beta = min((self._current_train_step / self.n_warmup_schedule), 1)
+        beta = 1 #min((self._current_train_step / self.n_warmup_schedule), 1)
 
         # primitive model loss
         prim_rec_o = torch.nn.functional.mse_loss(pred['prim_o'], o_ground_truth)
@@ -299,27 +299,23 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         #prim_rec_term = - build_bernoulli(pred['prim_term']).log_prob(term_ground_truth).mean()
         prim_s_prior = build_gaussian(pred['prim_s_prior'])
         prim_s_post = build_gaussian(pred['prim_s_post'])
-        unit_gaussian = torch.distributions.Normal(loc=torch.zeros_like(prim_s_post.loc),
+        unit_gaussian_prim = torch.distributions.Normal(loc=torch.zeros_like(prim_s_post.loc),
                                                    scale=torch.ones_like(prim_s_post.scale))
         prim_kl_s = beta * self.beta_kl_prim * torch.distributions.kl_divergence(prim_s_post, prim_s_prior).mean()
-        prim_kl_s_reg = beta * self.beta_reg_prim * torch.distributions.kl_divergence(prim_s_post, unit_gaussian).mean()
+        prim_kl_s_reg = beta * self.beta_reg_prim * torch.distributions.kl_divergence(prim_s_post, unit_gaussian_prim).mean()
 
-        # abstract model loss
-        #abstr_o_processed = self.context_projector(pred['abstr_o'])
-        #prim_ctx_processed = self.context_projector(pred['ctx_low_level'])
-        #abstr_o_rec = torch.nn.functional.mse_loss(abstr_o_processed, prim_ctx_processed)
-
-        ctx_low_level_dist = build_gaussian(pred['ctx_low_level'].detach())
-        abstr_o_dist = build_gaussian(pred['abstr_o_dist'])
-        abstr_o_rec = self.beta_abstract_model * torch.distributions.kl_divergence(abstr_o_dist, ctx_low_level_dist).mean()
+        #ctx_low_level_dist = build_gaussian(pred['ctx_low_level'].detach())
+        #abstr_o_dist = build_gaussian(pred['abstr_o_dist'])
+        #abstr_rec_o = self.beta_abstract_model * torch.distributions.kl_divergence(ctx_low_level_dist, abstr_o_dist).mean()
+        abstr_rec_o = torch.nn.functional.mse_loss(pred['abstr_o'], pred['ctx_low_level'])
         abstr_rec_r = torch.nn.functional.mse_loss(pred['abstr_r'], abstr_r_ground_truth)
         abstr_rec_term = torch.nn.functional.binary_cross_entropy(pred['abstr_term'], abstr_term_ground_truth)
         abstr_s_prior = build_gaussian(pred['abstr_s_prior'])
         abstr_s_post = build_gaussian(pred['abstr_s_post'])
-        unit_gaussian = torch.distributions.Normal(loc=torch.zeros_like(abstr_s_post.loc),
+        unit_gaussian_abstr = torch.distributions.Normal(loc=torch.zeros_like(abstr_s_post.loc),
                                                    scale=torch.ones_like(abstr_s_post.scale))
         abstr_kl_s = beta * self.beta_kl_abstr * torch.distributions.kl_divergence(abstr_s_post, abstr_s_prior).mean()
-        abstr_kl_s_reg = beta * self.beta_reg_abstr * torch.distributions.kl_divergence(abstr_s_post, unit_gaussian).mean()
+        abstr_kl_s_reg = beta * self.beta_reg_abstr * torch.distributions.kl_divergence(abstr_s_post, unit_gaussian_abstr).mean()
 
         # abstract action model loss
         scale = pred['abstr_a'].reshape(-1, self.abstract_model.d_action).std(dim=0, unbiased=False)
@@ -333,13 +329,29 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             abstr_factor = 0  # disable abstract model loss in case we only use the primitive level
 
         total = prim_rec_o + prim_rec_r + prim_rec_term + prim_kl_s + prim_kl_s_reg
-        total += abstr_factor * (abstr_o_rec + abstr_rec_r + abstr_rec_term + abstr_kl_s + abstr_kl_s_reg
+        total += abstr_factor * (abstr_rec_o + abstr_rec_r + abstr_rec_term + abstr_kl_s + abstr_kl_s_reg
                                  + abstr_a_loss)
 
+        prim_o_mae = torch.mean(torch.abs(pred['prim_o'] - o_ground_truth))
+        prim_r_mae = torch.mean(torch.abs(pred['prim_r'] - r_ground_truth))
+        prim_term_mae = torch.mean(torch.abs(pred['prim_term'] - term_ground_truth))
+        prim_kl_unscaled = torch.distributions.kl_divergence(prim_s_post, prim_s_prior).mean()
+        prim_kl_reg_unscaled = torch.distributions.kl_divergence(prim_s_post, unit_gaussian_prim).mean()
+        abstr_o_mae = torch.mean(torch.abs(pred['abstr_o'] - pred['ctx_low_level']))
+        abstr_r_mae = torch.mean(torch.abs(pred['abstr_o'] - abstr_r_ground_truth))
+        abstr_term_mae = torch.mean(torch.abs(pred['abstr_term'] - abstr_term_ground_truth))
+        abstr_kl_unscaled = torch.distributions.kl.kl_divergence(abstr_s_post, abstr_s_prior).mean()
+        abstr_kl_reg_unscaled = torch.distributions.kl_divergence(abstr_s_post, unit_gaussian_abstr).mean()
+
         return {'total': total, 'prim_o': prim_rec_o, 'prim_r': prim_rec_r, 'prim_term': prim_rec_term,
-                'prim_kl_s': prim_kl_s, 'prim_kl_s_reg': prim_kl_s_reg, 'abstr_o': abstr_o_rec,
+                'prim_kl_s': prim_kl_s, 'prim_kl_s_reg': prim_kl_s_reg, 'abstr_o': abstr_rec_o,
                 'abstr_r': abstr_rec_r, 'abstr_term': abstr_rec_term, 'abstr_kl_s': abstr_kl_s,
-                'abstr_kl_s_reg': abstr_kl_s_reg, 'abstr_a_var': abstr_a_loss}
+                'abstr_kl_s_reg': abstr_kl_s_reg, 'abstr_a_var': abstr_a_loss, 'monitoring_prim_o': prim_o_mae,
+                'monitoring_prim_r': prim_r_mae, 'monitoring_prim_term': prim_term_mae,
+                'monitoring_prim_kl': prim_kl_unscaled, 'monitoring_prim_kl_reg': prim_kl_reg_unscaled,
+                'monitoring_abstr_o': abstr_o_mae, 'monitoring_abstr_r': abstr_r_mae,
+                'monitoring_abstr_term': abstr_term_mae, 'monitoring_abstr_kl': abstr_kl_unscaled,
+                'monitoring_abstr_kl_reg': abstr_kl_reg_unscaled}
 
     def input_compatible(self,
                          o_ground_truth: torch.Tensor,

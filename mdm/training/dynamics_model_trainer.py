@@ -118,10 +118,10 @@ class DynamicsModelTrainer(ABC):
     def _update_progressbar_descr(eval_losses: Dict[str, torch.Tensor],
                                   train_losses: Dict[str, torch.Tensor],
                                   pbar: tqdm):
-        train_losses = {k: v for k, v in train_losses.items() if v.ndim <= 1}
-        eval_losses = {k: v for k, v in eval_losses.items() if v.ndim <= 1}
-        l_train = [f'{n}: {l:2.3e}' for n, l in train_losses.items()]
-        l_eval = [f'{n}: {l:2.3e}' for n, l in eval_losses.items()]
+        train_losses = {k: v for k, v in train_losses.items() if v.ndim <= 1 and k.startswith('monitoring_')}
+        eval_losses = {k: v for k, v in eval_losses.items() if v.ndim <= 1 and k.startswith('monitoring_')}
+        l_train = [f'{n.replace("monitoring_", "")}: {l:2.3e}' for n, l in train_losses.items()]
+        l_eval = [f'{n.replace("monitoring_", "")}: {l:2.3e}' for n, l in eval_losses.items()]
         descr = 'train_losses = ' + ', '.join(l_train) + ' | val_losses = ' + ', '.join(l_eval)
         pbar.set_description(descr)
 
