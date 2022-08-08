@@ -10,7 +10,7 @@ from tqdm import tqdm
 from mdm.gridworld.gridworld import Gridworld
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.planning.cem_planner import CrossentropyPlanner, DistributionType
-from mdm.utils.utils import (here, load_yaml, gen_macro_state_map, infer_position, transform_macro_s_init_history,
+from mdm.utils.utils import (here, load_yaml, visualize_plan,
                              gen_video, gen_prim_state_map)
 from mdm.utils.planning_tools_mk2 import *
 from mdm.utils.torch_tools import add_time_dim
@@ -48,8 +48,8 @@ if __name__ == '__main__':
 
     planning_cfg['n_abstract_steps'] = ceil(100 / mdl.abstract_step_size) - planning_cfg['n_warmup_abstr']
 
+    #planning_cfg['n_warmup_abstr'] = planning_cfg['n_abstract_steps']
     #planning_cfg['n_abstract_steps'] = 0
-    #planning_cfg['n_warmup_abstr'] = 33
     logger.log(planning_cfg, Scope.HYPERPARAMETERS() / 'plan')
 
     #macro_s_init_mean, macro_s_init_std, macro_s_init_per_state_per_action = gen_macro_state_map(env, mdl, 3)
@@ -65,8 +65,8 @@ if __name__ == '__main__':
     abstract_terminals = []
     for i_ep in tqdm(range(planning_cfg['n_episodes'])):
         planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, device=mdl.device)
-        #planner_abstr = CrossentropyPlanner(DistributionType.NORMAL, device=mdl.device)
-        planner_abstr = CrossentropyPlanner(DistributionType.CATEGORICAL, device=mdl.device)
+        planner_abstr = CrossentropyPlanner(DistributionType.NORMAL, device=mdl.device)
+        #planner_abstr = CrossentropyPlanner(DistributionType.CATEGORICAL, device=mdl.device)
         env.reset()
 
         trajectory_history = mdl.gen_mem()
@@ -91,6 +91,8 @@ if __name__ == '__main__':
                                               planning_cfg['discount'],
                                               planning_cfg['act_noise_prim'])
             #print(f'After section {i_sec}: {trajectory_history["prim_o"].shape[1]}')
+        #visualize_plan(trajectory_history, env, mdl)
+
         actions = trajectory_history['prim_a'][0]
         actions = actions[planning_cfg['n_warmup_prim']:]  # remove the first default and the warmup actions
 
