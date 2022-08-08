@@ -42,7 +42,7 @@ if __name__ == '__main__':
     action_sequences = torch.stack(action_sequences, dim=0).to(mdl.device)
     action_sequences = torch.nn.functional.one_hot(action_sequences, num_classes=mdl.d_action).to(dtype=torch.float32)
 
-    abstr_a = mdl.abstract_action_model(action_sequences)
+    abstr_a = mdl.abstract_action_model(action_sequences, sample=False)
     abstr_a = abstr_a.detach().cpu().numpy()
     #histogram_x, histogram_y = np.unique(macro_actions, return_counts=True)
 
@@ -60,7 +60,7 @@ if __name__ == '__main__':
     plt.show()
 
     Y_mean, Y_std, Y_mae = discrete_stats(mdl.abstract_action_model, env.action_space.n,
-                                          mdl.abstract_step_size, 1)
+                                          mdl.abstract_step_size, 10)
 
     plt.matshow(Y_mae)
     plt.colorbar()
