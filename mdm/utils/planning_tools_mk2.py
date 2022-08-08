@@ -417,7 +417,9 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
         _mem, _prim_final = model.rollout_primitive(a=_a, s=s_start, rnn_state=rnn_state_start, sample=False)
         _mem = model.pack_mem(_mem)
 
-        _criterion = - torch.mean((_mem['prim_s'][:, 0] - s_goal) ** 2, dim=1, keepdim=True)
+        # TODO: test KL divergence between distributions
+        _criterion = - torch.mean((_mem['prim_s'][:, -1] - s_goal) ** 2, dim=1, keepdim=True)
+        _criterion -= torch.mean((_mem['prim_r'].sum(dim=1) - r_goal) ** 2, dim=1, keepdim=True)
         _discount = None
         return _criterion, _discount, _mem
 
