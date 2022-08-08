@@ -366,7 +366,8 @@ def plan_abstract(model: MultiscaleDynamicsModelMK2,
     abstr_rnn_state_start = unpack_rnn_state(history['abstr_rnn_state'][:, -1].repeat(n_rollouts, 1, 1, 1))
 
     def _rollout_fn(_a: torch.Tensor):
-        _a = to_onehot(_a, model.abstract_model.d_action)
+        #_a = to_onehot(_a, model.abstract_model.d_action)
+        _a = torch.clamp(_a, -0.99, 0.99)  # limit action range to allowed values
         _mem, _abstr_final = model.rollout_abstract(_a, s=abstr_s_start, rnn_state=abstr_rnn_state_start, sample=False,
                                                     n_posterior_steps=0)
         _mem = model.pack_mem(_mem)
