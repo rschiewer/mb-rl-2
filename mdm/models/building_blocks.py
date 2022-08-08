@@ -162,7 +162,7 @@ class RSSM(torch.nn.Module):
             return (torch.zeros(self.n_hidden_layers, d_batch, self.d_hidden, device=device),
                     torch.zeros(self.n_hidden_layers, d_batch, self.d_hidden, device=device))
         else:
-            return torch.zeros(d_batch, self.n_hidden_layers, self.d_hidden, device=device)
+            return torch.zeros(self.n_hidden_layers, d_batch, self.d_hidden, device=device)
 
     def zero_x_post(self,
                     d_batch: int,
