@@ -280,10 +280,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         device = self._device
 
         # sum makes sense for rewards, use padding=0 to not affect sum for last element
-        # start at time step 1 because the first time step is just the initial observation to start prediction
         abstr_r_ground_truth = bin_every_k_steps(r_ground_truth, self.abstract_step_size, padding_val=0).sum(dim=2)
         # terminal flag can only be 0 or 1, so mean value with automatic padding should be used
-        # start at time step 1 because the first time step is just the initial observation to start prediction
         abstr_term_ground_truth = bin_every_k_steps(term_ground_truth, self.abstract_step_size).max(dim=2).values
 
         pred = self(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, abstr_r_ground_truth,
@@ -497,6 +495,9 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             n_posterior_steps = n_groundtruth_available
         elif n_posterior_steps > n_groundtruth_available:
             raise ValueError(f'Can\'t perform more posterior steps as groundtruth data is available.')
+
+        if a.min() < -1 or a.max() > 1:
+            raise ValueError('Abstract actions should not contain values outside of the interval [-1, 1]')
 
         for t in range(n_steps):
             if t < n_groundtruth_available:

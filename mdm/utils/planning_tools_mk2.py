@@ -69,7 +69,7 @@ def init_prim_s(model: MultiscaleDynamicsModelMK2,
     term_start_batch = history['prim_term']
 
     mem, prim_current = model.rollout_primitive(a=a_start_batch, o=o_start_batch, r=r_start_batch,
-                                                term=term_start_batch, n_posterior_steps= -1, sample=False)
+                                                term=term_start_batch, n_posterior_steps=-1, sample=False)
     mem = model.pack_mem(mem)
 
     # remove the rollout data from mem that is already present as groundtruth data
@@ -99,6 +99,9 @@ def init_abstr_s(model: MultiscaleDynamicsModelMK2,
     assert remaining_steps >= 0
 
     if remaining_steps > 0:
+        raise ValueError('Not supported yet')
+
+    if remaining_steps > 0:
         s_batch = history['prim_s'][:, -1].repeat(n_rollouts, 1)
         rnn_state_batch = unpack_rnn_state(history['prim_rnn_state'][:, -1].repeat(n_rollouts, 1, 1, 1))
 
@@ -124,7 +127,7 @@ def init_abstr_s(model: MultiscaleDynamicsModelMK2,
         history = update_history(history, data)
 
     a_binned = bin_every_k_steps(history['prim_a'][:, :required_steps], model.abstract_step_size)
-    abstr_a = torch.stack([model.abstract_action_model(a_binned[:, i_chunk])
+    abstr_a = torch.stack([model.abstract_action_model(a_binned[:, i_chunk], sample=False)
                            for i_chunk in range(a_binned.shape[1])], dim=1)
     abstr_o = bin_every_k_steps(history['prim_s'][:, :required_steps], model.abstract_step_size)[:, :, -1]
     abstr_r = bin_every_k_steps(history['prim_r'][:, :required_steps], model.abstract_step_size).sum(dim=2)
@@ -398,14 +401,16 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
                  winning_perc: float,
                  discount: float,
                  a_noise_prim: float):
-    history_length = history['prim_a'].shape[1]
-    i_section = history_length // model.abstract_step_size
-
-    assert history_length % model.abstract_step_size == 0, 'Primitive model out of sync with abstract model'
+    n_steps_done = history['prim_a'].shape[1]
+    assert n_steps_done % model.abstract_step_size == 0, ('Warmup step count should be evenly divisible by the section '
+                                                          f'length, but they are {n_steps_done} and '
+                                                          f'{model.abstract_step_size}')
+    i_section = n_steps_done // model.abstract_step_size # + n_steps_done // model.abstract_step_size
 
     s_start = history['prim_s'][:, -1].repeat(n_rollouts, 1)
     rnn_state_start = unpack_rnn_state(history['prim_rnn_state'][:, -1].repeat(n_rollouts, 1, 1, 1))
     s_goal = history['abstr_o'][:, i_section].repeat(n_rollouts, 1)
+    r_goal = history['abstr_r'][:, i_section].repeat(n_rollouts, 1)
 
     def _rollout_fn(_a: torch.Tensor):
         _a = to_onehot(_a, n_classes=model.d_action)
@@ -420,7 +425,7 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
                                                       d_dist=history['prim_a'].shape[-1],
                                                       n_rollouts=n_rollouts,
                                                       n_plan_steps=model.abstract_step_size,
-                                                      n_evolution_steps=n_evolution_steps,
+                                                      n_evolution_steps=3,
                                                       winning_perc=winning_perc,
                                                       discount=discount,
                                                       act_noise=a_noise_prim)

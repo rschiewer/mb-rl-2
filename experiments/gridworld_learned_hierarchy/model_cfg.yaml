@@ -15,17 +15,17 @@ mdm:
   beta_reg_abstract: 0.01
   n_warmup_prim: 3
   n_warmup_abstr: 1
-  n_warmup_schedule: 4000
+  n_warmup_schedule: 3000
   detach_posteriors: False
   beta_abstract_action: 0.0
-  beta_abstract_model: 1.0
+  beta_abstract_model: 0.01
 
 prim_mdl:
-  d_state: 32
+  d_state: 8
   d_hidden: 128
   n_hidden_layers: 3
   hidden_dropout: 0.1
-  epsilon: 0.001
+  epsilon: 0.01
   s_prior_lws: [64,  64]
   s_post_lws: [64, 64, 64]
   o_lws: [64, 128, 64]
@@ -33,16 +33,16 @@ prim_mdl:
   term_lws: [64, 128, 64]
   layer_norm: True
   activation: "relu"
-  rnn_type: "lstm"
+  rnn_type: "gru"
 
 abstr_mdl:
-  d_state: 64
+  d_state: 32
   d_hidden: 256
-  d_action: 32
+  d_action: 8
   d_reward: 1
   n_hidden_layers: 3
   hidden_dropout: 0.1
-  epsilon: 0.001
+  epsilon: 0.01
   s_prior_lws: [128, 128, 128]
   s_post_lws: [128, 128, 128]
   o_lws: [128, 256, 128]
@@ -50,7 +50,7 @@ abstr_mdl:
   term_lws: [128, 256, 128]
   layer_norm: True
   activation: "relu"
-  rnn_type: "lstm"
+  rnn_type: "gru"
 
 abstr_act_mdl:
   lws: [128, 64]
@@ -58,10 +58,10 @@ abstr_act_mdl:
   layer_norm: True
 
 optim:
-  lr: 0.003
+  lr: 0.0002
 
 trainer:
-  n_train_steps: 10000
+  n_train_steps: 8000
   eval_interval: 100
   d_batch: 2048
   pad_last_terminal_flag: False

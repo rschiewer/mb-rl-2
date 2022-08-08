@@ -96,7 +96,7 @@ if __name__ == '__main__':
     def eval_callback(i_step: int):
         if model.abstract_step_size <= 10:
             Y_mean, Y_std, Y_mae = discrete_stats(model.abstract_action_model, env.action_space.n,
-                                                  model.abstract_step_size, 1)
+                                                  model.abstract_step_size, 10)
             plt.matshow(Y_mae, fignum=1)
             plt.colorbar()
             buffer = io.BytesIO()

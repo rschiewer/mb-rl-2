@@ -6,6 +6,7 @@ import haste_pytorch as haste
 
 from mdm.utils.torch_tools import (layers_with_activation, add_time_dim, remove_time_dim, sample_from_gaussian,
                                    make_gaussian_params, get_mu, get_sigma, RnnStateType)
+#from third_party.indrnn import IndRNNv2
 
 
 class AbstractActionModel(torch.nn.Module):
@@ -19,18 +20,29 @@ class AbstractActionModel(torch.nn.Module):
                  activation: str = 'relu'):
         super(AbstractActionModel, self).__init__()
 
+        self.d_abstract_action = d_abstract_action
+
         lws = (d_action * abstract_step_size, *lws, d_abstract_action)
         self.flatten_layer = torch.nn.Flatten(start_dim=1)
         self.det_mdl = torch.nn.Sequential(*layers_with_activation(lws, activation, layer_norm=layer_norm))
 
     def forward(self,
-                actions: torch.Tensor) -> torch.Tensor:
+                actions: torch.Tensor,
+                sample: bool = True) -> torch.Tensor:
         # actions.shape = (d_batch, n_abstract_steps, d_action)
         macro_action = self.flatten_layer(actions)
         macro_action = self.det_mdl(macro_action)
-        #macro_action = torch.tanh(macro_action)
+        macro_action = torch.tanh(macro_action)
         # macro_action = torch.softmax(macro_action, dim=-1)
-        macro_action = torch.nn.functional.gumbel_softmax(macro_action, hard=True)
+        #macro_action = torch.nn.functional.gumbel_softmax(macro_action, hard=True, tau=0.1)
+        #macro_action = torch.softmax(macro_action, dim=-1)
+        #macro_action = torch.nn.functional.one_hot(macro_action.argmax(-1), macro_action.shape[-1]) - macro_action.detach() + macro_action
+        #macro_action = torch.distributions.RelaxedOneHotCategorical(logits=macro_action, temperature=0.1)
+        #if sample:
+        #    macro_action = macro_action.rsample()
+        #else:
+        #    macro_action = torch.nn.functional.one_hot(macro_action.probs.argmax(-1), self.d_abstract_action)
+        #    macro_action = macro_action.to(torch.float32)
         return macro_action
 
 
