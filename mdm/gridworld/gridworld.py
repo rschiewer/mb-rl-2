@@ -150,6 +150,8 @@ class Gridworld(gym.Env):
         self._grid[tuple(pos)] = CellType.AGENT
         self._grid.flags.writeable = False
 
+        return self.find_cell_type(CellType.AGENT)
+
     def reset(self):
         self._grid.flags.writeable = True
         self._grid[:] = self._init_grid[:]
