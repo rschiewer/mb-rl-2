@@ -7,6 +7,7 @@ import re
 
 import gym
 import numpy as np
+import numpy.ma as ma
 import yaml
 import torch
 import matplotlib.pyplot as plt
@@ -169,7 +170,8 @@ def gen_macro_state_map(env: Gridworld,
 
 
 def gen_prim_state_map(env: Gridworld,
-                       mdl: MultiscaleDynamicsModelMK2):
+                       mdl: MultiscaleDynamicsModelMK2,
+                       walk_distance: int):
     # find all possible starting locations
     free_locations = env.find_cell_type(CellType.FREE)
     agent_locations = env.find_cell_type(CellType.AGENT)
@@ -178,20 +180,72 @@ def gen_prim_state_map(env: Gridworld,
     free_locations = np.concatenate([free_locations, agent_locations], axis=0)
     free_locations = [tuple(loc) for loc in free_locations]
 
-    o_start = torch.tensor(free_locations).to(mdl.device)
-    o_start = normalize_obs(o_start, env)
-    o_start = add_time_dim(o_start)
-    a_start = torch.zeros(o_start.shape[0], 1, 1, device=mdl.device)
-    a_start = to_onehot(a_start, env.action_space.n)
-    r_start = torch.zeros(o_start.shape[0], 1, 1, device=mdl.device)
-    term_start = torch.zeros(o_start.shape[0], 1, 1, device=mdl.device)
+    # generate all possible action sequences of length walk_distance
+    available_actions = list(range(env.action_space.n))
+    action_sequences = list(product(available_actions, repeat=walk_distance))
 
-    mem, prim_current = mdl.rollout_primitive(a=a_start, o=o_start, r=r_start, term=term_start, n_posterior_steps=1)
+    # find true trajectory for each action sequence
+    traj_o, traj_a, traj_r, traj_term = [], [], [], []
+    for loc in free_locations:
+        for a_seq in action_sequences:
+            env.reset()  # don't use first observation since we'll use teleport_agent
+            o_mem, r_mem, term_mem = [env.teleport_agent(loc)], [0.0], [False]
+            a_mem = (0,) + a_seq
+            for a in a_mem[1:]:
+                o, r, done, _ = env.step(a)
+                if not done:
+                    o_mem.append(o)
+                    r_mem.append(r)
+                    term_mem.append(done)
+                else:
+                    o_mem.append(np.zeros_like(o))
+                    r_mem.append(0.0)
+                    term_mem.append(False)
+
+            o = torch.from_numpy(np.stack(o_mem))
+            a = torch.tensor(a_mem)
+            r = torch.tensor(r_mem)
+            term = torch.tensor(term_mem)
+
+            o, a, r, term = o.to(mdl.device), a.to(mdl.device), r.to(mdl.device), term.to(mdl.device)
+            traj_o.append(o)
+            traj_a.append(a)
+            traj_r.append(r)
+            traj_term.append(term)
+
+    traj_o = torch.stack(traj_o)
+    traj_a = torch.stack(traj_a)
+    traj_r = torch.stack(traj_r)
+    traj_term = torch.stack(traj_term)
+    o_start, a_start, r_start, term_start = prepare_data(traj_o, traj_a, traj_r, traj_term, env)
+
+    mem, prim_current = mdl.rollout_primitive(a=a_start, o=o_start, r=r_start, term=term_start,
+                                              n_posterior_steps=walk_distance, sample=False)
     mem = mdl.pack_mem(mem)
 
+    s_mean = get_mu(mem['prim_s_post'][:, -1]).detach().cpu().numpy()
+    s_std = get_sigma(mem['prim_s_post'][:, -1]).detach().cpu().numpy()
+    final_pos = traj_o[:, -1].detach().cpu().numpy()
+
+    map_mean = np.zeros((mdl.primitive_model.d_state, env.grid_h, env.grid_w), dtype=np.float32)
+    map_std = np.zeros_like(map_mean)
+
+    counts = []
+    for pos in final_pos:
+        masked_idx = np.all(final_pos == pos, axis=1, keepdims=True)  # row-wise and
+        masked_idx = np.logical_not(masked_idx)
+        masked_idx = np.repeat(masked_idx, mdl.primitive_model.d_state, axis=1)
+        valid_trajectories = ma.MaskedArray(s_mean, mask=masked_idx)
+        _s_mean = valid_trajectories.mean(axis=0)
+        _s_std = valid_trajectories.std(axis=0)
+        map_mean[:, pos[0], pos[1]] = _s_mean
+        map_std[:, pos[0], pos[1]] = _s_std
+
+    return map_mean, map_std
+
     # remove time dimension and get distribution parameters
-    s_mean = get_mu(mem['prim_s_post'][:, 0]).detach().cpu().numpy()
-    s_std = get_sigma(mem['prim_s_post'][:, 0]).detach().cpu().numpy()
+    s_mean = get_mu(mem['prim_s_post'][:, -1]).detach().cpu().numpy()
+    s_std = get_sigma(mem['prim_s_post'][:, -1]).detach().cpu().numpy()
 
     map_mean = np.zeros((mdl.primitive_model.d_state, env.grid_h, env.grid_w), dtype=np.float32)
     map_std = np.zeros_like(map_mean)
@@ -257,7 +311,7 @@ def visualize_plan(trajectory_history: Dict[str, torch.Tensor], env: Gridworld, 
         similarity_maps.append(mse.reshape(map_mean.shape[1], map_mean.shape[2]))
 
     similarity_maps = np.stack(similarity_maps)  # time is first dimension now
-    gen_video(similarity_maps, 100, 1)
+    gen_video(similarity_maps, 500, 3)
     return similarity_maps
 
 
