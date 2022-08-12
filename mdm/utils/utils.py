@@ -220,7 +220,7 @@ def gen_prim_state_map(env: Gridworld,
     o_start, a_start, r_start, term_start = prepare_data(traj_o, traj_a, traj_r, traj_term, env)
 
     mem, prim_current = mdl.rollout_primitive(a=a_start, o=o_start, r=r_start, term=term_start,
-                                              n_posterior_steps=walk_distance, sample=False)
+                                              n_posterior_steps=-1, sample=False)
     mem = mdl.pack_mem(mem)
 
     s_mean = get_mu(mem['prim_s_post'][:, -1]).detach().cpu().numpy()
@@ -235,9 +235,10 @@ def gen_prim_state_map(env: Gridworld,
         masked_idx = np.all(final_pos == pos, axis=1, keepdims=True)  # row-wise and
         masked_idx = np.logical_not(masked_idx)
         masked_idx = np.repeat(masked_idx, mdl.primitive_model.d_state, axis=1)
-        valid_trajectories = ma.MaskedArray(s_mean, mask=masked_idx)
-        _s_mean = valid_trajectories.mean(axis=0)
-        _s_std = valid_trajectories.std(axis=0)
+        valid_trajectories_mean = ma.MaskedArray(s_mean, mask=masked_idx)
+        valid_trajectories_std = ma.MaskedArray(s_std, mask=masked_idx)
+        _s_mean = valid_trajectories_mean.mean(axis=0)
+        _s_std = valid_trajectories_std.mean(axis=0)
         map_mean[:, pos[0], pos[1]] = _s_mean
         map_std[:, pos[0], pos[1]] = _s_std
 
