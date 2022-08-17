@@ -169,9 +169,35 @@ def gen_macro_state_map(env: Gridworld,
     return macro_s_init_mean, macro_s_init_std, abstr_s_init_history
 
 
-def gen_prim_state_map(env: Gridworld,
-                       mdl: MultiscaleDynamicsModelMK2,
-                       walk_distance: int):
+def gen_prim_rnn_state_map(env: Gridworld,
+                           mdl: MultiscaleDynamicsModelMK2,
+                           walk_distance: int):
+    traj_a, traj_o, traj_r, traj_term = exhaustive_traversion(env, mdl, walk_distance)
+    o_start, a_start, r_start, term_start = prepare_data(traj_o, traj_a, traj_r, traj_term, env)
+    mem, prim_current = mdl.rollout_primitive(a=a_start, o=o_start, r=r_start, term=term_start,
+                                              n_posterior_steps=-1, sample=False)
+    mem = mdl.pack_mem(mem)
+
+    rnn_state_mean = mem['prim_rnn_state'][:, -1, -1, 0].detach().cpu().numpy()
+    final_pos = traj_o[:, -1].detach().cpu().numpy()
+
+    map_mean = np.zeros((mdl.primitive_model.d_hidden, env.grid_h, env.grid_w), dtype=np.float32)
+    map_std = np.zeros_like(map_mean)
+
+    for pos in final_pos:
+        masked_idx = np.all(final_pos == pos, axis=1, keepdims=True)  # row-wise and
+        masked_idx = np.logical_not(masked_idx)
+        masked_idx = np.repeat(masked_idx, mdl.primitive_model.d_hidden, axis=1)
+        valid_trajectories_mean = ma.MaskedArray(rnn_state_mean, mask=masked_idx)
+        _s_mean = valid_trajectories_mean.mean(axis=0)
+        _s_std = valid_trajectories_mean.std(axis=0)
+        map_mean[:, pos[0], pos[1]] = _s_mean
+        map_std[:, pos[0], pos[1]] = _s_std
+
+    return map_mean, map_std
+
+
+def exhaustive_traversion(env, mdl, walk_distance):
     # find all possible starting locations
     free_locations = env.find_cell_type(CellType.FREE)
     agent_locations = env.find_cell_type(CellType.AGENT)
@@ -212,13 +238,18 @@ def gen_prim_state_map(env: Gridworld,
             traj_a.append(a)
             traj_r.append(r)
             traj_term.append(term)
-
     traj_o = torch.stack(traj_o)
     traj_a = torch.stack(traj_a)
     traj_r = torch.stack(traj_r)
     traj_term = torch.stack(traj_term)
-    o_start, a_start, r_start, term_start = prepare_data(traj_o, traj_a, traj_r, traj_term, env)
+    return traj_a, traj_o, traj_r, traj_term
 
+
+def gen_prim_state_map(env: Gridworld,
+                       mdl: MultiscaleDynamicsModelMK2,
+                       walk_distance: int):
+    traj_a, traj_o, traj_r, traj_term = exhaustive_traversion(env, mdl, walk_distance)
+    o_start, a_start, r_start, term_start = prepare_data(traj_o, traj_a, traj_r, traj_term, env)
     mem, prim_current = mdl.rollout_primitive(a=a_start, o=o_start, r=r_start, term=term_start,
                                               n_posterior_steps=-1, sample=False)
     mem = mdl.pack_mem(mem)
@@ -230,7 +261,6 @@ def gen_prim_state_map(env: Gridworld,
     map_mean = np.zeros((mdl.primitive_model.d_state, env.grid_h, env.grid_w), dtype=np.float32)
     map_std = np.zeros_like(map_mean)
 
-    counts = []
     for pos in final_pos:
         masked_idx = np.all(final_pos == pos, axis=1, keepdims=True)  # row-wise and
         masked_idx = np.logical_not(masked_idx)
@@ -244,18 +274,18 @@ def gen_prim_state_map(env: Gridworld,
 
     return map_mean, map_std
 
-    # remove time dimension and get distribution parameters
-    s_mean = get_mu(mem['prim_s_post'][:, -1]).detach().cpu().numpy()
-    s_std = get_sigma(mem['prim_s_post'][:, -1]).detach().cpu().numpy()
-
-    map_mean = np.zeros((mdl.primitive_model.d_state, env.grid_h, env.grid_w), dtype=np.float32)
-    map_std = np.zeros_like(map_mean)
-
-    for loc, _s_mean, _s_std in zip(free_locations, s_mean, s_std):
-        map_mean[:, loc[0], loc[1]] = _s_mean
-        map_std[:, loc[0], loc[1]] = _s_std
-
-    return map_mean, map_std
+    ## remove time dimension and get distribution parameters
+    #s_mean = get_mu(mem['prim_s_post'][:, -1]).detach().cpu().numpy()
+    #s_std = get_sigma(mem['prim_s_post'][:, -1]).detach().cpu().numpy()
+    #
+    #map_mean = np.zeros((mdl.primitive_model.d_state, env.grid_h, env.grid_w), dtype=np.float32)
+    #map_std = np.zeros_like(map_mean)
+    #
+    #for loc, _s_mean, _s_std in zip(free_locations, s_mean, s_std):
+    #    map_mean[:, loc[0], loc[1]] = _s_mean
+    #    map_std[:, loc[0], loc[1]] = _s_std
+    #
+    #return map_mean, map_std
 
 
 def transform_macro_s_init_history(macro_s_init_history):
