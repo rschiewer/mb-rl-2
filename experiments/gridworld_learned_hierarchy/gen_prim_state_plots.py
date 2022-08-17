@@ -85,9 +85,9 @@ if __name__ == '__main__':
 
     ani = animation.ArtistAnimation(fig, artists, interval=500, blit=True, repeat_delay=2000)
     plt.tight_layout()
-    #plt.show()
-    writer = animation.PillowWriter(fps=10)
-    ani.save(f'prim_state_plot_{args.id}.gif', writer=writer)
+    plt.show()
+    #writer = animation.PillowWriter(fps=10)
+    #ani.save(f'prim_state_plot_{args.id}.gif', writer=writer)
 
 
 
