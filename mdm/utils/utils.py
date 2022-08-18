@@ -219,14 +219,9 @@ def exhaustive_traversion(env, mdl, walk_distance):
             a_mem = (0,) + a_seq
             for a in a_mem[1:]:
                 o, r, done, _ = env.step(a)
-                if not done:
-                    o_mem.append(o)
-                    r_mem.append(r)
-                    term_mem.append(done)
-                else:
-                    o_mem.append(np.zeros_like(o))
-                    r_mem.append(0.0)
-                    term_mem.append(False)
+                o_mem.append(o)
+                r_mem.append(r)
+                term_mem.append(done)
 
             o = torch.from_numpy(np.stack(o_mem))
             a = torch.tensor(a_mem)
