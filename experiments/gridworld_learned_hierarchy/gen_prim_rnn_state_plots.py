@@ -83,7 +83,7 @@ if __name__ == '__main__':
                 fig.colorbar(im_0, ax=axes)
         artists.append(current_frame)
 
-    ani = animation.ArtistAnimation(fig, artists, interval=500, blit=True, repeat_delay=2000)
+    ani = animation.ArtistAnimation(fig, artists, interval=1000, blit=True, repeat_delay=0)
     plt.tight_layout()
     plt.show()
     #writer = animation.PillowWriter(fps=10)
