@@ -67,6 +67,9 @@ class Scope:
 
 class Logger(ABC):
 
+    def __init__(self):
+        self.run_id = -1
+
     def __del__(self):
         self.stop_session()
 
