@@ -17,7 +17,7 @@ import pandas as pd
 from mdm.gridworld.gridworld import Gridworld, CellType
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.memory.trajectory_memory import flatten_and_unsqueeze
-from mdm.utils.torch_tools import add_time_dim, get_mu, get_sigma
+from mdm.utils.torch_tools import add_time_dim, get_mu, get_sigma, unpack_rnn_state, pack_rnn_state
 
 
 def here() -> Path:
@@ -249,21 +249,32 @@ def gen_prim_state_map(env: Gridworld,
                                               n_posterior_steps=-1, sample=False)
     mem = mdl.pack_mem(mem)
 
-    s_mean = get_mu(mem['prim_s_post'][:, -1]).detach().cpu().numpy()
-    s_std = get_sigma(mem['prim_s_post'][:, -1]).detach().cpu().numpy()
+    #prim_s_final = mem['prim_s'][:, -1]
+    #prim_rnn_state_final = unpack_rnn_state(mem['prim_rnn_state'][:, -1])
+    #prim_rnn_state_final = mdl.filter_rnn_state(prim_rnn_state_final)
+    #x = torch.concat([prim_s_final, prim_rnn_state_final], dim=-1)
+    #prim_s_enc = mdl.prim_state_enc(x)
+    #s_mean = prim_s_enc.detach().cpu().numpy()
+    #s_std = np.zeros_like(s_mean)
+
+    s_mean = mem['prim_s'][:, -1].detach().cpu().numpy()
+    s_std = np.zeros_like(s_mean)
+
+    #s_mean = get_mu(mem['prim_s_post'][:, -1]).detach().cpu().numpy()
+    #s_std = get_sigma(mem['prim_s_post'][:, -1]).detach().cpu().numpy()
     final_pos = traj_o[:, -1].detach().cpu().numpy()
 
-    map_mean = np.zeros((mdl.primitive_model.d_state, env.grid_h, env.grid_w), dtype=np.float32)
+    map_mean = np.zeros((s_mean.shape[1], env.grid_h, env.grid_w), dtype=np.float32)
     map_std = np.zeros_like(map_mean)
 
     for pos in final_pos:
         masked_idx = np.all(final_pos == pos, axis=1, keepdims=True)  # row-wise and
         masked_idx = np.logical_not(masked_idx)
-        masked_idx = np.repeat(masked_idx, mdl.primitive_model.d_state, axis=1)
+        masked_idx = np.repeat(masked_idx, s_mean.shape[1], axis=1)
         valid_trajectories_mean = ma.MaskedArray(s_mean, mask=masked_idx)
         valid_trajectories_std = ma.MaskedArray(s_std, mask=masked_idx)
         _s_mean = valid_trajectories_mean.mean(axis=0)
-        _s_std = valid_trajectories_std.mean(axis=0)
+        _s_std = valid_trajectories_mean.std(axis=0)
         map_mean[:, pos[0], pos[1]] = _s_mean
         map_std[:, pos[0], pos[1]] = _s_std
 

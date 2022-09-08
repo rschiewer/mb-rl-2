@@ -10,19 +10,19 @@ final_model_path: "model"
 mdm:
   abstract_step_size: 3
   beta_kl_primitive: 0.01
-  beta_reg_primitive: 0.00
+  beta_reg_primitive: 0.01
   beta_kl_abstract: 0.01
-  beta_reg_abstract: 0.00
+  beta_reg_abstract: 0.01
   n_warmup_prim: 3
   n_warmup_abstr: 1
-  n_warmup_schedule: 5000
+  n_warmup_schedule: 15000
   detach_posteriors: False
   beta_abstract_action: 0.0
   beta_abstract_model: 1.0
 
 prim_mdl:
   d_state: 16
-  d_hidden: 128
+  d_hidden: 32
   n_hidden_layers: 3
   hidden_dropout: 0.1
   epsilon: 0.01
@@ -61,7 +61,7 @@ optim:
   lr: 0.0002
 
 trainer:
-  n_train_steps: 8000
+  n_train_steps: 20000
   eval_interval: 100
-  d_batch: 1024
+  d_batch: 2048
   pad_last_terminal_flag: False

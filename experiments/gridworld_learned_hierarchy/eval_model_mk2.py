@@ -77,20 +77,17 @@ if __name__ == '__main__':
                                           planning_cfg['n_optim_steps_prim'], planning_cfg['winning_perc'],
                                           planning_cfg['discount'],
                                           planning_cfg['act_noise_prim'])
-        #print(f'After prim init: {trajectory_history["prim_o"].shape[1]}')
         trajectory_history = plan_abstract(mdl, trajectory_history, planner_abstr, planning_cfg['n_abstract_steps'],
                                            planning_cfg['n_rollouts'],
                                            planning_cfg['n_optim_steps_abstr'], planning_cfg['winning_perc'],
                                            planning_cfg['discount'],
                                            planning_cfg['act_noise_abstr'])
-        #print(f'After abstr init: {trajectory_history["prim_o"].shape[1]}')
         for i_sec in range(planning_cfg['n_abstract_steps']):
             trajectory_history = plan_section(mdl, trajectory_history, planner_prim,
                                               planning_cfg['n_rollouts'],
                                               planning_cfg['n_optim_steps_prim'], planning_cfg['winning_perc'],
                                               planning_cfg['discount'],
                                               planning_cfg['act_noise_prim'])
-            #print(f'After section {i_sec}: {trajectory_history["prim_o"].shape[1]}')
         #visualize_plan(trajectory_history, env, mdl)
 
         actions = trajectory_history['prim_a'][0]

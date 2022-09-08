@@ -62,15 +62,6 @@ class FuzzyDeviceMixin(torch.nn.Module):
                 self._device = torch.device(device_type)
             else:
                 self._device = device
-        #if 'device' in kwargs:
-        #    self._device = torch.device(self._add_cuda_id(kwargs['device']))
-        #else:
-        #    for arg in args:
-        #        try:
-        #            self._device = torch.device(self._add_cuda_id(arg))
-        #            return True
-        #        except RuntimeError:
-        #            pass  # bad style but works here
 
     def _add_cuda_id(self, arg: Union[torch.device, str]):
         if type(arg) is torch.device:
