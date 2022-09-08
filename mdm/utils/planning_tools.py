@@ -1,10 +1,13 @@
+import warnings
+
 import gym
 import torch
-import numpy as np
 
 from mdm.models.multiscale_model import MultiscaleDynamicsModel
 from mdm.planning.cem_planner import CrossentropyPlanner
 from mdm.utils.utils import normalize_obs, to_onehot
+
+
 
 
 def init_macro_s(model: MultiscaleDynamicsModel,
@@ -16,6 +19,7 @@ def init_macro_s(model: MultiscaleDynamicsModel,
                  winning_perc: float,
                  discount: float,
                  act_noise: float):
+    warnings.warn('This function is no longer maintained and shouldn\'t be used', DeprecationWarning)
     # preprocess starting state
     s_start = normalize_obs(s_start, env)
     s_start = torch.tile(s_start, dims=(n_rollouts, 1))  # copy same starting observation along batch
@@ -27,7 +31,7 @@ def init_macro_s(model: MultiscaleDynamicsModel,
         return predictions_ss['r'].squeeze(), predictions_ss['term'].squeeze(), predictions_ss
 
     actions, act_dist, i_winners, rollout_data = planner.plan(rollout_fn=_rollout_init_fn,
-                                                              start_states=s_start,
+                                                              init_data=s_start,
                                                               d_dist=env.action_space.n,
                                                               n_plan_steps=model.macro_step_size,
                                                               n_evolution_steps=n_evolution_steps,
@@ -56,7 +60,7 @@ def plan_abstract(model: MultiscaleDynamicsModel,
                   winning_perc: float,
                   discount: float,
                   act_noise: float):
-
+    warnings.warn('This function is no longer maintained and shouldn\'t be used', DeprecationWarning)
     def _rollout_abstract_fn(macro_start_state: torch.Tensor, macro_actions: torch.Tensor):
         #macro_actions = torch.nn.functional.one_hot(macro_actions, num_classes=mdl.d_macro_action)
         predictions = model.rollout_abstract(macro_start_state, macro_actions)
@@ -67,13 +71,13 @@ def plan_abstract(model: MultiscaleDynamicsModel,
     macro_s_batch = torch.tile(macro_s_start, dims=(n_rollouts, 1))  # time dim required
     macro_s_batch = macro_s_batch.unsqueeze(1)  # add time dimension of 1
     macro_actions, act_dist, i_winners, rollout_data = planner.plan(rollout_fn=_rollout_abstract_fn,
-                                                                          start_states=macro_s_batch,
-                                                                          d_dist=model.d_macro_action,
-                                                                          n_plan_steps=n_plan_steps,
-                                                                          n_evolution_steps=n_evolution_steps,
-                                                                          winning_perc=winning_perc,
-                                                                          discount=discount,
-                                                                          act_noise=act_noise)
+                                                                    init_data=macro_s_batch,
+                                                                    d_dist=model.d_macro_action,
+                                                                    n_plan_steps=n_plan_steps,
+                                                                    n_evolution_steps=n_evolution_steps,
+                                                                    winning_perc=winning_perc,
+                                                                    discount=discount,
+                                                                    act_noise=act_noise)
     i_top_cand = i_winners[0]
     # best_macro_as = torch.nn.functional.one_hot(macro_actions[i_top_cand], num_classes=mdl.d_macro_action).float()
     best_macro_as = macro_actions[i_top_cand]
@@ -101,6 +105,8 @@ def plan_section(model: MultiscaleDynamicsModel,
                  winning_perc: float,
                  discount: float,
                  act_noise: float):
+    warnings.warn('This function is no longer maintained and shouldn\'t be used', DeprecationWarning)
+
     s_batch = torch.zeros(n_rollouts, 1, model.d_state, device=model.device)
     macro_s_batch = torch.tile(macro_s, dims=(n_rollouts, 1))
     macro_a_batch = torch.tile(macro_a, dims=(n_rollouts, 1))
@@ -120,7 +126,7 @@ def plan_section(model: MultiscaleDynamicsModel,
         return overlap, None, pred_prim
 
     actions, act_dist, i_winners, rollout_data = planner.plan(rollout_fn=_rollout_detailed_fn,
-                                                              start_states=s_batch,
+                                                              init_data=s_batch,
                                                               d_dist=env.action_space.n,
                                                               n_plan_steps=model.macro_step_size,
                                                               n_evolution_steps=n_evolution_steps,
