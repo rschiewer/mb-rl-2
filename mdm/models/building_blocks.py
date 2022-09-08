@@ -74,6 +74,7 @@ class RSSM(torch.nn.Module):
 
         self.d_z = d_z
         self.d_h = d_h
+        self.d_state = d_state
         self.d_action = d_action
         self.d_observation = d_observation
         self.d_reward = d_reward
@@ -136,8 +137,14 @@ class RSSM(torch.nn.Module):
         #r = self.zero_r(d_batch, device)
         #term = self.zero_term(d_batch, device)
         rnn_state = self.zero_rnn_state(d_batch, device)
+        s = self.zero_s(d_batch, device)
         #return {'z': z, 'o': o, 'a': a, 'r': r, 'term': term, 'rnn_state': rnn_state}
-        return {'z': z, 'rnn_state': rnn_state}
+        return {'s': s, 'z': z, 'rnn_state': rnn_state}
+
+    def zero_s(self,
+               d_batch: int,
+               device: torch.device) -> torch.Tensor:
+        return torch.zeros(d_batch, self.d_state, device=device)
 
     def zero_z(self,
                d_batch: int,
