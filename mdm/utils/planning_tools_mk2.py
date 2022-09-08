@@ -102,12 +102,12 @@ def init_abstr_s(model: MultiscaleDynamicsModelMK2,
         raise ValueError('Not supported yet')
 
     if remaining_steps > 0:
-        s_batch = history['prim_s'][:, -1].repeat(n_rollouts, 1)
+        z_batch = history['prim_z'][:, -1].repeat(n_rollouts, 1)
         rnn_state_batch = unpack_rnn_state(history['prim_rnn_state'][:, -1].repeat(n_rollouts, 1, 1, 1))
 
         def _rollout_fn(_a: torch.Tensor):
             _a = to_onehot(_a, n_classes=model.d_action)
-            _mem, _prim_final = model.rollout_primitive(a=_a, s=s_batch, rnn_state=rnn_state_batch, sample=False)
+            _mem, _prim_final = model.rollout_primitive(a=_a, z=z_batch, rnn_state=rnn_state_batch, sample=False)
             _mem = model.pack_mem(_mem)
 
             _criterion = _mem['prim_r'].squeeze(-1)
@@ -129,7 +129,7 @@ def init_abstr_s(model: MultiscaleDynamicsModelMK2,
     a_binned = bin_every_k_steps(history['prim_a'][:, :required_steps], model.abstract_step_size)
     abstr_a = torch.stack([model.abstract_action_model(a_binned[:, i_chunk], sample=False)
                            for i_chunk in range(a_binned.shape[1])], dim=1)
-    prim_s = bin_every_k_steps(history['prim_s'][:, :required_steps], model.abstract_step_size)[:, :, -1]
+    prim_s = bin_every_k_steps(history['prim_z'][:, :required_steps], model.abstract_step_size)[:, :, -1]
     # rnn_state shape: (batch, time, layer, tuple, state)
     prim_rnn_state = history['prim_rnn_state'][:, ::model.abstract_step_size, -1, 0]
     # TODO: change this back to sum!
@@ -192,7 +192,7 @@ def init_abstr_s(model: MultiscaleDynamicsModelMK2,
 #     trajectory['prim_o'] = o_start_batch
 #     trajectory['prim_r'] = r_start_batch
 #     trajectory['prim_term'] = term_start_batch
-#     trajectory['prim_s_post'] = mem['prim_s_post']
+#     trajectory['prim_z_post'] = mem['prim_z_post']
 #     trajectory['prim_rnn_state'] = mem['prim_rnn_state']
 #
 #     # produce remaining primitive model steps for abstract model warmup
@@ -228,7 +228,7 @@ def init_abstr_s(model: MultiscaleDynamicsModelMK2,
 #         trajectory['prim_r'] = torch.concat([trajectory['prim_r'], rollout_data['prim_r'][i_best, None]], dim=1)
 #         trajectory['prim_term'] = torch.concat([trajectory['prim_term'], rollout_data['prim_term'][i_best, None]],
 #                                                dim=1)
-#         trajectory['prim_s'] = torch.concat([trajectory['prim_s'], rollout_data['prim_s'][i_best, None]], dim=1)
+#         trajectory['prim_z'] = torch.concat([trajectory['prim_z'], rollout_data['prim_z'][i_best, None]], dim=1)
 #         # TODO: pack all rnn states im some format so that selecting batch and time step is easy
 #         rnn_states = []
 #         trajectory['prim_rnn_state'] = unpack_rnn_state(pack_rnn_state(rollout_data['prim_rnn_state'])[i_best, None])
@@ -238,7 +238,7 @@ def init_abstr_s(model: MultiscaleDynamicsModelMK2,
 #
 #     abstr_r = bin_every_k_steps(trajectory['prim_r'], model.abstract_step_size, padding_val=0).sum(dim=2)
 #     abstr_term = bin_every_k_steps(trajectory['prim_term'], model.abstract_step_size).max(dim=2).values
-#     abstr_o = bin_every_k_steps(trajectory['prim_s'], model.abstract_step_size, padding_val=0)[:, :,
+#     abstr_o = bin_every_k_steps(trajectory['prim_z'], model.abstract_step_size, padding_val=0)[:, :,
 #               -1]  # (batch, bin, timestep_in_bin, ...)
 #     prim_a_onehot = to_onehot(trajectory['a'], env.action_space.n)
 #     abstr_a = model.abstract_action_model(bin_every_k_steps(prim_a_onehot, model.abstract_step_size, padding_val=0))
@@ -313,7 +313,7 @@ def init_abstr_s(model: MultiscaleDynamicsModelMK2,
 #
 #     best_prim_rnn_state = get_rnn_state_from_batch(rollout_data['prim_rnn_state'][-1], model.primitive_model.rnn_type,
 #                                                    i_bst)
-#     best_prim_s = get_item_from_batch(rollout_data['prim_s'], i_bst)[:, -1]
+#     best_prim_s = get_item_from_batch(rollout_data['prim_z'], i_bst)[:, -1]
 #     best_ctx = add_time_dim(model.fuse_state(best_prim_s, best_prim_rnn_state))
 #
 #     best_prim_a = get_item_from_batch(a, i_bst)
@@ -347,9 +347,9 @@ def init_abstr_s(model: MultiscaleDynamicsModelMK2,
 #             'prim_a': prim_a,
 #             'prim_r': prim_r,
 #             'prim_term': prim_term,
-#             'prim_s': prim_s,
+#             'prim_z': prim_s,
 #             'prim_rnn_state': prim_rnn_state,
-#             'abstr_s': abstr_s,
+#             'abstr_z': abstr_s,
 #             'abstr_rnn_state': abstr_rnn_state,
 #             'abstr_o': abstr_o,
 #             'abstr_r': abstr_r,
@@ -368,13 +368,13 @@ def plan_abstract(model: MultiscaleDynamicsModelMK2,
     if n_plan_steps == 0:
         return history
 
-    abstr_s_start = history['abstr_s'][:, -1].repeat(n_rollouts, 1)
+    abstr_z_start = history['abstr_z'][:, -1].repeat(n_rollouts, 1)
     abstr_rnn_state_start = unpack_rnn_state(history['abstr_rnn_state'][:, -1].repeat(n_rollouts, 1, 1, 1))
 
     def _rollout_fn(_a: torch.Tensor):
         #_a = to_onehot(_a, model.abstract_model.d_action)
         _a = torch.clamp(_a, -0.99, 0.99)  # limit action range to allowed values
-        _mem, _abstr_final = model.rollout_abstract(_a, s=abstr_s_start, rnn_state=abstr_rnn_state_start, sample=False,
+        _mem, _abstr_final = model.rollout_abstract(_a, z=abstr_z_start, rnn_state=abstr_rnn_state_start, sample=False,
                                                     n_posterior_steps=0)
         _mem = model.pack_mem(_mem)
 
@@ -410,24 +410,24 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
                                                           f'{model.abstract_step_size}')
     i_section = n_steps_done // model.abstract_step_size # + n_steps_done // model.abstract_step_size
 
-    s_start = history['prim_s'][:, -1].repeat(n_rollouts, 1)
+    z_start = history['prim_z'][:, -1].repeat(n_rollouts, 1)
     rnn_state_start = unpack_rnn_state(history['prim_rnn_state'][:, -1].repeat(n_rollouts, 1, 1, 1))
-    s_goal = history['abstr_o'][:, i_section].repeat(n_rollouts, 1)
+    z_goal = history['abstr_o'][:, i_section].repeat(n_rollouts, 1)
     r_goal = history['abstr_r'][:, i_section].repeat(n_rollouts, 1)
 
     def _rollout_fn(_a: torch.Tensor):
         _a = to_onehot(_a, n_classes=model.d_action)
-        _mem, _prim_final = model.rollout_primitive(a=_a, s=s_start, rnn_state=rnn_state_start, sample=False)
+        _mem, _prim_final = model.rollout_primitive(a=_a, z=z_start, rnn_state=rnn_state_start, sample=False)
         _mem = model.pack_mem(_mem)
 
         _rnn_state = unpack_rnn_state(_mem['prim_rnn_state'][:, -1])
-        _s_concat = torch.concat([_mem['prim_s'][:, -1], model.filter_rnn_state(_rnn_state)], dim=-1)
+        _s_concat = torch.concat([_mem['prim_z'][:, -1], model.filter_rnn_state(_rnn_state)], dim=-1)
 
         _s_compressed = model.prim_state_enc(_s_concat)
-        _criterion = - torch.mean((_s_compressed - s_goal) ** 2, dim=1, keepdim=True)
+        _criterion = - torch.mean((_s_compressed - z_goal) ** 2, dim=1, keepdim=True)
 
         # TODO: test KL divergence between distributions
-        #_criterion = - torch.mean((_mem['prim_s'][:, -1] - s_goal) ** 2, dim=1, keepdim=True)
+        #_criterion = - torch.mean((_mem['prim_z'][:, -1] - z_goal) ** 2, dim=1, keepdim=True)
         _criterion -= torch.mean((_mem['prim_r'].sum(dim=1) - r_goal) ** 2, dim=1, keepdim=True)
         _discount = None
         return _criterion, _discount, _mem
@@ -486,7 +486,7 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
 #     best_abstr_a = abstr_a[i_bst]
 #     best_abstr_rnn_state = [get_rnn_state_from_batch(h, model.abstract_model.rnn_type, 0, keep_dim=False)
 #                             for h in rollout_data['abstr_rnn_state']]
-#     best_abstr_s = rollout_data['abstr_s'][i_bst]
+#     best_abstr_s = rollout_data['abstr_z'][i_bst]
 #     best_abstr_o = rollout_data['abstr_o'][i_bst]
 #     best_abstr_r = rollout_data['abstr_r'][i_bst]
 #     best_abstr_term = rollout_data['abstr_term'][i_bst]
@@ -495,7 +495,7 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
 #             'abstr_a': best_abstr_a,
 #             'abstr_r': best_abstr_r,
 #             'abstr_term': best_abstr_term,
-#             'abstr_s': best_abstr_s,
+#             'abstr_z': best_abstr_s,
 #             'abstr_rnn_state': best_abstr_rnn_state}
 #
 #
@@ -548,7 +548,7 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
 #         # ctx = model.fuse_state(prim_final_['s'], prim_final_['rnn_state'])
 #         # ctx = model.context_projector(ctx)
 #         # criterion = -torch.mean(torch.abs(ctx - subtraj_hist_target) ** 2, dim=1)
-#         s_post = build_gaussian(mem_['prim_s_post'][:, -1])
+#         s_post = build_gaussian(mem_['prim_z_post'][:, -1])
 #         s_similarity = s_post.log_prob(subtraj_hist_target).sum(dim=-1)
 #         r_err = torch.abs(r_total - abstr_r).squeeze(-1)
 #         term_err = torch.nn.functional.binary_cross_entropy(term_total, abstr_term, reduction='none').squeeze(-1)
@@ -588,13 +588,13 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
 #     best_prim_term = get_item_from_batch(rollout_data['prim_term'], i_bst, keep_dim=False)[-1]
 #     best_rnn_state = get_rnn_state_from_batch(rollout_data['prim_rnn_state'][-1], model.primitive_model.rnn_type,
 #                                               i_bst, keep_dim=False)
-#     best_s = get_item_from_batch(rollout_data['prim_s'], i_bst, keep_dim=False)[-1]
+#     best_s = get_item_from_batch(rollout_data['prim_z'], i_bst, keep_dim=False)[-1]
 #
 #     return {'prim_o': best_prim_o,
 #             'prim_a': best_prim_a,
 #             'prim_r': best_prim_r,
 #             'prim_term': best_prim_term,
-#             'prim_s': best_s,
+#             'prim_z': best_s,
 #             'prim_rnn_state': best_rnn_state}
 #
 #
@@ -631,8 +631,8 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
 #     rollout_data = model.pack_mem(rollout_data)
 #     r_total = rollout_data['prim_r'].sum(dim=1)
 #     term_total = rollout_data['prim_term'].max(dim=1).values
-#     s_similarity = rollout_data['prim_s_post'][-1].log_prob(subtraj_hist_target).sum(dim=-1)
-#     # s_similarity = torch.abs(rollout_data['prim_s_prior'][-1].loc - subtraj_hist_target).sum(dim=-1)
+#     s_similarity = rollout_data['prim_z_post'][-1].log_prob(subtraj_hist_target).sum(dim=-1)
+#     # s_similarity = torch.abs(rollout_data['prim_z_prior'][-1].loc - subtraj_hist_target).sum(dim=-1)
 #     r_err = torch.abs(r_total - abstr_r).squeeze(-1)
 #     term_err = torch.nn.functional.binary_cross_entropy(term_total, abstr_term, reduction='none').squeeze(-1)
 #     criterion = s_similarity - 0.1 * r_err - 0.1 * term_err
@@ -647,13 +647,13 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
 #     best_prim_term = get_item_from_batch(rollout_data['prim_term'], i_bst, keep_dim=False)[-1]
 #     best_rnn_state = get_rnn_state_from_batch(rollout_data['prim_rnn_state'][-1], model.primitive_model.rnn_type,
 #                                               i_bst, keep_dim=False)
-#     best_s = get_item_from_batch(rollout_data['prim_s'], i_bst, keep_dim=False)[-1]
+#     best_s = get_item_from_batch(rollout_data['prim_z'], i_bst, keep_dim=False)[-1]
 #
 #     return {'prim_o': best_prim_o,
 #             'prim_a': best_prim_a,
 #             'prim_r': best_prim_r,
 #             'prim_term': best_prim_term,
-#             'prim_s': best_s,
+#             'prim_z': best_s,
 #             'prim_rnn_state': best_rnn_state}
 #
 #

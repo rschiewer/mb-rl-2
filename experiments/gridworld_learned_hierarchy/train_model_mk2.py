@@ -112,9 +112,10 @@ if __name__ == '__main__':
 
 
     def train_callback(i_step: int):
-        logger.log({'n_warmup_prim': model.warmup_steps_prim(env.time_limit),
-                    'n_warmup_abstr': model.warmup_steps_abstr(env.time_limit)},
-                   Scope.TRAIN(), i_step)
+        pass
+        #logger.log({'n_warmup_prim': model.n_warmup_prim,
+        #            'n_warmup_abstr': model.n_warmup_abstr},
+        #           Scope.TRAIN(), i_step)
 
 
     trainer = DynamicsModelTrainer(model=model, optimizer=optimizer, get_batch_train=get_batch_train,

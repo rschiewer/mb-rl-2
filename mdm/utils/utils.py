@@ -257,7 +257,7 @@ def gen_prim_state_map(env: Gridworld,
     #s_mean = prim_s_enc.detach().cpu().numpy()
     #s_std = np.zeros_like(s_mean)
 
-    s_mean = mem['prim_s'][:, -1].detach().cpu().numpy()
+    s_mean = mem['prim_z'][:, -1].detach().cpu().numpy()
     s_std = np.zeros_like(s_mean)
 
     #s_mean = get_mu(mem['prim_s_post'][:, -1]).detach().cpu().numpy()

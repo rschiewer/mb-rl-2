@@ -132,7 +132,7 @@ class RSSM(torch.nn.Module):
         r = self.zero_r(d_batch, device)
         term = self.zero_term(d_batch, device)
         rnn_state = self.zero_rnn_state(d_batch, device)
-        return {'s': z, 'o': o, 'a': a, 'r': r, 'term': term, 'rnn_state': rnn_state}
+        return {'z': z, 'o': o, 'a': a, 'r': r, 'term': term, 'rnn_state': rnn_state}
 
     def zero_z(self,
                d_batch: int,
@@ -162,8 +162,6 @@ class RSSM(torch.nn.Module):
     def zero_rnn_state(self,
                        d_batch: int,
                        device: torch.device) -> RnnStateType:
-        #return (torch.zeros(self._rnn.n_layers, d_batch, self._rnn.hidden_size * self._rnn.num_units, device=device),
-        #        torch.zeros(self._rnn.n_layers, d_batch, self._rnn.hidden_size * self._rnn.num_units, device=device))
         if self.rnn_type == 'lstm':
             return (torch.zeros(self.n_hidden_layers, d_batch, self.d_hidden, device=device),
                     torch.zeros(self.n_hidden_layers, d_batch, self.d_hidden, device=device))
@@ -188,10 +186,6 @@ class RSSM(torch.nn.Module):
         inp = torch.concat([z, a, ctx_high_level], dim=-1)
         inp = add_time_dim(inp)
         x_det, next_rnn_state = self._rnn(inp, rnn_state)
-        #inp = inp.permute(1, 0, 2)
-        #x_det, h, c = self._rnn(inp, rnn_state[0], rnn_state[1])
-        #next_rnn_state = h, c
-        #x_det = x_det.permute(1, 0, 2)
         x_det = remove_time_dim(x_det)
         return x_det, next_rnn_state
 
@@ -227,12 +221,9 @@ class RSSM(torch.nn.Module):
             o_smpl = get_mu(o_dist)
             r_smpl = get_mu(r_dist)
 
-        #o_smpl = get_mu(o_dist)
-        #r_smpl = get_mu(r_dist)
-
         term_smpl = term_dist
-        return {'s': z_smpl, 's_prior': z_prior, 's_post': z_post, 'h': h, 'o_dist': o_dist, 'o': o_smpl,
-                'r_dist': r_dist, 'r': r_smpl, 'term': term_smpl, 'rnn_state': next_rnn_state}
+        return {'z': z_smpl, 'z_prior': z_prior, 'z_post': z_post, 'h': h, 'o_dist': o_dist, 'o': o_smpl,
+                'r_dist': r_dist, 'r': r_smpl, 'term_dist': None, 'term': term_smpl, 'rnn_state': next_rnn_state}
 
     def build_z_prior(self,
                       h: torch.Tensor) -> torch.Tensor:
