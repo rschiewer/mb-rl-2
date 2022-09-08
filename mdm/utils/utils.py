@@ -181,13 +181,13 @@ def gen_prim_rnn_state_map(env: Gridworld,
     rnn_state_mean = mem['prim_rnn_state'][:, -1, -1, 0].detach().cpu().numpy()
     final_pos = traj_o[:, -1].detach().cpu().numpy()
 
-    map_mean = np.zeros((mdl.primitive_model.d_hidden, env.grid_h, env.grid_w), dtype=np.float32)
+    map_mean = np.zeros((mdl.primitive_model.d_h, env.grid_h, env.grid_w), dtype=np.float32)
     map_std = np.zeros_like(map_mean)
 
     for pos in final_pos:
         masked_idx = np.all(final_pos == pos, axis=1, keepdims=True)  # row-wise and
         masked_idx = np.logical_not(masked_idx)
-        masked_idx = np.repeat(masked_idx, mdl.primitive_model.d_hidden, axis=1)
+        masked_idx = np.repeat(masked_idx, mdl.primitive_model.d_h, axis=1)
         valid_trajectories_mean = ma.MaskedArray(rnn_state_mean, mask=masked_idx)
         _s_mean = valid_trajectories_mean.mean(axis=0)
         _s_std = valid_trajectories_mean.std(axis=0)
@@ -336,7 +336,7 @@ def visualize_plan(trajectory_history: Dict[str, torch.Tensor], env: Gridworld, 
     assert trajectory_history['abstr_o'].shape[0] == 1, 'Batch size of trajectory history should be 1'
 
     map_mean, map_std = gen_prim_state_map(env, mdl)
-    map_flat = map_mean.reshape((mdl.primitive_model.d_state, -1))
+    map_flat = map_mean.reshape((mdl.primitive_model.d_z, -1))
     map_flat = np.transpose(map_flat, (1, 0))
     total_positions = map_mean.shape[1] * map_mean.shape[2]
     similarity_maps = []

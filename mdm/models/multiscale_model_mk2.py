@@ -24,18 +24,17 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                  beta_abstract_action: float = 1.0,
                  n_warmup_prim: Union[int, Sequence[int]] = 1,
                  n_warmup_abstr: Union[int, Sequence[int]] = 1,
-                 n_warmup_schedule: int = 0,
                  detach_posteriors: bool = False):
         super().__init__()
         self.primitive_model = primitive_model
         self.abstract_model = abstract_model
         self.abstract_action_model = abstract_action_model
         self.abstract_step_size = abstract_step_size
-        self.d_state = primitive_model.d_state
+        self.d_state = primitive_model.d_z
         self.d_action = primitive_model.d_action
         self.d_reward = primitive_model.d_reward
         self.d_observation = primitive_model.d_observation
-        self.d_abstract_state = abstract_model.d_state
+        self.d_abstract_state = abstract_model.d_z
         self.d_abstract_action = abstract_model.d_action
         self.d_abstract_reward = abstract_model.d_reward
         self.beta_kl_prim = beta_kl_primitive
@@ -46,12 +45,11 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         self.beta_abstract_action = beta_abstract_action
         self.n_warmup_prim = n_warmup_prim
         self.n_warmup_abstr = n_warmup_abstr
-        self.n_warmup_schedule = n_warmup_schedule
         self.detach_posteriors = detach_posteriors
         self._current_train_step = None
 
         self.prim_state_enc = torch.nn.Sequential(
-            torch.nn.Linear(self.primitive_model.d_hidden + self.primitive_model.d_state, 64),
+            torch.nn.Linear(self.primitive_model.d_h + self.primitive_model.d_z, 64),
             torch.nn.ReLU(),
             torch.nn.Linear(64, 32),
             torch.nn.ReLU(),
@@ -62,7 +60,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             torch.nn.ReLU(),
             torch.nn.Linear(32, 64),
             torch.nn.ReLU(),
-            torch.nn.Linear(64, self.primitive_model.d_hidden + self.primitive_model.d_state)
+            torch.nn.Linear(64, self.primitive_model.d_h + self.primitive_model.d_z)
         )
 
     def prepare_for_training(self):
@@ -370,13 +368,13 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         d_batch = filtered_h.shape[0]
         if self.primitive_model.rnn_type == 'lstm':
             reconstructed = filtered_h.reshape(d_batch, 2 * self.primitive_model.n_hidden_layers,
-                                               self.primitive_model.d_hidden)
+                                               self.primitive_model.d_h)
             reconstructed = reconstructed.transpose(0, 1)
             reconstructed = torch.tensor_split(reconstructed, 2, dim=0)
             reconstructed = reconstructed[0].contiguous(), reconstructed[1].contiguous()
         else:
             reconstructed = filtered_h.reshape(d_batch, self.primitive_model.n_hidden_layers,
-                                               self.primitive_model.d_hidden)
+                                               self.primitive_model.d_h)
             reconstructed = reconstructed.transpose(0, 1)
             reconstructed = reconstructed.contiguous()
         return reconstructed
@@ -393,13 +391,13 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
     def unfuse_state(self,
                      fused_state: torch.Tensor) -> Tuple[torch.Tensor, RnnStateType]:
         if fused_state.ndim == 1:
-            s = fused_state[:self.primitive_model.d_state]
-            h_filtered = fused_state[self.primitive_model.d_state:].unsqueeze(0)
+            s = fused_state[:self.primitive_model.d_z]
+            h_filtered = fused_state[self.primitive_model.d_z:].unsqueeze(0)
             h = self.reconstruct_rnn_state(h_filtered)
             h = h[0].squeeze(1), h[1].squeeze(1)
         elif fused_state.ndim == 2:
-            s = fused_state[:, :self.primitive_model.d_state]
-            h_filtered = fused_state[:, self.primitive_model.d_state:]
+            s = fused_state[:, :self.primitive_model.d_z]
+            h_filtered = fused_state[:, self.primitive_model.d_z:]
             h = self.reconstruct_rnn_state(h_filtered)
         else:
             raise ValueError('Expected tensor with maximum one batch and one data dimension')

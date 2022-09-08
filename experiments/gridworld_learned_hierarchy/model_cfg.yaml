@@ -15,36 +15,39 @@ mdm:
   beta_reg_abstract: 0.01
   n_warmup_prim: 3
   n_warmup_abstr: 1
-  n_warmup_schedule: 15000
   detach_posteriors: False
   beta_abstract_action: 0.0
   beta_abstract_model: 1.0
 
 prim_mdl:
+  d_z: 16
+  d_h: 64
   d_state: 16
-  d_hidden: 32
   n_hidden_layers: 3
   hidden_dropout: 0.1
   epsilon: 0.01
-  s_prior_lws: [64, 64]
-  s_post_lws: [64, 64]
-  o_lws: [64, 64]
-  r_lws: [64, 64]
-  term_lws: [64, 64]
+  z_prior_lws: [64, 64]
+  z_post_lws: [64, 64]
+  state_lws: [64, 32]
+  o_lws: [32, 64]
+  r_lws: [32, 64]
+  term_lws: [32, 64]
   layer_norm: True
   activation: "relu"
   rnn_type: "lstm"
 
 abstr_mdl:
+  d_z: 64
+  d_h: 256
   d_state: 64
-  d_hidden: 256
   d_action: 6
   d_reward: 1
   n_hidden_layers: 3
   hidden_dropout: 0.1
   epsilon: 0.01
-  s_prior_lws: [128, 64]
-  s_post_lws: [128, 64]
+  z_prior_lws: [128, 64]
+  z_post_lws: [128, 64]
+  state_lws: [128]
   o_lws: [128, 64]
   r_lws: [128, 64]
   term_lws: [128, 64]
