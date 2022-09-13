@@ -240,9 +240,10 @@ def exhaustive_traversion(env, mdl, walk_distance):
     return traj_a, traj_o, traj_r, traj_term
 
 
-def gen_prim_state_map(env: Gridworld,
+def gen_value_map_prim(env: Gridworld,
                        mdl: MultiscaleDynamicsModelMK2,
-                       walk_distance: int):
+                       walk_distance: int,
+                       quantity: str = 's'):
     traj_a, traj_o, traj_r, traj_term = exhaustive_traversion(env, mdl, walk_distance)
     o_start, a_start, r_start, term_start = prepare_data(traj_o, traj_a, traj_r, traj_term, env)
     mem, prim_current = mdl.rollout_primitive(a=a_start, o=o_start, r=r_start, term=term_start,
@@ -254,25 +255,30 @@ def gen_prim_state_map(env: Gridworld,
     #prim_rnn_state_final = mdl.filter_rnn_state(prim_rnn_state_final)
     #x = torch.concat([prim_s_final, prim_rnn_state_final], dim=-1)
     #prim_s_enc = mdl.prim_state_enc(x)
-    #s_mean = prim_s_enc.detach().cpu().numpy()
-    #s_std = np.zeros_like(s_mean)
+    #quant_mean = prim_s_enc.detach().cpu().numpy()
+    #quant_std = np.zeros_like(quant_mean)
 
-    s_mean = mem['prim_z'][:, -1].detach().cpu().numpy()
-    s_std = np.zeros_like(s_mean)
+    key = 'prim_' + quantity
+    if quantity == 'rnn_state':
+        quant_mean = mdl.filter_rnn_state(unpack_rnn_state(mem['prim_rnn_state'][:, -1]))
+        quant_mean = quant_mean.detach().cpu().numpy()
+    else:
+        quant_mean = mem[key][:, -1].detach().cpu().numpy()
+    quant_std = np.zeros_like(quant_mean)
 
-    #s_mean = get_mu(mem['prim_s_post'][:, -1]).detach().cpu().numpy()
-    #s_std = get_sigma(mem['prim_s_post'][:, -1]).detach().cpu().numpy()
+    #quant_mean = get_mu(mem['prim_s_post'][:, -1]).detach().cpu().numpy()
+    #quant_std = get_sigma(mem['prim_s_post'][:, -1]).detach().cpu().numpy()
     final_pos = traj_o[:, -1].detach().cpu().numpy()
 
-    map_mean = np.zeros((s_mean.shape[1], env.grid_h, env.grid_w), dtype=np.float32)
+    map_mean = np.zeros((quant_mean.shape[1], env.grid_h, env.grid_w), dtype=np.float32)
     map_std = np.zeros_like(map_mean)
 
     for pos in final_pos:
         masked_idx = np.all(final_pos == pos, axis=1, keepdims=True)  # row-wise and
         masked_idx = np.logical_not(masked_idx)
-        masked_idx = np.repeat(masked_idx, s_mean.shape[1], axis=1)
-        valid_trajectories_mean = ma.MaskedArray(s_mean, mask=masked_idx)
-        valid_trajectories_std = ma.MaskedArray(s_std, mask=masked_idx)
+        masked_idx = np.repeat(masked_idx, quant_mean.shape[1], axis=1)
+        valid_trajectories_mean = ma.MaskedArray(quant_mean, mask=masked_idx)
+        valid_trajectories_std = ma.MaskedArray(quant_std, mask=masked_idx)
         _s_mean = valid_trajectories_mean.mean(axis=0)
         _s_std = valid_trajectories_mean.std(axis=0)
         map_mean[:, pos[0], pos[1]] = _s_mean
@@ -281,13 +287,13 @@ def gen_prim_state_map(env: Gridworld,
     return map_mean, map_std
 
     ## remove time dimension and get distribution parameters
-    #s_mean = get_mu(mem['prim_s_post'][:, -1]).detach().cpu().numpy()
-    #s_std = get_sigma(mem['prim_s_post'][:, -1]).detach().cpu().numpy()
+    #quant_mean = get_mu(mem['prim_s_post'][:, -1]).detach().cpu().numpy()
+    #quant_std = get_sigma(mem['prim_s_post'][:, -1]).detach().cpu().numpy()
     #
     #map_mean = np.zeros((mdl.primitive_model.d_state, env.grid_h, env.grid_w), dtype=np.float32)
     #map_std = np.zeros_like(map_mean)
     #
-    #for loc, _s_mean, _s_std in zip(free_locations, s_mean, s_std):
+    #for loc, _s_mean, _s_std in zip(free_locations, quant_mean, quant_std):
     #    map_mean[:, loc[0], loc[1]] = _s_mean
     #    map_std[:, loc[0], loc[1]] = _s_std
     #
@@ -335,7 +341,7 @@ def infer_position(env: Gridworld,
 def visualize_plan(trajectory_history: Dict[str, torch.Tensor], env: Gridworld, mdl: MultiscaleDynamicsModelMK2):
     assert trajectory_history['abstr_o'].shape[0] == 1, 'Batch size of trajectory history should be 1'
 
-    map_mean, map_std = gen_prim_state_map(env, mdl)
+    map_mean, map_std = gen_value_map_prim(env, mdl)
     map_flat = map_mean.reshape((mdl.primitive_model.d_z, -1))
     map_flat = np.transpose(map_flat, (1, 0))
     total_positions = map_mean.shape[1] * map_mean.shape[2]

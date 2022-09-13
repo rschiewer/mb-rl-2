@@ -11,7 +11,7 @@ from mdm.gridworld.gridworld import Gridworld
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.planning.cem_planner import CrossentropyPlanner, DistributionType
 from mdm.utils.utils import (here, load_yaml, visualize_plan,
-                             gen_video, gen_prim_state_map)
+                             gen_video, gen_value_map_prim)
 from mdm.utils.planning_tools_mk2 import *
 from mdm.utils.torch_tools import add_time_dim
 from mdm.memory.trajectory_memory import TrajectoryMemory
