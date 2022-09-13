@@ -38,6 +38,7 @@ if __name__ == '__main__':
 
     env = Gridworld.from_cleartext(here() / '../../mdm/gridworld/8x8_v0.mapdata')
     mdl: MultiscaleDynamicsModelMK2 = torch.load(here() / model_path).to('cuda')
+    mdl.eval()  # deactivate dropout in RNN
 
     if args.log:
         logger = NeptuneLogger(neptune_cfg['PROJECT_NAME'], api_token=neptune_cfg['NEPTUNE_API_TOKEN'],
@@ -63,6 +64,7 @@ if __name__ == '__main__':
     action_stats = np.zeros(env.action_space.n)
     abstract_rewards = []
     abstract_terminals = []
+    section_lengths = []
     for i_ep in tqdm(range(planning_cfg['n_episodes'])):
         planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, device=mdl.device)
         planner_abstr = CrossentropyPlanner(DistributionType.NORMAL, device=mdl.device)
@@ -82,12 +84,15 @@ if __name__ == '__main__':
                                            planning_cfg['n_optim_steps_abstr'], planning_cfg['winning_perc'],
                                            planning_cfg['discount'],
                                            planning_cfg['act_noise_abstr'])
+        current_section_lengths = []
         for i_sec in range(planning_cfg['n_abstract_steps']):
-            trajectory_history = plan_section(mdl, trajectory_history, planner_prim,
-                                              planning_cfg['n_rollouts'],
-                                              planning_cfg['n_optim_steps_prim'], planning_cfg['winning_perc'],
-                                              planning_cfg['discount'],
-                                              planning_cfg['act_noise_prim'])
+            trajectory_history, sec_len = plan_section_flexible(mdl, trajectory_history, planner_prim,
+                                                                planning_cfg['n_rollouts'],
+                                                                planning_cfg['n_optim_steps_prim'],
+                                                                planning_cfg['winning_perc'], planning_cfg['discount'],
+                                                                planning_cfg['act_noise_prim'])
+            current_section_lengths.append(sec_len)
+        section_lengths.append(current_section_lengths)
         #visualize_plan(trajectory_history, env, mdl)
 
         actions = trajectory_history['prim_a'][0]
@@ -201,12 +206,15 @@ if __name__ == '__main__':
 
     abstract_rewards = np.stack(abstract_rewards)
     abstract_terminals = np.stack(abstract_terminals)
+    section_lengths = np.stack(section_lengths)
 
     # final debug output
     action_stats /= action_stats.sum()
     print(succeeded/planning_cfg['n_episodes'])
     print(n_steps, f' mean: {np.mean(n_steps)}')
     print(action_stats)
+    print(section_lengths.mean(axis=0))
+    print(section_lengths.std(axis=0))
 
     logger.log({'success_rate': succeeded/planning_cfg['n_episodes'],
                 'n_steps': n_steps,
@@ -214,5 +222,8 @@ if __name__ == '__main__':
                 'abstract_reward_avg': abstract_rewards.mean(axis=0),
                 'abstract_reward_std': abstract_rewards.std(axis=0),
                 'abstract_terminal_avg': abstract_terminals.mean(axis=0),
-                'abstract_terminal_std': abstract_terminals.std(axis=0)}, Scope.TEST())
+                'abstract_terminal_std': abstract_terminals.std(axis=0),
+                'section_lengths_avg': section_lengths.mean(axis=0),
+                'section_lengths_std': section_lengths.std(axis=0)},
+               Scope.TEST())
     logger.stop_session()
