@@ -16,7 +16,7 @@ from mpl_toolkits.axes_grid1 import ImageGrid
 
 from mdm.gridworld.gridworld import Gridworld, CellType
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
-from mdm.utils.utils import here, gen_macro_state_map, load_yaml, gen_value_map_prim
+from mdm.utils.utils import here, gen_macro_state_map, load_yaml, gen_prim_rnn_state_map
 from mdm.memory.trajectory_memory import TrajectoryMemory
 from mdm.training.offline_rl_driver import OfflineRLDriver
 from mdm.memory.trajectory_memory import flatten_and_unsqueeze
@@ -41,7 +41,7 @@ if __name__ == '__main__':
 
     maps_s_mean, maps_s_std = [], []
     for n_step in range(5):
-        _map_s_mean, _map_s_std = gen_value_map_prim(env, mdl, n_step)
+        _map_s_mean, _map_s_std = gen_prim_rnn_state_map(env, mdl, n_step)
         maps_s_mean.append(_map_s_mean)
         maps_s_std.append(_map_s_std)
     maps_s_mean = np.stack(maps_s_mean, axis=0)
