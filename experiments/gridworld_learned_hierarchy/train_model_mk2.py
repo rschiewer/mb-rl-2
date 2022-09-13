@@ -32,14 +32,13 @@ if __name__ == '__main__':
     cfg['prim_mdl']['d_observation'] = env.observation_space.shape[0]
     cfg['prim_mdl']['d_action'] = env.action_space.n
     cfg['prim_mdl']['d_reward'] = 1
-    prim_d_cell = 2 if cfg['prim_mdl']['rnn_type'] == 'lstm' else 1
     cfg['prim_mdl']['d_ctx_high_level'] = 0
     cfg['prim_mdl']['d_x_posterior'] = env.observation_space.shape[0] + 2  # observation, terminal flag and reward
 
+    #prim_d_cell = 2 if cfg['prim_mdl']['rnn_type'] == 'lstm' else 1
     #cfg['abstr_mdl']['d_observation'] = cfg['prim_mdl']['d_state'] + cfg['prim_mdl']['d_hidden'] \
     #                                    * cfg['prim_mdl']['n_hidden_layers'] * prim_d_cell
-    #cfg['abstr_mdl']['d_observation'] = cfg['prim_mdl']['d_state']
-    cfg['abstr_mdl']['d_observation'] = 8
+    cfg['abstr_mdl']['d_observation'] = cfg['prim_mdl']['d_state']
 
     cfg['abstr_mdl']['d_ctx_high_level'] = 0
     #cfg['abstr_mdl']['d_x_posterior'] = cfg['abstr_mdl']['d_observation'] + cfg['abstr_mdl']['d_reward'] + \

@@ -48,21 +48,6 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         self.detach_posteriors = detach_posteriors
         self._current_train_step = None
 
-        self.prim_state_enc = torch.nn.Sequential(
-            torch.nn.Linear(self.primitive_model.d_h + self.primitive_model.d_z, 64),
-            torch.nn.ReLU(),
-            torch.nn.Linear(64, 32),
-            torch.nn.ReLU(),
-            torch.nn.Linear(32, 8),
-        )
-        self.prim_state_dec = torch.nn.Sequential(
-            torch.nn.Linear(8, 32),
-            torch.nn.ReLU(),
-            torch.nn.Linear(32, 64),
-            torch.nn.ReLU(),
-            torch.nn.Linear(64, self.primitive_model.d_h + self.primitive_model.d_z)
-        )
-
     def prepare_for_training(self):
         self._current_train_step = 0
 
@@ -90,11 +75,9 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
             # primitive model rollout
             n_warmup_prim = min(warmup_steps_prim_left, self.abstract_step_size)
-            ctx_high_level = self.primitive_model.zero_ctx_high_level(d_batch, self.device)
             mem, prim_current = self.rollout_primitive(a=a[:, i_start: i_end], o=o[:, i_start: i_end],
                                                        r=r[:, i_start: i_end], term=term[:, i_start: i_end],
                                                        z=prim_current['z'], rnn_state=prim_current['rnn_state'],
-                                                       ctx_high_level=ctx_high_level,
                                                        n_posterior_steps=n_warmup_prim,
                                                        mem=mem, sample=True)
 
@@ -104,17 +87,14 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             # abstract model rollout
             # ctx_low_level = self.fuse_state(prim_current['z'], prim_current['rnn_state']).detach()
             # mem['ctx_low_level'].append(ctx_low_level)
-            ctx_low_level = prim_current['z'].detach()
-            ctx_low_level_2 = self.filter_rnn_state(prim_current['rnn_state']).detach()
-            mem['ctx_low_level'].append(ctx_low_level)  # actually stores this double but we need a detached version
-            mem['ctx_low_level_2'].append(ctx_low_level_2)
-
+            # TODO: add the .detach() statement back here once test is done!
+            prim_s = mem['prim_s'][-1].detach()
+            mem['abstr_o_target'].append(prim_s)
 
             n_warmup_abstr = 1 if warmup_steps_abstr_left > 0 else 0
             mem, abstr_current = self.rollout_abstract(a=add_time_dim(abstr_a), r=add_time_dim(abstr_r[:, i_chunk]),
                                                        term=add_time_dim(abstr_term[:, i_chunk]),
-                                                       prim_s=add_time_dim(ctx_low_level),
-                                                       prim_rnn_final=add_time_dim(ctx_low_level_2),
+                                                       prim_s=add_time_dim(prim_s),
                                                        z=abstr_current['z'],
                                                        rnn_state=abstr_current['rnn_state'],
                                                        n_posterior_steps=n_warmup_abstr,
@@ -138,11 +118,10 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                                 prim_current: Dict,
                                 x_post: Optional[torch.Tensor],
                                 mem: Optional[Dict],
-                                ctx_high_level: torch.Tensor,
                                 use_posterior: bool = True,
                                 sample: bool = True):
         d_batch = prim_current['a'].shape[0]
-        device = prim_current['a'].device
+        ctx_high_level = self.primitive_model.zero_ctx_high_level(d_batch, self.device)
 
         # do prediction
         pred = self.primitive_model(z=prim_current['z'], a=prim_current['a'], x_current_groundtruth=x_post,
@@ -156,18 +135,14 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         # update primitive state
         prim_current['z'] = pred['z']
         prim_current['rnn_state'] = pred['rnn_state']
-        prim_current['o'] = pred['o']
-        prim_current['r'] = pred['r']
-        prim_current['term'] = pred['term']
 
         # store things
         mem['prim_z'].append(pred['z'])
         mem['prim_z_prior'].append(pred['z_prior'])
         if use_posterior:
             mem['prim_z_post'].append(pred['z_post'])
-        # else:  # hack for loss calculation, essentially removes the current time step's KL_loss(s_prior, s_post)
-        #    mem['prim_z_post'].append(pred['s_prior'])
         mem['prim_rnn_state'].append(pred['rnn_state'])
+        mem['prim_s'].append(pred['s'])
         mem['prim_a'].append(prim_current['a'])
         mem['prim_o'].append(pred['o'])
         mem['prim_o_dist'].append(pred['o_dist'])
@@ -182,9 +157,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                                use_posterior: bool = True,
                                sample: bool = True):
         d_batch = abstr_current['a'].shape[0]
-        device = abstr_current['a'].device
-
-        ctx_high_level = self.abstract_model.zero_ctx_high_level(d_batch, device)
+        ctx_high_level = self.abstract_model.zero_ctx_high_level(d_batch, self.device)
 
         # do prediction
         pred = self.abstract_model(z=abstr_current['z'], a=abstr_current['a'],
@@ -194,18 +167,14 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         # update abstract state
         abstr_current['z'] = pred['z']
         abstr_current['rnn_state'] = pred['rnn_state']
-        abstr_current['o'] = pred['o']
-        abstr_current['r'] = pred['r']
-        abstr_current['term'] = pred['term']
 
         # store things
         mem['abstr_z'].append(pred['z'])
         mem['abstr_z_prior'].append(pred['z_prior'])
         if use_posterior:
             mem['abstr_z_post'].append(pred['z_post'])
-        # else:  # hack for loss calculation
-        #    mem['abstr_z_post'].append(pred['s_prior'])
         mem['abstr_rnn_state'].append(pred['rnn_state'])
+        mem['abstr_s'].append(pred['s'])
         mem['abstr_a'].append(abstr_current['a'])
         mem['abstr_o'].append(pred['o'])
         mem['abstr_o_dist'].append(pred['o_dist'])
@@ -217,11 +186,11 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
     def gen_mem():
         mem = {'prim_a': [], 'prim_o': [], 'prim_o_dist': [], 'prim_r': [], 'prim_r_dist': [], 'prim_term': [],
                'prim_z_prior': [],
-               'prim_z_post': [], 'prim_z': [], 'prim_h': [], 'prim_rnn_state': [], 'abstr_o': [], 'abstr_o_dist': [],
+               'prim_z_post': [], 'prim_z': [], 'prim_s': [], 'prim_rnn_state': [], 'abstr_o': [], 'abstr_o_dist': [],
                'abstr_a': [],
                'abstr_a_dist': [], 'abstr_r': [], 'abstr_r_dist': [], 'abstr_term': [], 'abstr_z_prior': [],
-               'abstr_z_post': [], 'abstr_z': [], 'abstr_h': [], 'abstr_rnn_state': [], 'ctx_low_level': [],
-               'ctx_low_level_2': []}
+               'abstr_z_post': [], 'abstr_z': [], 'abstr_s': [], 'abstr_rnn_state': [],
+               'abstr_o_target': []}
         return mem
 
     @staticmethod
@@ -264,12 +233,6 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                     abstr_term_ground_truth)
         beta = 1  # min((self._current_train_step / self.n_warmup_schedule), 1)
 
-        # primitive model state autoencoder loss
-        prim_ctx = torch.concat([pred['ctx_low_level'], pred['ctx_low_level_2']], dim=-1)
-        prim_ctx_enc = self.prim_state_enc(prim_ctx)
-        prim_ctx_rec = self.prim_state_dec(prim_ctx_enc)
-        abstr_ctx_compression = torch.nn.functional.mse_loss(prim_ctx, prim_ctx_rec)
-
         # primitive model loss
         prim_rec_o = torch.nn.functional.mse_loss(pred['prim_o'], o_ground_truth)
         prim_rec_r = torch.nn.functional.mse_loss(pred['prim_r'], r_ground_truth)
@@ -282,7 +245,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         prim_s_post = build_gaussian(pred['prim_z_post'])
         unit_gaussian_prim = torch.distributions.Normal(loc=torch.zeros_like(prim_s_post.loc),
                                                         scale=torch.ones_like(prim_s_post.scale))
-        prim_kl_s = beta * self.beta_kl_prim * torch.distributions.kl_divergence(prim_s_post, prim_s_prior).mean()
+        prim_kl_s = beta * self.beta_kl_prim * (torch.distributions.kl_divergence(prim_s_post, prim_s_prior).mean())
+                                                #+ torch.distributions.kl_divergence(prim_s_prior, prim_s_post).mean())
         prim_kl_s_reg = beta * self.beta_reg_prim * torch.distributions.kl_divergence(prim_s_post,
                                                                                       unit_gaussian_prim).mean()
 
@@ -290,7 +254,15 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         # abstr_o_dist = build_gaussian(pred['abstr_o_dist'])
         # abstr_rec_o = self.beta_abstract_model * torch.distributions.kl_divergence(ctx_low_level_dist, abstr_o_dist).mean()
         #abstr_rec_o = torch.nn.functional.mse_loss(pred['abstr_o'], pred['ctx_low_level'])
-        abstr_rec_o = torch.nn.functional.mse_loss(pred['abstr_o'], prim_ctx_enc)
+
+        # TODO: Think about this, right now if the final chunk takes less than abstract_step_size steps,
+        # the abstract model is trained towards predicting prim_s after less than abstract_step_size steps.
+        # This predicts the correct prim_s, but is inconsistent with the rest of the training procedure.
+
+        #abstr_o_target = bin_every_k_steps(pred['prim_s'], self.abstract_step_size, padding_val=0).detach()
+        #abstr_o_target = abstr_o_target[:, :, -1]
+        #diff = torch.sum(abstr_o_target - pred['abstr_o_target'], dim=(1, 2))
+        abstr_rec_o = torch.nn.functional.mse_loss(pred['abstr_o'], pred['abstr_o_target'])
         abstr_rec_r = torch.nn.functional.mse_loss(pred['abstr_r'], abstr_r_ground_truth)
         abstr_rec_term = torch.nn.functional.binary_cross_entropy(pred['abstr_term'], abstr_term_ground_truth)
         available_post_steps = pred['abstr_z_post'].shape[1]
@@ -298,7 +270,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         abstr_s_post = build_gaussian(pred['abstr_z_post'])
         unit_gaussian_abstr = torch.distributions.Normal(loc=torch.zeros_like(abstr_s_post.loc),
                                                          scale=torch.ones_like(abstr_s_post.scale))
-        abstr_kl_s = beta * self.beta_kl_abstr * torch.distributions.kl_divergence(abstr_s_post, abstr_s_prior).mean()
+        abstr_kl_s = beta * self.beta_kl_abstr * (torch.distributions.kl_divergence(abstr_s_post, abstr_s_prior).mean())
+                                                  #+ torch.distributions.kl_divergence(abstr_s_prior, abstr_s_post).mean())
         abstr_kl_s_reg = beta * self.beta_reg_abstr * torch.distributions.kl_divergence(abstr_s_post,
                                                                                         unit_gaussian_abstr).mean()
 
@@ -315,20 +288,18 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
         total = prim_rec_o + prim_rec_r + prim_rec_term + prim_kl_s + prim_kl_s_reg
         total += abstr_factor * (abstr_rec_o + abstr_rec_r + abstr_rec_term + abstr_kl_s + abstr_kl_s_reg
-                                 + abstr_a_loss + abstr_ctx_compression)
+                                 + abstr_a_loss)
 
         prim_o_mae = torch.mean(torch.abs(pred['prim_o'] - o_ground_truth))
         prim_r_mae = torch.mean(torch.abs(pred['prim_r'] - r_ground_truth))
         prim_term_mae = torch.mean(torch.abs(pred['prim_term'] - term_ground_truth))
         prim_kl_unscaled = torch.distributions.kl_divergence(prim_s_post, prim_s_prior).mean()
         prim_kl_reg_unscaled = torch.distributions.kl_divergence(prim_s_post, unit_gaussian_prim).mean()
-        #abstr_o_mae = torch.mean(torch.abs(pred['abstr_o'] - pred['ctx_low_level']))
-        abstr_o_mae = torch.mean(torch.abs(pred['abstr_o'] - prim_ctx_enc))
-        abstr_r_mae = torch.mean(torch.abs(pred['abstr_o'] - abstr_r_ground_truth))
+        abstr_o_mae = torch.mean(torch.abs(pred['abstr_o'] - pred['abstr_o_target']))
+        abstr_r_mae = torch.mean(torch.abs(pred['abstr_r'] - abstr_r_ground_truth))
         abstr_term_mae = torch.mean(torch.abs(pred['abstr_term'] - abstr_term_ground_truth))
         abstr_kl_unscaled = torch.distributions.kl.kl_divergence(abstr_s_post, abstr_s_prior).mean()
         abstr_kl_reg_unscaled = torch.distributions.kl_divergence(abstr_s_post, unit_gaussian_abstr).mean()
-        abstr_ctx_compression_mae = torch.mean(torch.abs(prim_ctx - prim_ctx_rec))
 
         return {'total': total, 'prim_o': prim_rec_o, 'prim_r': prim_rec_r, 'prim_term': prim_rec_term,
                 'prim_kl_s': prim_kl_s, 'prim_kl_s_reg': prim_kl_s_reg, 'abstr_o': abstr_rec_o,
@@ -338,8 +309,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                 'monitoring_prim_kl': prim_kl_unscaled, 'monitoring_prim_kl_reg': prim_kl_reg_unscaled,
                 'monitoring_abstr_o': abstr_o_mae, 'monitoring_abstr_r': abstr_r_mae,
                 'monitoring_abstr_term': abstr_term_mae, 'monitoring_abstr_kl': abstr_kl_unscaled,
-                'monitoring_abstr_kl_reg': abstr_kl_reg_unscaled,
-                'monitoring_abstr_ctx_reconstr': abstr_ctx_compression_mae}
+                'monitoring_abstr_kl_reg': abstr_kl_reg_unscaled}
 
     def input_compatible(self,
                          o_ground_truth: torch.Tensor,
@@ -410,7 +380,6 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                           term: Optional[torch.Tensor] = None,
                           z: Optional[torch.Tensor] = None,
                           rnn_state: Optional[RnnStateType] = None,
-                          ctx_high_level: Optional[torch.Tensor] = None,
                           mem: Optional[Dict] = None,
                           sample: bool = True,
                           n_posterior_steps: int = -1):
@@ -421,9 +390,6 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             prim_current['z'] = z
         if rnn_state is not None:
             prim_current['rnn_state'] = rnn_state
-
-        if ctx_high_level is None:
-            ctx_high_level = self.primitive_model.zero_ctx_high_level(d_batch, self.device)
 
         if mem is None:
             mem = self.gen_mem()
@@ -453,7 +419,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             # use_posterior = torch.rand(()) < 0.2
 
             prim_current['a'] = a[:, t]
-            self._invoke_primitive_model(prim_current, x_posterior, mem, ctx_high_level, use_posterior=use_posterior,
+            self._invoke_primitive_model(prim_current, x_posterior, mem, use_posterior=use_posterior,
                                          sample=sample)
 
         return mem, prim_current
@@ -461,7 +427,6 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
     def rollout_abstract(self,
                          a: torch.Tensor,
                          prim_s: Optional[torch.Tensor] = None,
-                         prim_rnn_final: Optional[torch.Tensor] = None,
                          r: Optional[torch.Tensor] = None,
                          term: Optional[torch.Tensor] = None,
                          z: Optional[torch.Tensor] = None,
@@ -497,12 +462,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
         for t in range(n_steps):
             if t < n_groundtruth_available:
-                prim_s_enc = self.prim_state_enc(torch.concat([prim_s[:, t], prim_rnn_final[:, t]], dim=-1))
-                x_posterior = torch.concat([prim_s_enc, r[:, t], term[:, t]], dim=-1)
-                #x_posterior = torch.concat([prim_s[:, t], prim_rnn_final[:, t], r[:, t], term[:, t]], dim=-1)
+                x_posterior = torch.concat([prim_s[:, t], r[:, t], term[:, t]], dim=-1)
             else:
-                #x_posterior = torch.zeros(d_batch, self.abstract_model.d_observation + self.abstract_model.d_reward
-                #                          + 1 + self.primitive_model.d_hidden, device=self.device)
                 x_posterior = torch.zeros(d_batch, self.abstract_model.d_observation + self.abstract_model.d_reward
                                           + 1, device=self.device)
 
