@@ -262,6 +262,8 @@ def gen_value_map_prim(env: Gridworld,
     if quantity == 'rnn_state':
         quant_mean = mdl.filter_rnn_state(unpack_rnn_state(mem['prim_rnn_state'][:, -1]))
         quant_mean = quant_mean.detach().cpu().numpy()
+    elif quantity.endswith(('prior', 'post', 'dist')):
+        quant_mean = get_mu(mem[key][:, -1].detach().cpu().numpy())
     else:
         quant_mean = mem[key][:, -1].detach().cpu().numpy()
     quant_std = np.zeros_like(quant_mean)
