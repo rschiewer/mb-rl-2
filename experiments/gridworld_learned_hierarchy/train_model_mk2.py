@@ -38,7 +38,10 @@ if __name__ == '__main__':
     #prim_d_cell = 2 if cfg['prim_mdl']['rnn_type'] == 'lstm' else 1
     #cfg['abstr_mdl']['d_observation'] = cfg['prim_mdl']['d_state'] + cfg['prim_mdl']['d_hidden'] \
     #                                    * cfg['prim_mdl']['n_hidden_layers'] * prim_d_cell
-    cfg['abstr_mdl']['d_observation'] = cfg['prim_mdl']['d_state']
+    prim_mdl_key = cfg['mdm']['abstract_pred_target']
+    prim_mdl_key = prim_mdl_key[prim_mdl_key.index('_') + 1:]
+    prim_mdl_key = 'd_' + prim_mdl_key
+    cfg['abstr_mdl']['d_observation'] = cfg['prim_mdl'][prim_mdl_key]
 
     cfg['abstr_mdl']['d_ctx_high_level'] = 0
     #cfg['abstr_mdl']['d_x_posterior'] = cfg['abstr_mdl']['d_observation'] + cfg['abstr_mdl']['d_reward'] + \
@@ -78,10 +81,10 @@ if __name__ == '__main__':
         s, a, r, terminal = prepare_data(s, a, r, terminal, env)
         return s, a, r, terminal
 
-    #loader_train = ConcurrentDataLoader(get_batch_train, queue_len=3)
-    #loader_test = ConcurrentDataLoader(get_batch_test, queue_len=1)
-    #get_batch_train = loader_train.get_batch
-    #get_batch_test = loader_test.get_batch
+    loader_train = ConcurrentDataLoader(get_batch_train, queue_len=10)
+    loader_test = ConcurrentDataLoader(get_batch_test, queue_len=10)
+    get_batch_train = loader_train.get_batch
+    get_batch_test = loader_test.get_batch
     model_path = f'{cfg["final_model_path"]}_{cfg["mdm"]["abstract_step_size"]}.ptmdl'
 
     # train

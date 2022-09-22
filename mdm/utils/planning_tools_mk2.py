@@ -98,8 +98,8 @@ def init_abstr_s(model: MultiscaleDynamicsModelMK2,
     assert 0 < history_length <= model.abstract_step_size * n_warmup_abstr, f'History length: {history_length}'
     assert remaining_steps >= 0
 
-    #if remaining_steps > 0:
-    #    raise ValueError('Not supported yet')
+    if remaining_steps > 0:
+        raise ValueError('Not supported yet')
 
     if remaining_steps > 0:
         z_batch = history['prim_z'][:, -1].repeat(n_rollouts, 1)
@@ -129,11 +129,12 @@ def init_abstr_s(model: MultiscaleDynamicsModelMK2,
     a_binned = bin_every_k_steps(history['prim_a'][:, :required_steps], model.abstract_step_size)
     abstr_a = torch.stack([model.abstract_action_model(a_binned[:, i_chunk], sample=False)
                            for i_chunk in range(a_binned.shape[1])], dim=1)
-    prim_s = bin_every_k_steps(history['prim_s'][:, :required_steps], model.abstract_step_size)[:, :, -1]
+    target = model.abstr_pred_target
+    prim_data = bin_every_k_steps(history[target][:, :required_steps], model.abstract_step_size)[:, :, -1]
     abstr_r = bin_every_k_steps(history['prim_r'][:, :required_steps], model.abstract_step_size).sum(dim=2)
     abstr_term = bin_every_k_steps(history['prim_term'][:, :required_steps], model.abstract_step_size).max(dim=2).values
 
-    mem, abstr_final = model.rollout_abstract(a=abstr_a, prim_s=prim_s, r=abstr_r,
+    mem, abstr_final = model.rollout_abstract(a=abstr_a, prim_data=prim_data, r=abstr_r,
                                               term=abstr_term, sample=False, n_posterior_steps=n_warmup_abstr)
     mem = model.pack_mem(mem)
     history = update_history(history, mem)
@@ -409,7 +410,7 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
 
     z_start = history['prim_z'][:, -1].repeat(n_rollouts, 1)
     rnn_state_start = unpack_rnn_state(history['prim_rnn_state'][:, -1].repeat(n_rollouts, 1, 1, 1))
-    s_goal = history['abstr_o'][:, i_section].repeat(n_rollouts, 1)
+    target = history['abstr_o'][:, i_section].repeat(n_rollouts, 1)
     r_goal = history['abstr_r'][:, i_section].repeat(n_rollouts, 1)
 
     def _rollout_fn(_a: torch.Tensor):
@@ -417,10 +418,10 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
         _mem, _prim_final = model.rollout_primitive(a=_a, z=z_start, rnn_state=rnn_state_start, sample=False)
         _mem = model.pack_mem(_mem)
 
-        _criterion = - torch.mean((_mem['prim_s'][:, -1] - s_goal) ** 2, dim=1, keepdim=True)
+        _criterion = - torch.mean((_mem[model.abstr_pred_target][:, -1] - target) ** 2, dim=1, keepdim=True)
 
         # TODO: test KL divergence between distributions
-        #_criterion = - torch.mean((_mem['prim_z'][:, -1] - s_goal) ** 2, dim=1, keepdim=True)
+        #_criterion = - torch.mean((_mem['prim_z'][:, -1] - target) ** 2, dim=1, keepdim=True)
         _criterion -= torch.mean((_mem['prim_r'].sum(dim=1) - r_goal) ** 2, dim=1, keepdim=True)
         _discount = None
         return _criterion, _discount, _mem
@@ -473,7 +474,7 @@ def plan_section_flexible(model: MultiscaleDynamicsModelMK2,
 
         mem, _prim_final = model.rollout_primitive(a=a_seq, z=z_start, rnn_state=rnn_state_start, sample=False)
         mem = model.pack_mem(mem)
-        _criterion = torch.mean((mem['prim_s'][:, -1] - s_goal) ** 2, dim=1, keepdim=True)
+        _criterion = torch.mean((mem[model.abstr_pred_target][:, -1] - s_goal) ** 2, dim=1, keepdim=True)
         _criterion += torch.mean((mem['prim_r'].sum(dim=1) - r_goal) ** 2, dim=1, keepdim=True)
         ranking = torch.sort(_criterion, dim=0, descending=False)
         if ranking.values[0] < best_criterion:

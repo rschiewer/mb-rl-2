@@ -87,11 +87,12 @@ class RSSM(torch.nn.Module):
         self.rnn_type = rnn_type
 
         z_prior_lws = (d_h, *z_prior_lws, d_z * 2)
-        z_post_lws = (d_h + d_x_posterior, *z_post_lws, d_z * 2)
-        state_lws = (d_h + d_z, *state_lws, d_state)
-        o_lws = (d_state, *o_lws, d_observation * 2)
-        r_lws = (d_state, *r_lws, d_reward * 2)
-        term_lws = (d_state, *term_lws, 1)
+        z_post_lws = (d_h + d_z * 2 + d_x_posterior, *z_post_lws, d_z * 2)
+        #state_lws = (d_h + d_z, *state_lws, d_state)
+        o_lws = (d_h + d_z, *o_lws, d_observation * 2)
+        r_lws = (d_h + d_z, *r_lws, d_reward * 2)
+        term_lws = (d_h + d_z, *term_lws, 1)
+        z_preproc_lws = (d_z, d_z)
 
         if rnn_type == 'lstm':
             rnn_constr = torch.nn.LSTM
@@ -109,7 +110,8 @@ class RSSM(torch.nn.Module):
         #self._rnn = RIM(device='cuda', input_size=d_det_core, hidden_size=d_hidden, num_units=n_units, k=3,
         #                n_layers=n_hidden_layers, rnn_cell='LSTM', bidirectional=False)
 
-        self._state = torch.nn.Sequential(*layers_with_activation(state_lws, activation, layer_norm=layer_norm))
+        self._z_preproc = torch.nn.Sequential(*layers_with_activation(z_preproc_lws, activation, layer_norm=layer_norm))
+        #self._state = torch.nn.Sequential(*layers_with_activation(state_lws, activation, layer_norm=layer_norm))
         self._s_prior = torch.nn.Sequential(*layers_with_activation(z_prior_lws, activation, layer_norm=layer_norm))
         self._s_post = torch.nn.Sequential(*layers_with_activation(z_post_lws, activation, layer_norm=layer_norm))
         self._o_dist = torch.nn.Sequential(*layers_with_activation(o_lws, activation, layer_norm=layer_norm))
@@ -194,7 +196,8 @@ class RSSM(torch.nn.Module):
                   rnn_state: torch.Tensor,
                   a: torch.Tensor,
                   ctx_high_level: torch.Tensor):
-        inp = torch.concat([z, a, ctx_high_level], dim=-1)
+        z_processed = self._z_preproc(z)
+        inp = torch.concat([z_processed, a, ctx_high_level], dim=-1)
         inp = add_time_dim(inp)
         x_det, next_rnn_state = self._rnn(inp, rnn_state)
         x_det = remove_time_dim(x_det)
@@ -210,7 +213,7 @@ class RSSM(torch.nn.Module):
                 sample: bool = True):
         h, next_rnn_state = self._det_core(z, rnn_state, a, ctx_high_level)
         z_prior = self.build_z_prior(h)
-        z_post = self.build_z_post(h, x_current_groundtruth)
+        z_post = self.build_z_post(h, z_prior, x_current_groundtruth)
 
         if use_posterior:
             z_dist = z_post
@@ -221,7 +224,9 @@ class RSSM(torch.nn.Module):
         else:
             z_smpl = get_mu(z_dist)
 
-        s = self._state(torch.concat([h, z_smpl], dim=-1))
+        h_zero = torch.zeros_like(h)
+        #s = self._state(torch.concat([h_zero, z_smpl], dim=-1))
+        s = torch.concat([h_zero, z_smpl], dim=-1)
         o_dist = self._build_o_dist(s)
         r_dist = self._build_r_dist(s)
         term_dist = self._build_terminal_dist(s)
@@ -245,8 +250,9 @@ class RSSM(torch.nn.Module):
 
     def build_z_post(self,
                      h: torch.Tensor,
+                     z_prior: torch.Tensor,
                      x_posterior: torch.Tensor) -> torch.Tensor:
-        inp = torch.concat([h, x_posterior], dim=-1)
+        inp = torch.concat([h, z_prior, x_posterior], dim=-1)
         s_post_params = self._s_post(inp)
         s_post_params = make_gaussian_params(s_post_params, self.epsilon)
         return s_post_params
