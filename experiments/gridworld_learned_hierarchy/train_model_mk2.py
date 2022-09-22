@@ -29,9 +29,9 @@ if __name__ == '__main__':
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
     # infer missing config values
-    cfg['prim_mdl']['d_observation'] = env.observation_space.shape[0]
-    cfg['prim_mdl']['d_action'] = env.action_space.n
-    cfg['prim_mdl']['d_reward'] = 1
+    cfg['prim_mdl']['d_o'] = env.observation_space.shape[0]
+    cfg['prim_mdl']['d_a'] = env.action_space.n
+    cfg['prim_mdl']['d_r'] = 1
     cfg['prim_mdl']['d_ctx_high_level'] = 0
     cfg['prim_mdl']['d_x_posterior'] = env.observation_space.shape[0] + 2  # observation, terminal flag and reward
 
@@ -41,16 +41,16 @@ if __name__ == '__main__':
     prim_mdl_key = cfg['mdm']['abstract_pred_target']
     prim_mdl_key = prim_mdl_key[prim_mdl_key.index('_') + 1:]
     prim_mdl_key = 'd_' + prim_mdl_key
-    cfg['abstr_mdl']['d_observation'] = cfg['prim_mdl'][prim_mdl_key]
+    cfg['abstr_mdl']['d_o'] = cfg['prim_mdl'][prim_mdl_key]
 
     cfg['abstr_mdl']['d_ctx_high_level'] = 0
     #cfg['abstr_mdl']['d_x_posterior'] = cfg['abstr_mdl']['d_observation'] + cfg['abstr_mdl']['d_reward'] + \
     #                                    1 + cfg['prim_mdl']['d_hidden']
-    cfg['abstr_mdl']['d_x_posterior'] = cfg['abstr_mdl']['d_observation'] + cfg['abstr_mdl']['d_reward'] + 1
+    cfg['abstr_mdl']['d_x_posterior'] = cfg['abstr_mdl']['d_o'] + cfg['abstr_mdl']['d_r'] + 1
 
-    cfg['abstr_act_mdl']['d_action'] = env.action_space.n
+    cfg['abstr_act_mdl']['d_a'] = env.action_space.n
     cfg['abstr_act_mdl']['abstract_step_size'] = cfg['mdm']['abstract_step_size']
-    cfg['abstr_act_mdl']['d_abstract_action'] = cfg['abstr_mdl']['d_action']
+    cfg['abstr_act_mdl']['d_a_abstract'] = cfg['abstr_mdl']['d_a']
 
     # build model
     prim_mdl = RSSM(**cfg['prim_mdl'])
@@ -81,10 +81,10 @@ if __name__ == '__main__':
         s, a, r, terminal = prepare_data(s, a, r, terminal, env)
         return s, a, r, terminal
 
-    loader_train = ConcurrentDataLoader(get_batch_train, queue_len=10)
-    loader_test = ConcurrentDataLoader(get_batch_test, queue_len=10)
-    get_batch_train = loader_train.get_batch
-    get_batch_test = loader_test.get_batch
+    #loader_train = ConcurrentDataLoader(get_batch_train, queue_len=10)
+    #loader_test = ConcurrentDataLoader(get_batch_test, queue_len=10)
+    #get_batch_train = loader_train.get_batch
+    #get_batch_test = loader_test.get_batch
     model_path = f'{cfg["final_model_path"]}_{cfg["mdm"]["abstract_step_size"]}.ptmdl'
 
     # train

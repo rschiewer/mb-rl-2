@@ -13,17 +13,17 @@ from mdm.utils.torch_tools import (layers_with_activation, add_time_dim, remove_
 class AbstractActionModel(torch.nn.Module):
 
     def __init__(self,
-                 d_action: int,
+                 d_a: int,
                  abstract_step_size: int,
-                 d_abstract_action: int,
+                 d_a_abstract: int,
                  lws: tuple = (64, 64),
                  layer_norm: bool = False,
                  activation: str = 'relu'):
         super(AbstractActionModel, self).__init__()
 
-        self.d_abstract_action = d_abstract_action
+        self.d_abstract_action = d_a_abstract
 
-        lws = (d_action * abstract_step_size, *lws, d_abstract_action)
+        lws = (d_a * abstract_step_size, *lws, d_a_abstract)
         self.flatten_layer = torch.nn.Flatten(start_dim=1)
         self.det_mdl = torch.nn.Sequential(*layers_with_activation(lws, activation, layer_norm=layer_norm))
 
@@ -52,16 +52,16 @@ class RSSM(torch.nn.Module):
     def __init__(self,
                  d_z: int,
                  d_h: int,
-                 d_state: int,
-                 d_action: int,
-                 d_observation: int,
-                 d_reward: int,
+                 d_s: int,
+                 d_a: int,
+                 d_o: int,
+                 d_r: int,
                  d_ctx_high_level: int,
                  d_x_posterior: int,
                  n_hidden_layers: int = 1,
                  hidden_dropout: float = 0.1,
                  epsilon: float = 0.01,
-                 state_lws: Sequence[int] = (),
+                 s_lws: Sequence[int] = (),
                  z_prior_lws: Sequence[int] = (32, 32),
                  z_post_lws: Sequence[int] = (32, 32),
                  o_lws: Sequence[int] = (32, 32),
@@ -74,10 +74,10 @@ class RSSM(torch.nn.Module):
 
         self.d_z = d_z
         self.d_h = d_h
-        self.d_state = d_state
-        self.d_action = d_action
-        self.d_observation = d_observation
-        self.d_reward = d_reward
+        self.d_state = d_s
+        self.d_action = d_a
+        self.d_observation = d_o
+        self.d_reward = d_r
         self.d_high_level_ctx = d_ctx_high_level
         self.d_low_level_ctx = d_x_posterior
         self.n_hidden_layers = n_hidden_layers
@@ -89,8 +89,8 @@ class RSSM(torch.nn.Module):
         z_prior_lws = (d_h, *z_prior_lws, d_z * 2)
         z_post_lws = (d_h + d_z * 2 + d_x_posterior, *z_post_lws, d_z * 2)
         #state_lws = (d_h + d_z, *state_lws, d_state)
-        o_lws = (d_h + d_z, *o_lws, d_observation * 2)
-        r_lws = (d_h + d_z, *r_lws, d_reward * 2)
+        o_lws = (d_h + d_z, *o_lws, d_o * 2)
+        r_lws = (d_h + d_z, *r_lws, d_r * 2)
         term_lws = (d_h + d_z, *term_lws, 1)
         z_preproc_lws = (d_z, d_z)
 
@@ -101,7 +101,7 @@ class RSSM(torch.nn.Module):
         else:
             raise ValueError(f'Unsupported rnn type: {rnn_type}')
 
-        d_det_core = d_z + d_action + d_ctx_high_level
+        d_det_core = d_z + d_a + d_ctx_high_level
         self._rnn = rnn_constr(d_det_core, hidden_size=d_h, num_layers=n_hidden_layers, batch_first=True,
                                dropout=hidden_dropout)
         #self._rnn = haste.IndRNN(d_det_core, hidden_size=d_hidden, batch_first=True)
@@ -224,9 +224,10 @@ class RSSM(torch.nn.Module):
         else:
             z_smpl = get_mu(z_dist)
 
-        h_zero = torch.zeros_like(h)
+        #h_zero = torch.zeros_like(h)
         #s = self._state(torch.concat([h_zero, z_smpl], dim=-1))
-        s = torch.concat([h_zero, z_smpl], dim=-1)
+        #s = torch.concat([h_zero, z_smpl], dim=-1)
+        s = torch.concat([h, z_smpl], dim=-1)
         o_dist = self._build_o_dist(s)
         r_dist = self._build_r_dist(s)
         term_dist = self._build_terminal_dist(s)

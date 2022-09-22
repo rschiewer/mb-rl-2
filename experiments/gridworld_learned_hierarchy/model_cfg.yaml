@@ -18,18 +18,18 @@ mdm:
   detach_posteriors: False
   beta_abstract_action: 0.0
   beta_abstract_model: 1.0
-  abstract_pred_target: "prim_z"
+  abstract_pred_target: "prim_h"
 
 prim_mdl:
   d_z: 16
   d_h: 32
-  d_state: -1
+  d_s: -1
   n_hidden_layers: 2
   hidden_dropout: 0.1
-  epsilon: 0.1
+  epsilon: 1.0
   z_prior_lws: [64, 64]
   z_post_lws: [64, 64]
-  state_lws: []
+  s_lws: []
   o_lws: [64, 64]
   r_lws: [64, 64]
   term_lws: [64, 64]
@@ -38,20 +38,20 @@ prim_mdl:
   rnn_type: "gru"
 
 abstr_mdl:
-  d_z: 128
-  d_h: 256
-  d_state: -1
-  d_action: 6
-  d_reward: 1
-  n_hidden_layers: 6
+  d_z: 20
+  d_h: 64
+  d_s: -1
+  d_a: 6
+  d_r: 1
+  n_hidden_layers: 5
   hidden_dropout: 0.1
-  epsilon: 0.1
-  z_prior_lws: [128, 64]
-  z_post_lws: [128, 64]
-  state_lws: []
-  o_lws: [128, 128, 64]
-  r_lws: [128, 128, 64]
-  term_lws: [128, 128, 64]
+  epsilon: 1.0
+  z_prior_lws: [64, 64]
+  z_post_lws: [64, 64]
+  s_lws: []
+  o_lws: [64, 64]
+  r_lws: [64, 64]
+  term_lws: [64, 64]
   layer_norm: True
   activation: "relu"
   rnn_type: "gru"
@@ -62,10 +62,10 @@ abstr_act_mdl:
   layer_norm: True
 
 optim:
-  lr: 0.0005 #0.0002
+  lr: 0.001 #0.0002
 
 trainer:
-  n_train_steps: 12000
+  n_train_steps: 8000
   eval_interval: 100
-  d_batch: 2048
+  d_batch: 4096
   pad_last_terminal_flag: False
