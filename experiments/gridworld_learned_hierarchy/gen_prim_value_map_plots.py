@@ -41,7 +41,7 @@ if __name__ == '__main__':
 
     maps_s_mean, maps_s_std = [], []
     for n_step in range(5):
-        _map_s_mean, _map_s_std = gen_value_map_prim(env, mdl, n_step)
+        _map_s_mean, _map_s_std = gen_value_map_prim(env, mdl, n_step, 's')
         maps_s_mean.append(_map_s_mean)
         maps_s_std.append(_map_s_std)
     maps_s_mean = np.stack(maps_s_mean, axis=0)
@@ -53,7 +53,7 @@ if __name__ == '__main__':
     v_min = all_values.min()
     v_max = all_values.max()
 
-    max_n_cols = min(maps_s_mean.shape[1], 4)
+    max_n_cols = min(maps_s_mean.shape[1], 8)
     n_rows = ceil(maps_s_mean.shape[1] / max_n_cols)
     fig = plt.figure( figsize=(20, 20))
     gs = gridspec.GridSpec(n_rows, max_n_cols, wspace=0.2, hspace=0.2, figure=fig, left=0.01, right=0.99, bottom=0.01,
