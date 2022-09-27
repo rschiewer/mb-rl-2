@@ -243,11 +243,12 @@ def exhaustive_traversion(env, mdl, walk_distance):
 def gen_value_map_prim(env: Gridworld,
                        mdl: MultiscaleDynamicsModelMK2,
                        walk_distance: int,
+                       posterior_steps: int = -1,
                        quantity: str = 's'):
     traj_a, traj_o, traj_r, traj_term = exhaustive_traversion(env, mdl, walk_distance)
     o_start, a_start, r_start, term_start = prepare_data(traj_o, traj_a, traj_r, traj_term, env)
     mem, prim_current = mdl.rollout_primitive(a=a_start, o=o_start, r=r_start, term=term_start,
-                                              n_posterior_steps=-1, sample=False)
+                                              n_posterior_steps=posterior_steps, sample=False)
     mem = mdl.pack_mem(mem)
 
     #prim_s_final = mem['prim_s'][:, -1]

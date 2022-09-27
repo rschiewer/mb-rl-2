@@ -41,7 +41,8 @@ if __name__ == '__main__':
 
     maps_s_mean, maps_s_std = [], []
     for n_step in range(5):
-        _map_s_mean, _map_s_std = gen_value_map_prim(env, mdl, n_step, 's')
+        posterior_steps = max(1, min(n_step, mdl.n_warmup_prim))
+        _map_s_mean, _map_s_std = gen_value_map_prim(env, mdl, n_step, posterior_steps, 'z_post')
         maps_s_mean.append(_map_s_mean)
         maps_s_std.append(_map_s_std)
     maps_s_mean = np.stack(maps_s_mean, axis=0)
