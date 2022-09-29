@@ -230,6 +230,11 @@ class Gridworld(gym.Env):
 
     def find_cell_type(self,
                        type: CellType) -> np.ndarray:
+        """
+        Returns positions of cells having type :type: in (y, x) coordinate format.
+        :param type: Desired cell type
+        :return: numpy array containing the coordinates, 1st dimension is over cells, 2nd dimension over yx coordinates
+        """
         cells = np.argwhere(self._grid == type).squeeze()
         return cells
 
