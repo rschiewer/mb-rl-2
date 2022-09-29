@@ -46,7 +46,7 @@ class Gridworld(gym.Env):
         self.reward = reward
         self.step_reward = step_reward
         self.discount = discount
-        self._current_ep_time = 0
+        self.current_ep_time = 0
 
         self.action_space = gym.spaces.Discrete(n=4)
         self.observation_space = gym.spaces.Box(low=np.array([0, 0]), high=np.array([grid_h - 1, grid_w - 1]),
@@ -128,8 +128,8 @@ class Gridworld(gym.Env):
 
         self._grid.flags.writeable = False
 
-        self._current_ep_time += 1
-        if self._current_ep_time == self.time_limit - 1:
+        self.current_ep_time += 1
+        if self.current_ep_time == self.time_limit - 1:
             done = True
 
         return self.find_cell_type(CellType.AGENT), reward, done, info
@@ -169,7 +169,7 @@ class Gridworld(gym.Env):
             self._grid[tuple(start_pos)] = CellType.AGENT
 
         self._grid.flags.writeable = False
-        self._current_ep_time = 0
+        self.current_ep_time = 0
         return self.find_cell_type(CellType.AGENT)
 
     def render(self, mode="human"):
