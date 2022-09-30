@@ -74,12 +74,22 @@ def np_one_hot(x: np.array,
         raise ValueError('Only integer arrays can be converted to one-hot encoding')
 
     #x = np.squeeze(x, axis=-1)  # remove possible redundant 1-dim data dimension
-    x_onehot = np.zeros((*x.shape, n_categories))
-    x = x[..., np.newaxis]  # make sure x_onehot and x have same number of dimensions
-    np.put_along_axis(x_onehot, x, 1, axis=-1)  # use x as index array for x_onehot and put 1 at respective indices
+    #x = np.expand_dims(x, -1)
+    #x_onehot = np.zeros((*x.shape, n_categories))
+    #x = x[..., np.newaxis]  # make sure x_onehot and x have same number of dimensions
+    #np.put_along_axis(x_onehot, x, 1, axis=-1)  # use x as index array for x_onehot and put 1 at respective indices
 
-    return x_onehot
+    #return x_onehot
 
+    # this solution works with masked arrays as well
+    x = np.expand_dims(x, -1)
+    idx = x.copy()
+    x = np.repeat(x, n_categories, -1)
+    mask = x.mask if isinstance(x, ma.MaskedArray) else np.zeros_like(x, dtype=bool)
+    x[~mask] = 0
+    np.put_along_axis(x, idx, 1, axis=-1)
+
+    return x
 
 def gen_macro_state_map(env: Gridworld,
                         mdl: MultiscaleDynamicsModelMK2,
@@ -301,6 +311,39 @@ def gen_value_map_prim(env: Gridworld,
     #    map_std[:, loc[0], loc[1]] = _s_std
     #
     #return map_mean, map_std
+
+
+def plot_plan(env: Gridworld, traj_history: Dict[str, torch.Tensor], n_plot_steps: int):
+    obs = traj_history['abstr_o'][0, :n_plot_steps]
+    obs = obs.detach().cpu().numpy() + 0.5
+    obs[:, 0] *= (env.grid_h - 1)
+    obs[:, 1] *= (env.grid_w - 1)
+
+    actions = traj_history['prim_a'][0, :n_plot_steps]
+    actions = actions.detach().cpu().numpy().argmax(axis=-1)
+
+    rewards = traj_history['abstr_r'][0, :n_plot_steps].squeeze()
+    rewards = rewards.detach().cpu().numpy()
+
+    terminals = traj_history['abstr_term'][0, :n_plot_steps].squeeze()
+    terminals = terminals.detach().cpu().numpy()
+
+    fig, ax = plt.subplots(1, 2, figsize=(20, 10))
+
+    ax[0].matshow(env.grid)
+    for i, (y, x) in enumerate(obs):
+        c = 'cyan' if i <= env.current_ep_time else 'red'
+        dy, dx = env.move_offset[actions[i]]
+        ax[0].text(x, y, str(i), color=c, fontsize=12, ha='center', va='center')
+        ax[0].arrow(x + dx * 0.2, y + dy * 0.2, dx * 0.2, dy * 0.2, color=c)
+
+    ax[1].grid(True)
+    ax[1].plot(rewards, alpha=0.7, linewidth=2, label='reward')
+    ax[1].plot(terminals, alpha=0.7, label='terminal')
+    ax[1].plot(rewards * np.cumprod(1 - terminals), alpha=0.7, label='discounted rewards')
+
+    plt.legend()
+    plt.show()
 
 
 def transform_macro_s_init_history(macro_s_init_history):
