@@ -37,27 +37,27 @@ class GymEpisodeDriver(Driver):
             ep_iter = tqdm(ep_iter, desc='Collecting Samples')
 
         for i_ep in ep_iter:
-            traj_s, traj_a, traj_r, traj_terminal = [], [], [], []
+            traj_o, traj_a, traj_r, traj_terminal = [], [], [], []
 
-            traj_s.append(self._process_obs(self.env.reset()))
+            traj_o.append(self._process_obs(self.env.reset()))
             traj_a.append(np.zeros_like(self.env.action_space.sample()))  # by convention, make (a_0, r_0, t_0) = 0
             traj_r.append(0)
             traj_terminal.append(False)
 
-            s = traj_s[0]
+            o = traj_o[0]
             terminal = False
             while not terminal:
-                a = self.policy(s)
-                s_, r, terminal, info = self._process_step(self.env.step(a))
+                a = self.policy(o)
+                o_, r, terminal, info = self._process_step(self.env.step(a))
 
-                traj_s.append(s_)
+                traj_o.append(o_)
                 traj_a.append(a)
                 traj_r.append(r)
                 traj_terminal.append(terminal)
 
-                s = s_
+                o = o_
 
-            mem.push(np.array(traj_s), np.array(traj_a), np.array(traj_r), np.array(traj_terminal))
+            mem.push(np.array(traj_o), np.array(traj_a), np.array(traj_r), np.array(traj_terminal))
 
         return mem
 
