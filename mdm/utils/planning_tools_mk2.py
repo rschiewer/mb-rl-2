@@ -98,8 +98,8 @@ def init_abstr_s(model: MultiscaleDynamicsModelMK2,
     assert 0 < history_length <= model.abstract_step_size * n_warmup_abstr, f'History length: {history_length}'
     assert remaining_steps >= 0
 
-    if remaining_steps > 0:
-        raise ValueError('Not supported yet')
+    #if remaining_steps > 0:
+    #    raise ValueError('Not supported yet')
 
     if remaining_steps > 0:
         z_batch = history['prim_z'][:, -1].repeat(n_rollouts, 1)
@@ -418,10 +418,8 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
         _mem, _prim_final = model.rollout_primitive(a=_a, z=z_start, rnn_state=rnn_state_start, sample=False)
         _mem = model.pack_mem(_mem)
 
-        _criterion = - torch.mean((_mem[model.abstr_pred_target][:, -1] - target) ** 2, dim=1, keepdim=True)
-
         # TODO: test KL divergence between distributions
-        #_criterion = - torch.mean((_mem['prim_z'][:, -1] - target) ** 2, dim=1, keepdim=True)
+        _criterion = - torch.mean((_mem[model.abstr_pred_target][:, -1] - target) ** 2, dim=1, keepdim=True)
         _criterion -= torch.mean((_mem['prim_r'].sum(dim=1) - r_goal) ** 2, dim=1, keepdim=True)
         _discount = None
         return _criterion, _discount, _mem
@@ -457,7 +455,7 @@ def plan_section_flexible(model: MultiscaleDynamicsModelMK2,
 
     best_data = None
     best_criterion = np.inf
-    for seq_len in range(model.abstract_step_size - 1, model.abstract_step_size + 1):
+    for seq_len in range(model.abstract_step_size - 2, model.abstract_step_size + 2):
         available_actions = list(range(model.d_action))
         a_seq = np.stack(list(product(available_actions, repeat=seq_len)))
         a_seq = torch.tensor(a_seq, device=model.device)
