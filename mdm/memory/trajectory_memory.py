@@ -8,6 +8,7 @@ import pickle
 
 import torch
 import numpy as np
+import numpy.ma as ma
 
 
 class TrajectoryMemory:
@@ -130,19 +131,28 @@ class TrajectoryMemory:
             dtype = [dtype for _ in range(4)]
 
         mem = {'s': [], 'a': [], 'r': [], 'terminal': []}
+        masks = {'s': [], 'a': [], 'r': [], 'terminal': []}
         for traj in self._mem:
             for (name, data), dt in zip(traj.items(), dtype):
                 data = data.astype(dt)
+                mask = np.zeros_like(data)
                 if len(data) != self._longest_trajectory:
                     diff = self._longest_trajectory - len(data)
                     padding_shape = (diff, *self._shapes[name])
                     if name == 'terminal' and pad_last_terminal_flag:
-                        data = np.concatenate([data, np.full(padding_shape, fill_value=data[-1], dtype=dt)], axis=0)
+                        filler = np.full(padding_shape, fill_value=data[-1], dtype=dt)
                     else:
-                        data = np.concatenate([data, np.full(padding_shape, fill_value=padding, dtype=dt)], axis=0)
+                        filler = np.full(padding_shape, fill_value=padding, dtype=dt)
+                    #pad_values = [(0, diff)]
+                    #pad_values += [(0, 0) for _ in range(data.ndim - 1)]
+                    #data = np.pad(data, pad_values, 'constant', constant_values=0)
+                    data = np.concatenate([data, filler], axis=0)
+                    mask = np.concatenate([mask, np.ones_like(filler)], axis=0)
                 mem[name].append(data)
+                masks[name].append(mask)
 
-        mem = [np.array(data) for data in mem.values()]
+        mem = [ma.array(data, mask=mask) for data, mask in zip(mem.values(), masks.values())]
+
         return tuple(mem)
 
     @staticmethod
