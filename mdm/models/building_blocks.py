@@ -232,12 +232,14 @@ class RSSM(torch.nn.Module):
         r_dist = self._build_r_dist(s)
         term_dist = self._build_terminal_dist(s)
 
-        if sample:
-            o_smpl = sample_from_gaussian(o_dist)
-            r_smpl = sample_from_gaussian(r_dist)
-        else:
-            o_smpl = get_mu(o_dist)
-            r_smpl = get_mu(r_dist)
+        #if sample:
+        #    o_smpl = sample_from_gaussian(o_dist)
+        #    r_smpl = sample_from_gaussian(r_dist)
+        #else:
+        #    o_smpl = get_mu(o_dist)
+        #    r_smpl = get_mu(r_dist)
+        o_smpl = get_mu(o_dist)
+        r_smpl = get_mu(r_dist)
         term_smpl = term_dist
 
         return {'z': z_smpl, 'z_prior': z_prior, 'z_post': z_post, 'h': h, 's': s, 'o_dist': o_dist, 'o': o_smpl,
