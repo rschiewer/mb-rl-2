@@ -16,7 +16,7 @@ class TrajectoryMemoryTest(unittest.TestCase):
             size = (tens_len, *shape)
             if np.issubdtype(dtype, np.integer):
                 return np.random.default_rng().integers(0, 10, size=size, dtype=dtype)
-            elif np.issubdtype(dtype, np.bool):
+            elif np.issubdtype(dtype, bool):
                 return np.random.default_rng().choice([True, False], size=size)
             else:
                 return np.random.default_rng().uniform(size=size)
@@ -133,7 +133,7 @@ class TrajectoryMemoryTest(unittest.TestCase):
                     self.assertTrue((np_data[:l_orig] == traj_data).all())
                     # padded part should all be the padding value
                     if l_diff > 0:
-                        self.assertTrue((np_data[l_orig:] == fill_value).all())
+                        self.assertTrue((np_data[l_orig:].data == fill_value).all())
 
     def test_to_numpy_arrays_repeat_last_terminal(self):
         for t in self.trajectories:
@@ -158,7 +158,7 @@ class TrajectoryMemoryTest(unittest.TestCase):
                     # padded part should all be the padding value
                     if l_diff > 0:
                         cmp_val = traj_data[-1] if name == 'terminal' else fill_value
-                        self.assertTrue((np_data[l_orig:] == cmp_val).all())
+                        self.assertTrue((np_data[l_orig:].data == cmp_val).all())
 
     def test_getitem_slice(self):
         for t in self.trajectories:
