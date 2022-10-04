@@ -59,7 +59,8 @@ def remove_duplicates_mp(mem: TrajectoryMemory, n_proc: int = 10):
 
 
 if __name__ == '__main__':
-    env = Gridworld.from_cleartext(here() / '../../mdm/gridworld/8x8_v1.mapdata')
+    map_version = 'v1'
+    env = Gridworld.from_cleartext(here() / f'../../mdm/gridworld/8x8_{map_version}.mapdata')
     n_episodes_train = 50000
     perc_test = 0.10
 
@@ -86,7 +87,7 @@ if __name__ == '__main__':
     #train_mem = train_mem[n_episodes_test:]
     #test_mem = train_mem[:n_episodes_test]
 
-    TrajectoryMemory.store(train_mem, here() / 'gridworld_train.samples')
-    TrajectoryMemory.store(test_mem, here() / 'gridworld_test.samples')
+    TrajectoryMemory.store(train_mem, here() / f'gridworld_{map_version}_train.samples')
+    TrajectoryMemory.store(test_mem, here() / f'gridworld_{map_version}_test.samples')
 
 
