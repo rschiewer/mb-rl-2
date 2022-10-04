@@ -6,6 +6,7 @@ from tqdm import tqdm
 
 from mdm.training.driver import Driver
 from mdm.memory.trajectory_memory import TrajectoryMemory
+from mdm.utils.utils import compute_returns
 
 
 class GymEpisodeDriver(Driver):
@@ -59,6 +60,7 @@ class GymEpisodeDriver(Driver):
 
             mem.push(np.array(traj_o), np.array(traj_a), np.array(traj_r), np.array(traj_terminal))
 
+        compute_returns(mem, 0.99)
         return mem
 
 
