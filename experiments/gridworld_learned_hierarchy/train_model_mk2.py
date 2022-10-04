@@ -13,7 +13,7 @@ from mdm.models.building_blocks import RSSM, AbstractActionModel
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.training.dynamics_model_trainer import DynamicsModelTrainer
 from mdm.memory.trajectory_memory import TrajectoryMemory
-from mdm.training.offline_rl_driver import OfflineRLDriver
+from mdm.training.offline_rl_driver import OfflineRLDriver, SamplingType
 from mdm.logging.neptune_logger import NeptuneLogger
 from mdm.logging.not_logger import NotLogger
 from mdm.logging.logger import Scope
@@ -65,10 +65,10 @@ if __name__ == '__main__':
     # build data pipeline
     train_mem = TrajectoryMemory.load(here() / cfg['train_samples'])
     compute_returns(train_mem)
-    train_driver = OfflineRLDriver(train_mem, shuffle=True)
+    train_driver = OfflineRLDriver(train_mem, sampling_type=SamplingType.PRIORITIZED)
     test_mem = TrajectoryMemory.load(here() / cfg['test_samples'])
     compute_returns(test_mem)
-    test_driver = OfflineRLDriver(test_mem, shuffle=True)
+    test_driver = OfflineRLDriver(test_mem, sampling_type=SamplingType.RANDOM)
     d_batch, pad = cfg['trainer']['d_batch'], cfg['trainer']['pad_last_terminal_flag']
 
 
