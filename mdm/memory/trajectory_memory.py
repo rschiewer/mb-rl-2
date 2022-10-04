@@ -55,6 +55,11 @@ class TrajectoryMemory:
             view = self.get_view()
             view._mem = self._mem[index]
             return view
+        elif type(index) in (list, tuple):
+            # note: this view will inherit the value of self.longest_trajectory even if it contains only shorter ones
+            view = self.get_view()
+            view._mem = [self._mem[i] for i in index]
+            return view
 
         return self._mem[index]
 
@@ -130,12 +135,12 @@ class TrajectoryMemory:
                      pad_last_terminal_flag: bool = True,
                      dtype: Union[np.dtype, Iterable[np.dtype]] = None):
         if dtype is None:
-            dtype = self._dtypes
+            dtype = {**self._dtypes, 'w': float}
         elif isinstance(dtype, Iterable):
             if len(list(dtype)) != 5:
                 raise ValueError(f'If dtype argument is an iterable, expected length is 5, got {len(list(dtype))}')
             if isinstance(dtype, (list, tuple)):
-                dtype = {name: dt for name, dt in zip(self._dtypes.keys(), dtype)}
+                dtype = {name: dt for name, dt in zip([*self._dtypes.keys(), 'w'], dtype)}
         else:
             dtype = {name: dtype for name in self._dtypes.keys()}
 
@@ -145,7 +150,7 @@ class TrajectoryMemory:
         for traj in self._mem:
             for name, data in traj.items():
                 if name == 'w':
-                    mem[name].append(np.dtype(dtype).type(data))
+                    mem[name].append(np.dtype(dtype[name]).type(data))
                     masks[name].append(False)
                 else:
                     mask = np.zeros_like(data)
