@@ -71,15 +71,16 @@ if __name__ == '__main__':
 
 
     def get_batch_train():
-        s, a, r, terminal = train_driver.interact(d_batch).to_np_arrays(dtype=np.float32, pad_last_terminal_flag=pad)
+        s, a, r, terminal, w = train_driver.interact(d_batch).to_np_arrays(dtype=np.float32, pad_last_terminal_flag=pad)
         s, a, r, terminal = prepare_data(s, a, r, terminal, env)
         return s, a, r, terminal
 
 
     def get_batch_test():
-        s, a, r, terminal = test_driver.interact(d_batch).to_np_arrays(dtype=np.float32, pad_last_terminal_flag=pad)
+        s, a, r, terminal, w = test_driver.interact(d_batch).to_np_arrays(dtype=np.float32, pad_last_terminal_flag=pad)
         s, a, r, terminal = prepare_data(s, a, r, terminal, env)
         return s, a, r, terminal
+
 
     #loader_train = ConcurrentDataLoader(get_batch_train, queue_len=10)
     #loader_test = ConcurrentDataLoader(get_batch_test, queue_len=10)
@@ -111,6 +112,7 @@ if __name__ == '__main__':
             logger.log_plot(Image.open(buffer), Scope.PARAMETERS() / 'abstr_a_stats/plots', i_step)
             logger.log({'abstr_a_mean': Y_mean.mean(), 'abstr_a_std': Y_std.mean()},
                        Scope.PARAMETERS() / 'abstr_a_stats', i_step)
+
 
 
     def train_callback(i_step: int):

@@ -1,7 +1,7 @@
 from __future__ import annotations
 from collections import deque
 from pathlib import Path
-from typing import Dict, List, Iterable, Sequence, Union, Tuple
+from typing import Dict, List, Iterable, Sequence, Union, Tuple, Optional, Callable
 from copy import copy, deepcopy
 import random
 import pickle
@@ -15,7 +15,7 @@ class TrajectoryMemory:
 
     def __init__(self,
                  init_mem: Iterable = None):
-        self._mem = list()#deque()
+        self._mem = list()
         self._shapes = None
         self._dtypes = None
         self._longest_trajectory = 0
@@ -24,9 +24,9 @@ class TrajectoryMemory:
             for elem in init_mem:
                 try:
                     if type(elem) is dict:
-                        self.push(elem['s'], elem['a'], elem['r'], elem['terminal'])
+                        self.push(**elem)
                     elif isinstance(elem, Sequence):
-                        self.push(elem[0], elem[1], elem[2], elem[3])
+                        self.push(*elem)
                     else:
                         raise ValueError('Unknown content in init_mem, elements should have type dict, list or tuple '
                                          f'but are of type {type(elem)}')
@@ -34,7 +34,7 @@ class TrajectoryMemory:
                     raise ValueError('Expected dict keys of elements are "s", "a", "r" and "terminal", found: '
                                      f'{elem.keys()}')
                 except IndexError:
-                    raise ValueError(f'Expected length of elements is 4, found {len(elem)}')
+                    raise ValueError(f'Expected length of elements is 5, found {len(elem)}')
 
     @property
     def shapes(self):
@@ -55,6 +55,7 @@ class TrajectoryMemory:
             view = self.get_view()
             view._mem = self._mem[index]
             return view
+
         return self._mem[index]
 
     def __len__(self) -> int:
@@ -90,7 +91,7 @@ class TrajectoryMemory:
         random.shuffle(view._mem)
         return view
 
-    def push(self, s, a, r, terminal) -> None:
+    def push(self, s, a, r, terminal, w: float = 1.0) -> None:
         if self._shapes is None:
             self._shapes = self._detect_shapes(s, a, r, terminal)
             self._dtypes = self._detect_dtypes(s, a, r, terminal)
@@ -112,55 +113,72 @@ class TrajectoryMemory:
             raise ValueError('Expected first reward to be zero by convention')
         if not np.all(terminal[0] == 0):
             raise ValueError('Expected first terminal flag to be zero by convention')
+        if not np.ndim(w) == 0:
+            raise ValueError(f'Weight must be a float, but has {np.ndim(w)} dimensions')
+        #if not type(w) is (int, float):
+        #    raise ValueError(f'Weight must be of dtype float but is: {np.array(w).dtype}')
+        w = float(w)
 
         if len(s) > self._longest_trajectory:
             self._longest_trajectory = len(s)
 
-        self._mem.append({'s': np.array(s), 'a': np.array(a), 'r': np.array(r), 'terminal': np.array(terminal)})
+        self._mem.append({'s': np.array(s), 'a': np.array(a), 'r': np.array(r), 'terminal': np.array(terminal),
+                          'w': w})
 
     def to_np_arrays(self,
                      padding: float = 0,
                      pad_last_terminal_flag: bool = True,
                      dtype: Union[np.dtype, Iterable[np.dtype]] = None):
         if dtype is None:
-            dtype = self._dtypes.values()
+            dtype = self._dtypes
         elif isinstance(dtype, Iterable):
-            if len(list(dtype)) != 4:
-                raise ValueError(f'If dtype argument is an iterable, expected length is 4, got {len(list(dtype))}')
+            if len(list(dtype)) != 5:
+                raise ValueError(f'If dtype argument is an iterable, expected length is 5, got {len(list(dtype))}')
+            if isinstance(dtype, (list, tuple)):
+                dtype = {name: dt for name, dt in zip(self._dtypes.keys(), dtype)}
         else:
-            dtype = [dtype for _ in range(4)]
+            dtype = {name: dtype for name in self._dtypes.keys()}
 
-        mem = {'s': [], 'a': [], 'r': [], 'terminal': []}
-        masks = {'s': [], 'a': [], 'r': [], 'terminal': []}
+        mem = {'s': [], 'a': [], 'r': [], 'terminal': [], 'w': []}
+        masks = {'s': [], 'a': [], 'r': [], 'terminal': [], 'w': []}
+
         for traj in self._mem:
-            for (name, data), dt in zip(traj.items(), dtype):
-                data = data.astype(dt)
-                mask = np.zeros_like(data)
-                if len(data) != self._longest_trajectory:
-                    diff = self._longest_trajectory - len(data)
-                    padding_shape = (diff, *self._shapes[name])
-                    if name == 'terminal' and pad_last_terminal_flag:
-                        filler = np.full(padding_shape, fill_value=data[-1], dtype=dt)
-                    else:
-                        filler = np.full(padding_shape, fill_value=padding, dtype=dt)
-                    #pad_values = [(0, diff)]
-                    #pad_values += [(0, 0) for _ in range(data.ndim - 1)]
-                    #data = np.pad(data, pad_values, 'constant', constant_values=0)
-                    data = np.concatenate([data, filler], axis=0)
-                    mask = np.concatenate([mask, np.ones_like(filler)], axis=0)
-                mem[name].append(data)
-                masks[name].append(mask)
+            for name, data in traj.items():
+                if name == 'w':
+                    mem[name].append(np.dtype(dtype).type(data))
+                    masks[name].append(False)
+                else:
+                    mask = np.zeros_like(data)
+                    if len(data) != self._longest_trajectory:
+                        diff = self._longest_trajectory - len(data)
+                        padding_shape = (diff, *self._shapes[name])
+                        if name == 'terminal' and pad_last_terminal_flag:
+                            filler = np.full(padding_shape, fill_value=data[-1], dtype=dtype[name])
+                        else:
+                            filler = np.full(padding_shape, fill_value=padding, dtype=dtype[name])
+                        #pad_values = [(0, diff)]
+                        #pad_values += [(0, 0) for _ in range(data.ndim - 1)]
+                        #data = np.pad(data, pad_values, 'constant', constant_values=0)
+                        data = np.concatenate([data, filler], axis=0)
+                        mask = np.concatenate([mask, np.ones_like(filler)], axis=0)
+                    mem[name].append(data)
+                    masks[name].append(mask)
 
         mem = [ma.array(data, mask=mask) for data, mask in zip(mem.values(), masks.values())]
-
         return tuple(mem)
+
+    def sort(self, key: 'str' = 'w', reverse: bool = False):
+        key_fn = lambda elem: elem[key]
+        self._mem.sort(key=key_fn, reverse=reverse)
 
     @staticmethod
     def cmp_trajectories(t1: Dict[str, np.ndarray],
                          t2: Dict[str, np.ndarray]):
         for k, v in t1.items():
-            if v.shape != t2[k].shape or np.any(v != t2[k]):
-                return False
+            if k == 'w': continue
+            else:
+                if v.shape != t2[k].shape or np.any(v != t2[k]):
+                    return False
         return True
 
     @staticmethod
@@ -177,15 +195,20 @@ class TrajectoryMemory:
 
     @staticmethod
     def _detect_dtypes(s, a, r, terminal) -> Dict:
-        return {k: np.array(x).dtype for k, x in zip(('s', 'a', 'r', 'terminal'), (s, a, r, terminal))}
+        data_dtypes = {k: np.array(x).dtype for k, x in zip(('s', 'a', 'r', 'terminal'), (s, a, r, terminal))}
+        return data_dtypes
 
     @staticmethod
     def _detect_shapes(s, a, r, terminal) -> Dict:
-        return {k: np.shape(x)[1:] for k, x in zip(('s', 'a', 'r', 'terminal'), (s, a, r, terminal))}
+        data_shapes = {k: np.shape(x)[1:] for k, x in zip(('s', 'a', 'r', 'terminal'), (s, a, r, terminal))}
+        return data_shapes
+
 
     @staticmethod
     def _detect_lengths(s, a, r, terminal) -> Dict:
-        return {k: np.shape(x)[0] for k, x in zip(('s', 'a', 'r', 'terminal'), (s, a, r, terminal))}
+        data_lengths = {k: np.shape(x)[0] for k, x in zip(('s', 'a', 'r', 'terminal'), (s, a, r, terminal))}
+        data_lengths['w'] = 0
+        return data_lengths
 
     @staticmethod
     def _dtypes_match(dt0: Dict,
@@ -221,18 +244,3 @@ def flatten_and_unsqueeze(*xs: Union[torch.Tensor, np.ndarray]) -> Union[Tuple[t
         reshaped = reshaped[0]
 
     return reshaped
-
-
-def flatten_and_unsqueeze_old(s: np.array, a: np.array, r: np.array, terminal: np.array):
-    # flatten data dimensions if multiple or add explicit 1-sized data dimension if there is none
-    d_s = np.prod(s.shape[2:]) if len(s.shape) >= 3 else 1
-    d_a = np.prod(a.shape[2:]) if len(a.shape) >= 3 else 1
-    d_r = np.prod(r.shape[2:]) if len(r.shape) >= 3 else 1
-    d_term = np.prod(terminal.shape[2:]) if len(terminal.shape) >= 3 else 1
-
-    s = s.reshape((*s.shape[:2], d_s))
-    a = a.reshape((*a.shape[:2], d_a))  # mind: there is one more state than actions, rewards and terminal flags
-    r = r.reshape((*r.shape[:2], d_r))
-    terminal = terminal.reshape((*terminal.shape[:2], d_term))
-
-    return s, a, r, terminal

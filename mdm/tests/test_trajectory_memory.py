@@ -1,4 +1,5 @@
 import copy
+import random
 import unittest
 from random import shuffle
 from typing import Dict
@@ -115,7 +116,7 @@ class TrajectoryMemoryTest(unittest.TestCase):
             self.mem.push(**t)
 
         for fill_value in [0, 1, 42]:
-            ss_, as_, rs_, terminals_ = self.mem.to_np_arrays(padding=fill_value, pad_last_terminal_flag=False)
+            ss_, as_, rs_, terminals_, w_ = self.mem.to_np_arrays(padding=fill_value, pad_last_terminal_flag=False)
 
             for x in [ss_, as_, rs_, terminals_]:
                 self.assertEqual(x.shape[0], self.n_trajectories)
@@ -140,7 +141,8 @@ class TrajectoryMemoryTest(unittest.TestCase):
             self.mem.push(**t)
 
         for fill_value in [0, 1, 42]:
-            ss_, as_, rs_, terminals_ = self.mem.to_np_arrays(padding=fill_value, pad_last_terminal_flag=True)
+            ss_, as_, rs_, terminals_, w_ = self.mem.to_np_arrays(padding=fill_value, pad_last_terminal_flag=True)
+            self.assertTrue(np.all(w_ == 1))
 
             for x in [ss_, as_, rs_, terminals_]:
                 self.assertEqual(x.shape[0], self.n_trajectories)
@@ -212,8 +214,10 @@ class TrajectoryMemoryTest(unittest.TestCase):
             traj_orig = self.trajectories[i]
             traj_shuffled = shuffled[i]
             equal = all([np.all(lhs == rhs) for lhs, rhs in zip(traj_mem.values(), traj_orig.values())])
-            mismatches += np.sum([lhs.shape[0] != rhs.shape[0]  # trajectory lengths should differ in some cases
-                                  for lhs, rhs in zip(traj_mem.values(), traj_shuffled.values())])
+            mismatches = 0
+            for (name, lhs), rhs in zip(traj_mem.items(), traj_shuffled.values()):
+                if name == 'w': continue
+                mismatches += lhs.shape[0] != rhs.shape[0]
             self.assertTrue(equal)
         self.assertNotEqual(mismatches, 0)
 
@@ -266,6 +270,39 @@ class TrajectoryMemoryTest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             added = self.mem + other
+
+    def test_weights_basic(self):
+        for t in self.trajectories:
+            self.mem.push(**t)
+
+        for i, t in enumerate(self.mem):
+            assert t['w'] == 1.0
+
+    def test_weights_advanced(self):
+        for i, t in enumerate(self.trajectories):
+            self.mem.push(**{**t, 'w': i})
+
+        for i, t in enumerate(self.mem):
+            assert t['w'] == i
+
+    def test_sort(self):
+        weights = [i for i in range(len(self.trajectories))]
+        random.shuffle(weights)
+        for w, t in zip(weights, self.trajectories):
+            self.mem.push(**{**t, 'w': w})
+
+        for w, t in zip(weights, self.mem):
+            self.assertEqual(t['w'], w)
+
+        weights_sorted = sorted(weights)
+        view = self.mem.get_view()
+        view.sort('w')
+
+        for w, t in zip(weights, self.mem):
+            self.assertEqual(t['w'], w)
+
+        for w, t in zip(weights_sorted, view):
+            self.assertEqual(t['w'], w)
 
 
 if __name__ == '__main__':

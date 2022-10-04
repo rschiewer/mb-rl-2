@@ -74,12 +74,12 @@ if __name__ == '__main__':
 
     # train model
     def get_batch_train():
-        s, a, r, terminal = train_driver.interact(trainer_d_batch).to_np_arrays(dtype=np.float32, pad_last_terminal_flag=False)
+        s, a, r, terminal, w = train_driver.interact(trainer_d_batch).to_np_arrays(dtype=np.float32, pad_last_terminal_flag=False)
         s, a, r, terminal = prepare_data(s, a, r, terminal, env)
         return s, a, r, terminal
 
     def get_batch_test():
-        s, a, r, terminal = test_driver.interact(trainer_d_batch).to_np_arrays(dtype=np.float32, pad_last_terminal_flag=False)
+        s, a, r, terminal, w = test_driver.interact(trainer_d_batch).to_np_arrays(dtype=np.float32, pad_last_terminal_flag=False)
         s, a, r, terminal = prepare_data(s, a, r, terminal, env)
         return s, a, r, terminal
 
