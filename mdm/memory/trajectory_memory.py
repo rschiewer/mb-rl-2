@@ -148,7 +148,7 @@ class TrajectoryMemory:
             if isinstance(dtype, (list, tuple)):
                 dtype = {name: dt for name, dt in zip([*self._dtypes.keys(), 'w'], dtype)}
         else:
-            dtype = {name: dtype for name in self._dtypes.keys()}
+            dtype = {name: dtype for name in (*self._dtypes.keys(), 'w')}
 
         mem = {'s': [], 'a': [], 'r': [], 'terminal': [], 'w': []}
         masks = {'s': [], 'a': [], 'r': [], 'terminal': [], 'w': []}
