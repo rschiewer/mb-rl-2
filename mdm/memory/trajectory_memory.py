@@ -183,7 +183,7 @@ class TrajectoryMemory:
         self._mem.sort(key=key_fn, reverse=reverse)
         self._modified = True
 
-    def rebuild_sampling_cache(self):
+    def mark_modified(self):
         self._modified = True
 
     def _get_sampling_weights(self):
