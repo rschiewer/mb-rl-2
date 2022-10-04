@@ -178,7 +178,7 @@ class TrajectoryMemory:
         mem = [ma.array(data, mask=mask) for data, mask in zip(mem.values(), masks.values())]
         return tuple(mem)
 
-    def sort(self, key: 'str' = 'w', reverse: bool = False):
+    def sort(self, key: str = 'w', reverse: bool = False):
         key_fn = lambda elem: elem[key]
         self._mem.sort(key=key_fn, reverse=reverse)
         self._modified = True
