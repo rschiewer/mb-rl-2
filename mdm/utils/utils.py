@@ -16,7 +16,7 @@ import pandas as pd
 
 from mdm.gridworld.gridworld import Gridworld, CellType
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
-from mdm.memory.trajectory_memory import flatten_and_unsqueeze
+from mdm.memory.trajectory_memory import flatten_and_unsqueeze, TrajectoryMemory
 from mdm.utils.torch_tools import add_time_dim, get_mu, get_sigma, unpack_rnn_state, pack_rnn_state
 
 
@@ -455,6 +455,17 @@ def prepare_data(s: Union[np.ndarray, torch.Tensor],
     s = normalize_obs(s, env)
     a = to_onehot(a, env.action_space.n)  # don't care about the action being [1, 0, ... ] if it's always this way
     return s, a, r, terminal
+
+
+def compute_returns(mem: TrajectoryMemory, gamma: float = 0.99):
+    s, a, r, term, w = mem.to_np_arrays()
+    disc_mat = np.cumprod(np.full_like(r, fill_value=gamma), axis=1)
+    disc_mat = np.roll(disc_mat, 1, axis=1)
+    disc_mat[:, 0] = 1
+    ep_returns = np.sum(r * disc_mat, axis=1)
+    for t, R  in zip(mem, ep_returns):
+        t['w'] = R
+    mem.mark_modified()
 
 
 def discrete_stats(module: torch.nn.Module, n_inputs: int, seq_len: int, n_repetitions: int = 1):

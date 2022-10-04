@@ -8,7 +8,7 @@ import numpy as np
 from PIL import Image
 
 from mdm.gridworld.gridworld import Gridworld
-from mdm.utils.utils import here, load_yaml, prepare_data, fill_placeholders, discrete_stats
+from mdm.utils.utils import here, load_yaml, prepare_data, fill_placeholders, discrete_stats, compute_returns
 from mdm.models.building_blocks import RSSM, AbstractActionModel
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.training.dynamics_model_trainer import DynamicsModelTrainer
@@ -64,8 +64,10 @@ if __name__ == '__main__':
 
     # build data pipeline
     train_mem = TrajectoryMemory.load(here() / cfg['train_samples'])
+    compute_returns(train_mem)
     train_driver = OfflineRLDriver(train_mem, shuffle=True)
     test_mem = TrajectoryMemory.load(here() / cfg['test_samples'])
+    compute_returns(test_mem)
     test_driver = OfflineRLDriver(test_mem, shuffle=True)
     d_batch, pad = cfg['trainer']['d_batch'], cfg['trainer']['pad_last_terminal_flag']
 
