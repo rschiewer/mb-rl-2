@@ -159,7 +159,7 @@ class TrajectoryMemory:
     def cmp_trajectories(t1: Dict[str, np.ndarray],
                          t2: Dict[str, np.ndarray]):
         for k, v in t1.items():
-            if np.any(v != t2[k]):
+            if v.shape != t2[k].shape or np.any(v != t2[k]):
                 return False
         return True
 
