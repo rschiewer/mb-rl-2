@@ -183,6 +183,16 @@ class TrajectoryMemoryTest(unittest.TestCase):
         self.mem.push(**self.trajectories[0])
         self.assertEqual(sub_mem[-1], self.mem[-2])
 
+    def test_getitem_list(self):
+        for t in self.trajectories:
+            self.mem.push(**t)
+
+        indices = [5, 10, 15, 20]
+        sub_mem = self.mem[indices]
+
+        for i_t, t in zip(indices, sub_mem):
+            self.assertTrue(sub_mem.cmp_trajectories(t, self.trajectories[i_t]))
+
     def test_get_view(self):
         empty_view = self.mem.get_view()
 
