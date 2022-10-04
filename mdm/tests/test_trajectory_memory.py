@@ -314,6 +314,27 @@ class TrajectoryMemoryTest(unittest.TestCase):
         for w, t in zip(weights_sorted, view):
             self.assertEqual(t['w'], w)
 
+    def test_sample(self):
+        d_batch = 32
+
+        for i, t in enumerate(self.trajectories):
+            self.mem.push(**{**t, 'w': i})
+
+        self.assertEqual(self.mem._weights_cache, None)
+
+        batch = self.mem.sample(d_batch, prioritized=False)
+        self.assertEqual(self.mem._weights_cache, None)
+        self.assertEqual(len(batch), d_batch)
+
+        avg_weight_random = np.mean([t['w'] for t in batch])
+
+        batch = self.mem.sample(d_batch, prioritized=True)
+        self.assertTrue(np.all(self.mem._weights_cache != None))
+        self.assertEqual(len(batch), d_batch)
+
+        avg_weight_prioritized = np.mean([t['w'] for t in batch])
+
+        self.assertGreater(avg_weight_prioritized, avg_weight_random)
 
 if __name__ == '__main__':
     unittest.main()
