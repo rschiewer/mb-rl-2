@@ -63,10 +63,10 @@ if __name__ == '__main__':
     # optimizer = torch.optim.AdamW(model.parameters(), **cfg['optim'])
 
     # build data pipeline
-    train_mem = TrajectoryMemory.load(here() / cfg['train_samples']).shuffle()
-    train_driver = OfflineRLDriver(train_mem)
-    test_mem = TrajectoryMemory.load(here() / cfg['test_samples']).shuffle()
-    test_driver = OfflineRLDriver(test_mem)
+    train_mem = TrajectoryMemory.load(here() / cfg['train_samples'])
+    train_driver = OfflineRLDriver(train_mem, shuffle=True)
+    test_mem = TrajectoryMemory.load(here() / cfg['test_samples'])
+    test_driver = OfflineRLDriver(test_mem, shuffle=True)
     d_batch, pad = cfg['trainer']['d_batch'], cfg['trainer']['pad_last_terminal_flag']
 
 
