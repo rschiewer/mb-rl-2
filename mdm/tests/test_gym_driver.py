@@ -48,7 +48,7 @@ class GymEpisodeDriverTest(unittest.TestCase):
             for env in self.envs:
                 env.seed(self.rand_seed + batch_size)
                 np.random.seed(self.rand_seed + batch_size)
-                collector = GymEpisodeDriver(env, lambda s: env.action_space.sample())
+                collector = GymEpisodeDriver(env, lambda s, r, term: env.action_space.sample())
 
                 trajectories = []
                 for _ in range(self.num_batches):

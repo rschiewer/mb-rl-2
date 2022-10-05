@@ -64,7 +64,7 @@ if __name__ == '__main__':
     n_episodes_train = 50000
     perc_test = 0.10
 
-    def collect_policy(observation):
+    def collect_policy(observation, reward, terminal):
         return env.action_space.sample()
 
     collect_driver = GymEpisodeDriver(env, collect_policy)

@@ -45,10 +45,9 @@ class GymEpisodeDriver(Driver):
             traj_r.append(0)
             traj_terminal.append(False)
 
-            o = traj_o[0]
             terminal = False
             while not terminal:
-                a = self.policy(o)
+                a = self.policy(traj_o[-1], traj_r[-1], traj_terminal[-1])
                 o_, r, terminal, info = self._process_step(self.env.step(a))
 
                 traj_o.append(o_)
