@@ -18,7 +18,7 @@ class TrajectoryMemory:
         self._mem = list()
         self._shapes = None
         self._dtypes = None
-        self._recompute_weights = False
+        self._recompute_weights = True
         self._weights_cached = None
         self._indices_cached = None
         self._longest_trajectory_cached = 0

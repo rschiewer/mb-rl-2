@@ -69,7 +69,8 @@ class RSSM(torch.nn.Module):
                  term_lws: Sequence[int] = (32, 32),
                  layer_norm: bool = False,
                  activation: str = 'relu',
-                 rnn_type: str = 'lstm'):
+                 rnn_type: str = 'lstm',
+                 stochastic_outputs: bool = True):
         super().__init__()
 
         self.d_z = d_z
@@ -85,6 +86,7 @@ class RSSM(torch.nn.Module):
         self.layer_norm = layer_norm
         self.activation = activation
         self.rnn_type = rnn_type
+        self.stochastic_outputs = stochastic_outputs
 
         z_prior_lws = (d_h, *z_prior_lws, d_z * 2)
         z_post_lws = (d_h + d_z * 2 + d_x_posterior, *z_post_lws, d_z * 2)
@@ -232,14 +234,14 @@ class RSSM(torch.nn.Module):
         r_dist = self._build_r_dist(s)
         term_dist = self._build_terminal_dist(s)
 
-        #if sample:
-        #    o_smpl = sample_from_gaussian(o_dist)
-        #    r_smpl = sample_from_gaussian(r_dist)
-        #else:
-        #    o_smpl = get_mu(o_dist)
-        #    r_smpl = get_mu(r_dist)
-        o_smpl = get_mu(o_dist)
-        r_smpl = get_mu(r_dist)
+        if sample and self.stochastic_outputs:
+            o_smpl = sample_from_gaussian(o_dist)
+            r_smpl = sample_from_gaussian(r_dist)
+        else:
+            o_smpl = get_mu(o_dist)
+            r_smpl = get_mu(r_dist)
+        #o_smpl = get_mu(o_dist)
+        #r_smpl = get_mu(r_dist)
         term_smpl = term_dist
 
         return {'z': z_smpl, 'z_prior': z_prior, 'z_post': z_post, 'h': h, 's': s, 'o_dist': o_dist, 'o': o_smpl,

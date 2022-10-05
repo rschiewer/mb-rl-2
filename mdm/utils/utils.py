@@ -463,7 +463,7 @@ def compute_returns(mem: TrajectoryMemory, gamma: float = 0.99):
     disc_mat = np.roll(disc_mat, 1, axis=1)
     disc_mat[:, 0] = 1
     ep_returns = np.sum(r * disc_mat, axis=1)
-    for t, R  in zip(mem, ep_returns):
+    for t, R in zip(mem, ep_returns):
         t['w'] = R
     mem.mark_modified()
 
