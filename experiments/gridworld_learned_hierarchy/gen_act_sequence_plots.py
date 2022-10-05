@@ -5,7 +5,6 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns; sns.set_theme()
-from sklearn.cluster import KMeans
 
 from mdm.gridworld.gridworld import Gridworld
 from mdm.models.multiscale_model import MultiscaleDynamicsModel
