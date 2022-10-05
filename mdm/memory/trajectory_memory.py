@@ -49,6 +49,10 @@ class TrajectoryMemory:
 
     @property
     def longest_trajectory(self):
+        if self._modified:
+            self._longest_trajectory = 0
+            for traj in self._mem:
+                self._longest_trajectory = max(self._longest_trajectory, len(traj['s']))
         return self._longest_trajectory
 
     def __getitem__(self,
@@ -78,7 +82,6 @@ class TrajectoryMemory:
                                  f'mismatch')
 
         ret = self.get_view()
-        ret._longest_trajectory = max(self._longest_trajectory, other._longest_trajectory)
         ret._mem += other._mem
         ret._modified = True
         return ret
@@ -89,7 +92,7 @@ class TrajectoryMemory:
         Adding content to this view will not change the original memory but add to the view's list of samples.
         :return: the view
         """
-        view = copy(self)
+        view = copy(self)  # start with a basic copy, handle the deepcpoies and details below
         view._mem = self._mem[:]  # see https://docs.python.org/3/library/copy.html
         view._shapes = deepcopy(self._shapes)
         view._dtypes = deepcopy(self._dtypes)
@@ -129,11 +132,7 @@ class TrajectoryMemory:
         #    raise ValueError(f'Weight must be of dtype float but is: {np.array(w).dtype}')
         w = float(w)
 
-        if len(s) > self._longest_trajectory:
-            self._longest_trajectory = len(s)
-
-        self._mem.append({'s': np.array(s), 'a': np.array(a), 'r': np.array(r), 'terminal': np.array(terminal),
-                          'w': w})
+        self._mem.append({'s': np.array(s), 'a': np.array(a), 'r': np.array(r), 'terminal': np.array(terminal), 'w': w})
         self._modified = True
 
     def to_np_arrays(self,
@@ -148,7 +147,7 @@ class TrajectoryMemory:
             if isinstance(dtype, (list, tuple)):
                 dtype = {name: dt for name, dt in zip([*self._dtypes.keys(), 'w'], dtype)}
         else:
-            dtype = {name: dtype for name in (*self._dtypes.keys(), 'w')}
+            dtype = {name: dtype for name in [*self._dtypes.keys(), 'w']}
 
         mem = {'s': [], 'a': [], 'r': [], 'terminal': [], 'w': []}
         masks = {'s': [], 'a': [], 'r': [], 'terminal': [], 'w': []}
@@ -160,8 +159,8 @@ class TrajectoryMemory:
                     masks[name].append(False)
                 else:
                     mask = np.zeros_like(data)
-                    if len(data) != self._longest_trajectory:
-                        diff = self._longest_trajectory - len(data)
+                    if len(data) != self.longest_trajectory:
+                        diff = self.longest_trajectory - len(data)
                         padding_shape = (diff, *self._shapes[name])
                         if name == 'terminal' and pad_last_terminal_flag:
                             filler = np.full(padding_shape, fill_value=data[-1], dtype=dtype[name])
@@ -207,7 +206,7 @@ class TrajectoryMemory:
             weights = None
         indices = self._get_sampling_indices()
 
-        indices = np.random.choice(indices, size=n_trajectories, p=weights).tolist()
+        indices = np.random.choice(indices, size=n_trajectories, p=weights, replace=False).tolist()
         return self[indices]
 
     @staticmethod

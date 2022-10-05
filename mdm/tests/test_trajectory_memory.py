@@ -3,6 +3,7 @@ import random
 import unittest
 from random import shuffle
 from typing import Dict
+from functools import reduce
 
 import numpy as np
 
@@ -73,6 +74,27 @@ class TrajectoryMemoryTest(unittest.TestCase):
             traj_orig = self.trajectories[i]
             equal = all([np.all(lhs == rhs) for lhs, rhs in zip(traj_mem.values(), traj_orig.values())])
             self.assertTrue(equal)
+
+    def test_longest_trajectory(self):
+        for t in self.trajectories:
+            self.mem.push(**t)
+
+        # check whether current longest trajectory matches the longes trajectory we pushed into the memory
+        longest_traj = reduce(lambda t, t_next: t_next if len(t['s']) < len(t_next['s']) else t, self.mem)
+        longest_traj_len = len(longest_traj['s'])
+        self.assertEqual(self.mem.longest_trajectory, longest_traj_len)
+
+        # add new longest trajectory
+        new_longest = longest_traj_len + random.randint(5, 10)
+        t_new = self._rand_traj(self.shapes, new_longest)
+        self.mem.push(**t_new)
+        self.assertEqual(self.mem.longest_trajectory, new_longest)
+        self.assertEqual(self.mem.get_view().longest_trajectory, new_longest)
+
+        # get a view without the latest trajectory
+        view = self.mem[:-1]
+        self.assertEqual(view.longest_trajectory, longest_traj_len)
+
 
     def test_push_shape(self):
         for t in self.trajectories:
