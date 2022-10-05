@@ -92,6 +92,7 @@ class TrajectoryMemoryTest(unittest.TestCase):
         self.assertEqual(self.mem.get_view().longest_trajectory, new_longest)
 
         # get a view without the latest trajectory
+        # it's too expensive to re-compute the longest trajectory after every view
         view = self.mem[:-1]
         self.assertEqual(view.longest_trajectory, longest_traj_len)
 
@@ -235,9 +236,12 @@ class TrajectoryMemoryTest(unittest.TestCase):
         for t in self.trajectories:
             self.mem.push(**t)
 
+        random.seed(5)
         shuffled = self.mem.shuffle()
 
         indices = list(range(len(self.mem)))
+
+        random.seed(10)
         shuffle(indices)
 
         mismatches = 0
@@ -342,16 +346,15 @@ class TrajectoryMemoryTest(unittest.TestCase):
         for i, t in enumerate(self.trajectories):
             self.mem.push(**{**t, 'w': i})
 
-        self.assertEqual(self.mem._weights_cache, None)
+        self.assertEqual(self.mem._weights_cached, None)
 
         batch = self.mem.sample(d_batch, prioritized=False)
-        self.assertEqual(self.mem._weights_cache, None)
         self.assertEqual(len(batch), d_batch)
 
         avg_weight_random = np.mean([t['w'] for t in batch])
 
         batch = self.mem.sample(d_batch, prioritized=True)
-        self.assertTrue(np.all(self.mem._weights_cache != None))
+        self.assertTrue(np.all(self.mem._weights_cached != None))
         self.assertEqual(len(batch), d_batch)
 
         avg_weight_prioritized = np.mean([t['w'] for t in batch])

@@ -18,10 +18,10 @@ class TrajectoryMemory:
         self._mem = list()
         self._shapes = None
         self._dtypes = None
-        self._longest_trajectory = 0
         self._modified = False
-        self._weights_cache = None
-        self._indices_cache = None
+        self._weights_cached = None
+        self._indices_cached = None
+        self._longest_trajectory_cached = 0
 
         if init_mem is not None:
             for elem in init_mem:
@@ -49,11 +49,18 @@ class TrajectoryMemory:
 
     @property
     def longest_trajectory(self):
-        if self._modified:
-            self._longest_trajectory = 0
-            for traj in self._mem:
-                self._longest_trajectory = max(self._longest_trajectory, len(traj['s']))
-        return self._longest_trajectory
+        self._update_cache()
+        return self._longest_trajectory_cached
+
+    @property
+    def _sampling_weights(self):
+        self._update_cache()
+        return self._weights_cached
+
+    @property
+    def _sampling_indices(self):
+        self._update_cache()
+        return self._indices_cached
 
     def __getitem__(self,
                     index) -> Union[Dict, TrajectoryMemory]:
@@ -84,6 +91,7 @@ class TrajectoryMemory:
         ret = self.get_view()
         ret._mem += other._mem
         ret._modified = True
+        #ret._longest_trajectory_cached = max(self.longest_trajectory, other.longest_trajectory)
         return ret
 
     def get_view(self) -> TrajectoryMemory:
@@ -102,6 +110,7 @@ class TrajectoryMemory:
     def shuffle(self) -> TrajectoryMemory:
         view = self.get_view()
         random.shuffle(view._mem)
+        view._modified = True
         return view
 
     def push(self, s, a, r, terminal, w: float = 1.0) -> None:
@@ -132,6 +141,9 @@ class TrajectoryMemory:
         #    raise ValueError(f'Weight must be of dtype float but is: {np.array(w).dtype}')
         w = float(w)
 
+        #if len(s) > self._longest_trajectory:
+        #    self._longest_trajectory = len(s)
+
         self._mem.append({'s': np.array(s), 'a': np.array(a), 'r': np.array(r), 'terminal': np.array(terminal), 'w': w})
         self._modified = True
 
@@ -139,6 +151,8 @@ class TrajectoryMemory:
                      padding: float = 0,
                      pad_last_terminal_flag: bool = True,
                      dtype: Union[np.dtype, Iterable[np.dtype]] = None):
+        self._update_cache()
+
         if dtype is None:
             dtype = {**self._dtypes, 'w': float}
         elif isinstance(dtype, Iterable):
@@ -185,28 +199,32 @@ class TrajectoryMemory:
     def mark_modified(self):
         self._modified = True
 
-    def _get_sampling_weights(self):
+    def _update_cache(self):
         if self._modified:
+            self._update_longest_trajectory()
+            self._update_sampling_weights()
+            self._update_sampling_indices()
+            self._modified = False
+
+    def _update_longest_trajectory(self):
+        self._longest_trajectory_cached = 0
+        for traj in self._mem:
+            self._longest_trajectory_cached = max(self._longest_trajectory_cached, len(traj['s']))
+
+    def _update_sampling_weights(self):
+        if len(self) > 0:
             weights = map(lambda t: t['w'], self._mem)
             weights = np.fromiter(weights, dtype=float)
             weights -= weights.min()
             weights /= weights.sum()
-            self._weights_cache = weights
-        return self._weights_cache
+            self._weights_cached = weights
 
-    def _get_sampling_indices(self):
-        if self._modified:
-            self._indices_cache = np.arange(0, len(self))
-        return self._indices_cache
+    def _update_sampling_indices(self):
+        self._indices_cached = np.arange(0, len(self))
 
     def sample(self, n_trajectories: int, prioritized: bool):
-        if prioritized:
-            weights = self._get_sampling_weights()
-        else:
-            weights = None
-        indices = self._get_sampling_indices()
-
-        indices = np.random.choice(indices, size=n_trajectories, p=weights, replace=False).tolist()
+        weights = self._sampling_weights if prioritized else None
+        indices = np.random.choice(self._sampling_indices, size=n_trajectories, p=weights, replace=False).tolist()
         return self[indices]
 
     @staticmethod
