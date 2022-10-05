@@ -18,10 +18,11 @@ class TrajectoryMemory:
         self._mem = list()
         self._shapes = None
         self._dtypes = None
-        self._modified = False
+        self._recompute_weights = False
         self._weights_cached = None
         self._indices_cached = None
         self._longest_trajectory_cached = 0
+        self._longest_trajectory = 0
 
         if init_mem is not None:
             for elem in init_mem:
@@ -49,18 +50,7 @@ class TrajectoryMemory:
 
     @property
     def longest_trajectory(self):
-        self._update_cache()
-        return self._longest_trajectory_cached
-
-    @property
-    def _sampling_weights(self):
-        self._update_cache()
-        return self._weights_cached
-
-    @property
-    def _sampling_indices(self):
-        self._update_cache()
-        return self._indices_cached
+        return self._longest_trajectory
 
     def __getitem__(self,
                     index) -> Union[Dict, TrajectoryMemory]:
@@ -68,11 +58,15 @@ class TrajectoryMemory:
             # note: this view will inherit the value of self.longest_trajectory even if it contains only shorter ones
             view = self.get_view()
             view._mem = self._mem[index]
+            view._recompute_weights = True
+            view._update_longest_trajectory()
             return view
         elif type(index) in (list, tuple):
             # note: this view will inherit the value of self.longest_trajectory even if it contains only shorter ones
             view = self.get_view()
             view._mem = [self._mem[i] for i in index]
+            view._recompute_weights = True
+            view._update_longest_trajectory()
             return view
 
         return self._mem[index]
@@ -90,8 +84,9 @@ class TrajectoryMemory:
 
         ret = self.get_view()
         ret._mem += other._mem
-        ret._modified = True
-        #ret._longest_trajectory_cached = max(self.longest_trajectory, other.longest_trajectory)
+        ret._longest_trajectory = max(self.longest_trajectory, other.longest_trajectory)
+        ret._update_sampling_weights()
+        ret._update_sampling_indices()
         return ret
 
     def get_view(self) -> TrajectoryMemory:
@@ -104,13 +99,12 @@ class TrajectoryMemory:
         view._mem = self._mem[:]  # see https://docs.python.org/3/library/copy.html
         view._shapes = deepcopy(self._shapes)
         view._dtypes = deepcopy(self._dtypes)
-        view._modified = True
         return view
 
     def shuffle(self) -> TrajectoryMemory:
         view = self.get_view()
         random.shuffle(view._mem)
-        view._modified = True
+        view._update_sampling_weights()
         return view
 
     def push(self, s, a, r, terminal, w: float = 1.0) -> None:
@@ -141,18 +135,16 @@ class TrajectoryMemory:
         #    raise ValueError(f'Weight must be of dtype float but is: {np.array(w).dtype}')
         w = float(w)
 
-        #if len(s) > self._longest_trajectory:
-        #    self._longest_trajectory = len(s)
+        if len(s) > self._longest_trajectory:
+            self._longest_trajectory = len(s)
 
         self._mem.append({'s': np.array(s), 'a': np.array(a), 'r': np.array(r), 'terminal': np.array(terminal), 'w': w})
-        self._modified = True
+        self._recompute_weights = True
 
     def to_np_arrays(self,
                      padding: float = 0,
                      pad_last_terminal_flag: bool = True,
                      dtype: Union[np.dtype, Iterable[np.dtype]] = None):
-        self._update_cache()
-
         if dtype is None:
             dtype = {**self._dtypes, 'w': float}
         elif isinstance(dtype, Iterable):
@@ -194,22 +186,15 @@ class TrajectoryMemory:
     def sort(self, key: str = 'w', reverse: bool = False):
         key_fn = lambda elem: elem[key]
         self._mem.sort(key=key_fn, reverse=reverse)
-        self._modified = True
+        self._update_sampling_weights()
 
     def mark_modified(self):
-        self._modified = True
-
-    def _update_cache(self):
-        if self._modified:
-            self._update_longest_trajectory()
-            self._update_sampling_weights()
-            self._update_sampling_indices()
-            self._modified = False
+        self._recompute_weights = True
 
     def _update_longest_trajectory(self):
-        self._longest_trajectory_cached = 0
+        self._longest_trajectory = 0
         for traj in self._mem:
-            self._longest_trajectory_cached = max(self._longest_trajectory_cached, len(traj['s']))
+            self._longest_trajectory = max(self._longest_trajectory, len(traj['s']))
 
     def _update_sampling_weights(self):
         if len(self) > 0:
@@ -223,8 +208,12 @@ class TrajectoryMemory:
         self._indices_cached = np.arange(0, len(self))
 
     def sample(self, n_trajectories: int, prioritized: bool):
-        weights = self._sampling_weights if prioritized else None
-        indices = np.random.choice(self._sampling_indices, size=n_trajectories, p=weights, replace=False).tolist()
+        if self._recompute_weights:
+            self._update_sampling_weights()
+            self._update_sampling_indices()
+            self._recompute_weights = False
+        weights = self._weights_cached if prioritized else None
+        indices = np.random.choice(self._indices_cached, size=n_trajectories, p=weights, replace=False).tolist()
         return self[indices]
 
     @staticmethod
