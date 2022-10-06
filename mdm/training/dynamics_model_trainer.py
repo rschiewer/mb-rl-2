@@ -22,7 +22,7 @@ class DynamicsModelTrainer(ABC):
                  scheduler: object = None,
                  logger: Logger = None,
                  train_callback: Callable[[int], None] = None,
-                 eval_callback: Callable[[int], None] = None,
+                 eval_callback: Callable = None,
                  **kwargs):
         self.model = model
         self.optimizer = optimizer
@@ -106,7 +106,7 @@ class DynamicsModelTrainer(ABC):
                     self.logger.log(means, Scope.PARAMETERS(), i_step)
 
                 if self.eval_callback:
-                    self.eval_callback(i_step)
+                    self.eval_callback(s, a, r, term, i_step)
 
             if self.train_callback:
                 self.train_callback(i_step)

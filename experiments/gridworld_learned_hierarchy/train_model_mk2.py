@@ -9,6 +9,7 @@ from PIL import Image
 
 from mdm.gridworld.gridworld import Gridworld
 from mdm.utils.utils import here, load_yaml, prepare_data, fill_placeholders, discrete_stats, compute_returns
+from mdm.utils.torch_tools import get_mu, get_sigma, bin_every_k_steps
 from mdm.models.building_blocks import RSSM, AbstractActionModel
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.training.dynamics_model_trainer import DynamicsModelTrainer
@@ -59,13 +60,14 @@ if __name__ == '__main__':
     model = MultiscaleDynamicsModelMK2(primitive_model=prim_mdl, abstract_model=abstr_mdl,
                                        abstract_action_model=abstr_act_mdl, **cfg['mdm'])
     model = model.to('cuda')
+    model.training = True
     optimizer = torch.optim.Adam(model.parameters(), **cfg['optim'])
     # optimizer = torch.optim.AdamW(model.parameters(), **cfg['optim'])
 
     # build data pipeline
     train_mem = TrajectoryMemory.load(here() / cfg['train_samples'])
     compute_returns(train_mem)
-    train_driver = OfflineRLDriver(train_mem, sampling_type=SamplingType.PRIORITIZED)
+    train_driver = OfflineRLDriver(train_mem, sampling_type=SamplingType.RANDOM)
     test_mem = TrajectoryMemory.load(here() / cfg['test_samples'])
     compute_returns(test_mem)
     test_driver = OfflineRLDriver(test_mem, sampling_type=SamplingType.RANDOM)
@@ -74,6 +76,11 @@ if __name__ == '__main__':
 
     def get_batch_train():
         s, a, r, terminal, w = train_driver.interact(d_batch).to_np_arrays(dtype=np.float32, pad_last_terminal_flag=pad)
+        #s_test = np.ma.compress_rows(s[0]).astype(int)
+        #a_test = np.ma.compressed(a[0, 1:]).astype(int)
+        #r_test = np.ma.compressed(r[0, 1:]).astype(float)
+        #term_test = np.ma.compressed(terminal[0, 1:]).astype(bool)
+        #env.enact_sequence(s_test, a_test, r_test, term_test)
         s, a, r, terminal = prepare_data(s, a, r, terminal, env)
         return s, a, r, terminal
 
@@ -101,7 +108,7 @@ if __name__ == '__main__':
     fig = plt.figure(figsize=(10, 10))
 
 
-    def eval_callback(i_step: int):
+    def eval_callback(o: torch.Tensor, a: torch.Tensor, r: torch.Tensor, term: torch.Tensor, i_step: int):
         if model.abstract_step_size <= 10:
             Y_mean, Y_std, Y_mae = discrete_stats(model.abstract_action_model, env.action_space.n,
                                                   model.abstract_step_size, 10)
@@ -114,6 +121,17 @@ if __name__ == '__main__':
             logger.log_plot(Image.open(buffer), Scope.PARAMETERS() / 'abstr_a_stats/plots', i_step)
             logger.log({'abstr_a_mean': Y_mean.mean(), 'abstr_a_std': Y_std.mean()},
                        Scope.PARAMETERS() / 'abstr_a_stats', i_step)
+
+        abstr_r = bin_every_k_steps(r, model.abstract_step_size, padding_val=0).sum(dim=2)
+        abstr_term = bin_every_k_steps(term, model.abstract_step_size).max(dim=2).values
+        pred = model(o, a, r, term, abstr_r, abstr_term, model.n_warmup_prim, model.n_warmup_abstr)
+        for key in ('prim_o', 'prim_r', 'abstr_o', 'abstr_r'):
+            full_key = key + '_dist'
+            mu = get_mu(pred[full_key]).mean()
+            sigma = get_sigma(pred[full_key]).mean()
+            logger.log({full_key + '_mean': mu, full_key + '_sigma': sigma},
+                       Scope.PARAMETERS() / 'model_stats', i_step)
+
 
 
 
