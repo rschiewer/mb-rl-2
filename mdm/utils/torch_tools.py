@@ -219,10 +219,10 @@ def build_gaussian(params: torch.Tensor) -> torch.distributions.Normal:
     return dist
 
 
-def sample_from_gaussian(params: torch.Tensor,
+def sample_from_gaussian(gaussian_params: torch.Tensor,
                          gradient: bool = True) -> torch.Tensor:
-    assert params.shape[-1] % 2 == 0
-    mu, sigma = torch.tensor_split(params, 2, dim=-1)
+    assert gaussian_params.shape[-1] % 2 == 0
+    mu, sigma = torch.tensor_split(gaussian_params, 2, dim=-1)
     dist = torch.distributions.Normal(loc=mu, scale=sigma)
     if gradient:
         return dist.rsample()
@@ -232,15 +232,13 @@ def sample_from_gaussian(params: torch.Tensor,
 
 def get_mu(gaussian_params: torch.Tensor) -> torch.Tensor:
     assert gaussian_params.shape[-1] % 2 == 0
-    i_end = gaussian_params.shape[-1] // 2
-    mu = gaussian_params[..., :i_end]
+    mu, sigma = torch.tensor_split(gaussian_params, 2, dim=-1)
     return mu
 
 
 def get_sigma(gaussian_params: torch.Tensor) -> torch.Tensor:
     assert gaussian_params.shape[-1] % 2 == 0
-    i_start = gaussian_params.shape[-1] // 2
-    sigma = gaussian_params[..., i_start:]
+    mu, sigma = torch.tensor_split(gaussian_params, 2, dim=-1)
     return sigma
 
 
