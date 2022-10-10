@@ -298,7 +298,6 @@ def layers_with_activation(lws: Sequence[int], activation: str = 'relu', layer_n
     return layers
 
 
-
 def add_time_dim(*xs: torch.Tensor,
                  batch_first: bool = True):
     i_unsqueeze = 1 if batch_first else 0
@@ -415,6 +414,7 @@ def unpack_rnn_state(rnn_state_packed: torch.Tensor):
         h = h.transpose(0, 1)
         h = h.contiguous()
         return h
+
 
 def pack_rnn_state(rnn_state: RnnStateType):
     if isinstance(rnn_state, tuple):
