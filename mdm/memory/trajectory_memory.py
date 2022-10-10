@@ -76,6 +76,11 @@ class TrajectoryMemory:
 
     def __add__(self,
                 other: TrajectoryMemory) -> TrajectoryMemory:
+        if len(self) == 0:
+            return other
+        elif len(other) == 0:
+            return self
+
         shapes_match = TrajectoryMemory._shapes_match(self._shapes, other._shapes)
         dtypes_match = TrajectoryMemory._dtypes_match(self._dtypes, other._dtypes)
         if not shapes_match or not dtypes_match:
@@ -213,7 +218,7 @@ class TrajectoryMemory:
             self._update_sampling_indices()
             self._recompute_weights = False
         weights = self._weights_cached if prioritized else None
-        indices = np.random.choice(self._indices_cached, size=n_trajectories, p=weights, replace=False).tolist()
+        indices = np.random.choice(self._indices_cached, size=n_trajectories, p=weights, replace=True).tolist()
         return self[indices]
 
     @staticmethod
