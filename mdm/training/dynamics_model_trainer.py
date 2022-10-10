@@ -51,7 +51,7 @@ class DynamicsModelTrainer(ABC):
 
         self.model.prepare_for_training()
         for i_step in step_iter:
-            s, a, r, term = self.get_batch_train()
+            s, a, r, term = self.get_batch_train(i_step)
             s, a, r, term = [torch.from_numpy(x).to(device=device, dtype=torch.float32) for x in (s, a, r, term)]
 
             compatible, msg = self.model.input_compatible(s, a, r)
@@ -75,7 +75,7 @@ class DynamicsModelTrainer(ABC):
                 self.scheduler.step()
 
             if self.eval_interval is not None and i_step % self.eval_interval == 0:
-                s, a, r, term = self.get_batch_test()
+                s, a, r, term = self.get_batch_test(i_step)
                 s, a, r, term = [torch.from_numpy(x).to(device=device, dtype=torch.float32) for x in (s, a, r, term)]
 
                 compatible, msg = self.model.input_compatible(s, a, r)

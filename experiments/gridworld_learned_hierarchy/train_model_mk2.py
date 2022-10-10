@@ -14,6 +14,9 @@ from mdm.models.building_blocks import RSSM, AbstractActionModel
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.training.dynamics_model_trainer import DynamicsModelTrainer
 from mdm.memory.trajectory_memory import TrajectoryMemory
+from mdm.training.gym_driver import GymEpisodeDriver
+from mdm.planning.planning_policy import PlanningPolicy
+from mdm.planning.cem_planner import CrossentropyPlanner, DistributionType
 from mdm.training.offline_rl_driver import OfflineRLDriver, SamplingType
 from mdm.logging.neptune_logger import NeptuneLogger
 from mdm.logging.not_logger import NotLogger
@@ -65,28 +68,58 @@ if __name__ == '__main__':
     # optimizer = torch.optim.AdamW(model.parameters(), **cfg['optim'])
 
     # build data pipeline
+    train_mem = TrajectoryMemory()
+    random_driver = GymEpisodeDriver(env, lambda o, r, term, i_ep: env.action_space.sample())
+    planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, device=model.device)
+    planner_abstr = CrossentropyPlanner(DistributionType.NORMAL, device=model.device)
+    policy = PlanningPolicy(model=model, env=env, planner_prim=planner_prim, planner_abstr=planner_abstr,
+                            n_rollouts=2048, n_plan_steps_abstr=30, n_optim_steps_prim=10,
+                            n_optim_steps_abstr=10, winning_perc=0.2, discount=0.95, replan_interval=5,
+                            act_noise_prim=0.01, act_noise_abstr=0.01, n_warmup_prim=model.n_warmup_prim,
+                            n_warmup_abstr=model.n_warmup_abstr)
+    planning_driver = GymEpisodeDriver(env, policy)
+    d_batch, pad = cfg['trainer']['d_batch'], cfg['trainer']['pad_last_terminal_flag']
+
     train_mem = TrajectoryMemory.load(here() / cfg['train_samples'])
     compute_returns(train_mem)
     train_driver = OfflineRLDriver(train_mem, sampling_type=SamplingType.RANDOM)
     test_mem = TrajectoryMemory.load(here() / cfg['test_samples'])
     compute_returns(test_mem)
     test_driver = OfflineRLDriver(test_mem, sampling_type=SamplingType.RANDOM)
-    d_batch, pad = cfg['trainer']['d_batch'], cfg['trainer']['pad_last_terminal_flag']
 
+    if args.log:
+        logger = NeptuneLogger(neptune_cfg['PROJECT_NAME'], api_token=neptune_cfg['NEPTUNE_API_TOKEN'])
+        logger.start_session()
+        logger.log(cfg, Scope.HYPERPARAMETERS())
+    else:
+        logger = NotLogger()
 
-    def get_batch_train():
-        s, a, r, terminal, w = train_driver.interact(d_batch).to_np_arrays(dtype=np.float32, pad_last_terminal_flag=pad)
-        #s_test = np.ma.compress_rows(s[0]).astype(int)
-        #a_test = np.ma.compressed(a[0, 1:]).astype(int)
-        #r_test = np.ma.compressed(r[0, 1:]).astype(float)
-        #term_test = np.ma.compressed(terminal[0, 1:]).astype(bool)
-        #env.enact_sequence(s_test, a_test, r_test, term_test)
+    def get_batch_train(i_step):
+        s, a, r, terminal, w = train_driver.interact(d_batch).to_np_arrays(dtype=np.float32,
+                                                                           pad_last_terminal_flag=pad)
         s, a, r, terminal = prepare_data(s, a, r, terminal, env)
         return s, a, r, terminal
 
+    #def get_batch_train(i_step):
+    #    global train_mem
+    #    if i_step < 100:
+    #        experience = random_driver.interact(10)
+    #        train_mem += experience
+    #    elif i_step % 100 == 0:
+    #        experience = planning_driver.interact(1)
+    #        train_mem += experience
+    #    batch = train_mem.sample(d_batch, False)
+    #    s, a, r, terminal, w, = batch.to_np_arrays(dtype=np.float32, pad_last_terminal_flag=pad)
+    #    s, a, r, terminal = prepare_data(s, a, r, terminal, env)
+    #    return s, a, r, terminal
 
-    def get_batch_test():
-        s, a, r, terminal, w = test_driver.interact(d_batch).to_np_arrays(dtype=np.float32, pad_last_terminal_flag=pad)
+
+    def get_batch_test(i_step):
+        s, a, r, terminal, w = test_driver.interact(d_batch).to_np_arrays(dtype=np.float32, pad_last_terminal_flag=True)
+        #experience = planning_driver.interact(1)
+        #total_reward = experience[0]['r'].sum()
+        #logger.log({'planning_r': total_reward}, Scope.TEST() / 'planning_reward', i_step)
+        #s, a, r, terminal, w, = experience.to_np_arrays(dtype=np.float32, pad_last_terminal_flag=pad)
         s, a, r, terminal = prepare_data(s, a, r, terminal, env)
         return s, a, r, terminal
 
@@ -98,12 +131,6 @@ if __name__ == '__main__':
     model_path = f'{cfg["final_model_path"]}_{cfg["mdm"]["abstract_step_size"]}.ptmdl'
 
     # train
-    if args.log:
-        logger = NeptuneLogger(neptune_cfg['PROJECT_NAME'], api_token=neptune_cfg['NEPTUNE_API_TOKEN'])
-        logger.start_session()
-        logger.log(cfg, Scope.HYPERPARAMETERS())
-    else:
-        logger = NotLogger()
 
     fig = plt.figure(figsize=(10, 10))
 
@@ -131,8 +158,6 @@ if __name__ == '__main__':
             sigma = get_sigma(pred[full_key]).mean()
             logger.log({full_key + '_mean': mu, full_key + '_sigma': sigma},
                        Scope.PARAMETERS() / 'model_stats', i_step)
-
-
 
 
     def train_callback(i_step: int):
