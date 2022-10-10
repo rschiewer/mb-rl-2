@@ -1,3 +1,4 @@
+import copy
 from pathlib import Path
 import unittest
 from time import sleep
@@ -5,8 +6,9 @@ from copy import deepcopy
 
 import gym
 import numpy as np
+import matplotlib.pyplot as plt
 
-from mdm.gridworld.gridworld import Gridworld, CellType
+from mdm.gridworld.gridworld import Gridworld, CellType, FullyObservableGridworld
 from mdm.utils.utils import here
 
 
@@ -240,6 +242,14 @@ class GridworldTest(unittest.TestCase):
             self.assertEqual(gt_r, r)
             self.assertEqual(gt_done, done)
 
+    def test_fully_observable_gridworld_wrapper(self):
+        fully_observable_world = FullyObservableGridworld(self.world)
+        o, r, done, info = fully_observable_world.step(fully_observable_world.action_space.sample())
+        self.assertEqual(o.shape, self.world.grid.shape)
+
+        o_old = copy.deepcopy(o)
+        o[:] = -o[:]
+        self.assertTrue(np.isclose(np.sum(o_old - self.world.grid), 0))
 
     @unittest.skip
     def test_render(self):

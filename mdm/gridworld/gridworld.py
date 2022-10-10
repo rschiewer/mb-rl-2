@@ -31,7 +31,8 @@ class Gridworld(gym.Env):
                  time_limit: int,
                  reward: float,
                  step_reward: float,
-                 discount: float):
+                 discount: float,
+                 fully_observable: bool = False):
         super(Gridworld, self).__init__()
 
         if time_limit <= 0:
@@ -237,6 +238,20 @@ class Gridworld(gym.Env):
         """
         cells = np.argwhere(self._grid == type).squeeze()
         return cells
+
+
+class FullyObservableGridworld(gym.ObservationWrapper):
+
+    def __init__(self, env: Gridworld):
+        super(FullyObservableGridworld, self).__init__(env)
+
+        low = min(CellType)
+        high = max(CellType)
+        shape = (env.grid_h - 1, env.grid_w - 1)
+        self.observation_space = gym.spaces.Box(low, high, shape=shape, dtype=np.uint8)
+
+    def observation(self, observation):
+        return self.env.grid.copy()
 
 
 class NormalizedObsGridworld(gym.ObservationWrapper):
