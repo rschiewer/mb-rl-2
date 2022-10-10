@@ -245,11 +245,11 @@ class GridworldTest(unittest.TestCase):
     def test_fully_observable_gridworld_wrapper(self):
         fully_observable_world = FullyObservableGridworld(self.world)
         o = fully_observable_world.reset()
-        self.assertEqual(o.shape, self.world.grid.shape)
+        self.assertEqual(o.shape, np.prod(self.world.grid.shape))
 
         o_old = copy.deepcopy(o)
         o[:] = -o[:]
-        self.assertTrue(np.isclose(np.sum(o_old - self.world.grid), 0))
+        self.assertTrue(np.isclose(np.sum(o_old - self.world.grid.ravel()), 0))
 
         o, r, done, info = fully_observable_world.step(fully_observable_world.action_space.sample())
         self.assertGreater(np.sum(np.abs(o_old - o)), 0)

@@ -247,11 +247,11 @@ class FullyObservableGridworld(gym.ObservationWrapper):
 
         low = min(CellType)
         high = max(CellType)
-        shape = (env.grid_h - 1, env.grid_w - 1)
+        shape = (env.grid_h * env.grid_w, )
         self.observation_space = gym.spaces.Box(low, high, shape=shape, dtype=np.uint8)
 
     def observation(self, observation):
-        return self.env.grid.copy()
+        return self.env.grid.flatten()
 
 
 class NormalizedObsGridworld(gym.ObservationWrapper):
