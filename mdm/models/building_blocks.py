@@ -52,7 +52,6 @@ class RSSM(torch.nn.Module):
     def __init__(self,
                  d_z: int,
                  d_h: int,
-                 d_s: int,
                  d_a: int,
                  d_o: int,
                  d_r: int,
@@ -75,7 +74,6 @@ class RSSM(torch.nn.Module):
 
         self.d_z = d_z
         self.d_h = d_h
-        self.d_state = d_s
         self.d_action = d_a
         self.d_observation = d_o
         self.d_reward = d_r
@@ -90,7 +88,6 @@ class RSSM(torch.nn.Module):
 
         z_prior_lws = (d_h, *z_prior_lws, d_z * 2)
         z_post_lws = (d_h + d_z * 2 + d_x_posterior, *z_post_lws, d_z * 2)
-        #state_lws = (d_h + d_z, *state_lws, d_state)
         o_lws = (d_h + d_z, *o_lws, d_o * 2)
         r_lws = (d_h + d_z, *r_lws, d_r * 2)
         term_lws = (d_h + d_z, *term_lws, 1)
@@ -113,7 +110,6 @@ class RSSM(torch.nn.Module):
         #                n_layers=n_hidden_layers, rnn_cell='LSTM', bidirectional=False)
 
         self._z_preproc = torch.nn.Sequential(*layers_with_activation(z_preproc_lws, activation, layer_norm=layer_norm))
-        #self._state = torch.nn.Sequential(*layers_with_activation(state_lws, activation, layer_norm=layer_norm))
         self._s_prior = torch.nn.Sequential(*layers_with_activation(z_prior_lws, activation, layer_norm=layer_norm))
         self._s_post = torch.nn.Sequential(*layers_with_activation(z_post_lws, activation, layer_norm=layer_norm))
         self._o_dist = torch.nn.Sequential(*layers_with_activation(o_lws, activation, layer_norm=layer_norm))
@@ -226,9 +222,7 @@ class RSSM(torch.nn.Module):
         else:
             z_smpl = get_mu(z_dist)
 
-        #h_zero = torch.zeros_like(h)
-        #s = self._state(torch.concat([h_zero, z_smpl], dim=-1))
-        #s = torch.concat([h_zero, z_smpl], dim=-1)
+        #h = torch.zeros_like(h)
         s = torch.concat([h, z_smpl], dim=-1)
         o_dist = self._build_o_dist(s)
         r_dist = self._build_r_dist(s)
@@ -240,8 +234,6 @@ class RSSM(torch.nn.Module):
         else:
             o_smpl = get_mu(o_dist)
             r_smpl = get_mu(r_dist)
-        #o_smpl = get_mu(o_dist)
-        #r_smpl = get_mu(r_dist)
         term_smpl = term_dist
 
         return {'z': z_smpl, 'z_prior': z_prior, 'z_post': z_post, 'h': h, 's': s, 'o_dist': o_dist, 'o': o_smpl,
@@ -265,13 +257,13 @@ class RSSM(torch.nn.Module):
     def _build_o_dist(self,
                       s: torch.Tensor) -> torch.Tensor:
         o_params = self._o_dist(s)
-        o_params = make_gaussian_params(o_params, 1e-5)  # this distribution is never used in any kl divergence loss
+        o_params = make_gaussian_params(o_params, self.epsilon)
         return o_params
 
     def _build_r_dist(self,
                       s: torch.Tensor) -> torch.Tensor:
         r_params = self._r_dist(s)
-        r_params = make_gaussian_params(r_params, 1e-5)
+        r_params = make_gaussian_params(r_params, self.epsilon)
         return r_params
 
     def _build_terminal_dist(self,
