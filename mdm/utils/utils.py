@@ -505,6 +505,20 @@ def discrete_stats(module: torch.nn.Module, n_inputs: int, seq_len: int, n_repet
     return Y_mean, Y_std, Y_mae
 
 
+def primitive_action_maps(model: MultiscaleDynamicsModelMK2):
+    device = next(model.parameters()).device
+    n_actions = model.d_action
+    seq_len = model.abstract_step_size
+
+    # generate all permutations of possible inputs
+    available_inputs = list(range(n_actions))
+    input_sequences = list(product(available_inputs, repeat=seq_len))
+    input_sequences = torch.tensor(input_sequences).to(device)
+    input_sequences = to_onehot(input_sequences, n_actions)
+    abstract_actions = model.abstract_action_model(input_sequences)
+    return abstract_actions.detach().cpu().numpy()
+
+
 def sensitivity_analysis(module: torch.nn.Module,
                          const_input: torch.Tensor,
                          input_mask: torch.Tensor,
