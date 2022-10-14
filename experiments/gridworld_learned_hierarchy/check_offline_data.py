@@ -6,7 +6,8 @@ from mdm.utils.utils import here
 
 
 if __name__ == '__main__':
-    env = Gridworld.from_cleartext(here() / '../../mdm/gridworld/8x8_v0.mapdata')
+    map_version = 'v0'
+    env = Gridworld.from_cleartext(here() / f'../../mdm/gridworld/8x8_{map_version}.mapdata')
     train_mem = TrajectoryMemory.load(here() / 'gridworld_train.samples')
     test_mem = TrajectoryMemory.load(here() / 'gridworld_test.samples')
 
