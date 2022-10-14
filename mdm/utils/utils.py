@@ -25,7 +25,6 @@ class DistributionType(Enum):
     NONE = auto()
     NORMAL = auto()
     CATEGORICAL = auto()
-    ONE_HOT_CATEGORICAL = auto()
 
 
 def here() -> Path:
