@@ -62,30 +62,27 @@ if __name__ == '__main__':
     map_version = 'v1'
     env = Gridworld.from_cleartext(here() / f'../../mdm/gridworld/8x8_{map_version}.mapdata')
     n_episodes_train = 50000
-    perc_test = 0.10
+    perc_test = 0.1
+    disjunct_train_test = False
 
-    def collect_policy(observation, reward, terminal):
+    def collect_policy(*args):
         return env.action_space.sample()
 
     collect_driver = GymEpisodeDriver(env, collect_policy)
     train_mem = collect_driver.interact(n_episodes_train, True)
 
-    train_mem_cleaned = remove_duplicates_mp(train_mem, n_proc=14)
-    print(f'Removed {len(train_mem) - len(train_mem_cleaned)} duplicate trajectories from sample memory.')
+    if disjunct_train_test:
+        train_mem = remove_duplicates_mp(train_mem, n_proc=14)
+        print(f'Removed {len(train_mem) - len(train_mem)} duplicate trajectories from sample memory.')
 
-    # for testing only
-    #train_mem_cleaned_2 = remove_duplicates(train_mem)
-    #print(f'Removed {len(train_mem) - len(train_mem_cleaned_2)} duplicate trajectories from sample memory.')
+        # for testing only
+        #train_mem_cleaned_2 = remove_duplicates(train_mem)
+        #print(f'Removed {len(train_mem) - len(train_mem_cleaned_2)} duplicate trajectories from sample memory.')
 
-    train_mem_cleaned = train_mem_cleaned.shuffle()
-    n_episodes_test = round(len(train_mem_cleaned) * perc_test)
-    train_mem = train_mem_cleaned[n_episodes_test:]
-    test_mem = train_mem_cleaned[:n_episodes_test]
-
-    #n_episodes_test = round(len(train_mem) * perc_test)
-    #trai_mem = train_mem.shuffle()
-    #train_mem = train_mem[n_episodes_test:]
-    #test_mem = train_mem[:n_episodes_test]
+    n_episodes_test = round(len(train_mem) * perc_test)
+    trai_mem = train_mem.shuffle()
+    train_mem = train_mem[n_episodes_test:]
+    test_mem = train_mem[:n_episodes_test]
 
     TrajectoryMemory.store(train_mem, here() / f'gridworld_{map_version}_train.samples')
     TrajectoryMemory.store(test_mem, here() / f'gridworld_{map_version}_test.samples')
