@@ -16,7 +16,8 @@ from mpl_toolkits.axes_grid1 import ImageGrid
 
 from mdm.gridworld.gridworld import Gridworld, CellType
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
-from mdm.utils.utils import here, gen_macro_state_map, load_yaml, gen_value_map_prim
+from mdm.utils.utils import here, load_yaml
+from mdm.utils.analysis_tools import gen_macro_state_map, gen_value_map_prim
 from mdm.memory.trajectory_memory import TrajectoryMemory
 from mdm.training.offline_rl_driver import OfflineRLDriver
 from mdm.memory.trajectory_memory import flatten_and_unsqueeze
