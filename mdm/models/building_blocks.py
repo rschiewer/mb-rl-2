@@ -28,25 +28,30 @@ class AbstractActionModel(torch.nn.Module):
         self.flatten_layer = torch.nn.Flatten(start_dim=1)
         if distribution_type is DistributionType.NONE:
             lws = (d_a * abstract_step_size, *lws, d_a_abstract)
-
-            def prob_mdl(x: torch.Tensor):
-                return torch.tanh(x)
+            self.prob_mdl = self._prob_mdl_none
         elif distribution_type is DistributionType.NORMAL:
             lws = (d_a * abstract_step_size, *lws, d_a_abstract * 2)
-
-            def prob_mdl(x: torch.Tensor):
-                x = make_gaussian_params(x, 1e-3)
-                return sample_from_gaussian(x)
+            self.prob_mdl = self._prob_mdl_normal
         elif distribution_type is DistributionType.CATEGORICAL:
             lws = (d_a * abstract_step_size, *lws, d_a_abstract)
-
-            def prob_mdl(x: torch.Tensor):
-                return sample_from_categorical(x)
+            self.prob_mdl = self._prob_mdl_categorical
         else:
             raise ValueError(f'Unsupported distribution type: {distribution_type}')
 
         self.det_mdl = torch.nn.Sequential(*layers_with_activation(lws, activation, layer_norm=layer_norm))
-        self.prob_mdl = prob_mdl
+
+    @staticmethod
+    def _prob_mdl_none(x: torch.Tensor):
+        return torch.tanh(x)
+
+    @staticmethod
+    def _prob_mdl_normal(x: torch.Tensor):
+        x = make_gaussian_params(x, 1e-3)
+        return sample_from_gaussian(x)
+
+    @staticmethod
+    def _prob_mdl_categorical(x: torch.Tensor):
+        return sample_from_categorical(x)
 
     def forward(self,
                 actions: torch.Tensor,
