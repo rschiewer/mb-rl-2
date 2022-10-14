@@ -19,20 +19,20 @@ class AbstractActionModel(torch.nn.Module):
                  lws: tuple = (64, 64),
                  layer_norm: bool = False,
                  activation: str = 'relu',
-                 distribution_type: DistributionType = DistributionType.NONE):
+                 distribution_type: str = None):
         super(AbstractActionModel, self).__init__()
 
         self.d_abstract_action = d_a_abstract
         self.distribution_type = distribution_type
 
         self.flatten_layer = torch.nn.Flatten(start_dim=1)
-        if distribution_type is DistributionType.NONE:
+        if distribution_type is None:
             lws = (d_a * abstract_step_size, *lws, d_a_abstract)
             self.prob_mdl = self._prob_mdl_none
-        elif distribution_type is DistributionType.NORMAL:
+        elif distribution_type == 'normal':
             lws = (d_a * abstract_step_size, *lws, d_a_abstract * 2)
             self.prob_mdl = self._prob_mdl_normal
-        elif distribution_type is DistributionType.CATEGORICAL:
+        elif distribution_type == 'categorical':
             lws = (d_a * abstract_step_size, *lws, d_a_abstract)
             self.prob_mdl = self._prob_mdl_categorical
         else:
@@ -41,17 +41,25 @@ class AbstractActionModel(torch.nn.Module):
         self.det_mdl = torch.nn.Sequential(*layers_with_activation(lws, activation, layer_norm=layer_norm))
 
     @staticmethod
-    def _prob_mdl_none(x: torch.Tensor):
+    def _prob_mdl_none(x: torch.Tensor, sample: bool):
         return torch.tanh(x)
 
     @staticmethod
-    def _prob_mdl_normal(x: torch.Tensor):
+    def _prob_mdl_normal(x: torch.Tensor, sample: bool):
         x = make_gaussian_params(x, 1e-3)
-        return sample_from_gaussian(x)
+        if sample:
+            x = sample_from_gaussian(x)
+        else:
+            x = get_mu(x)
+        return x
 
     @staticmethod
-    def _prob_mdl_categorical(x: torch.Tensor):
-        return sample_from_categorical(x)
+    def _prob_mdl_categorical(x: torch.Tensor, sample: bool):
+        if sample:
+            x = sample_from_categorical(x)
+        else:
+            x = torch.nn.functional.one_hot(torch.argmax(x, dim=-1), num_classes=x.shape[-1])
+        return x
 
     def forward(self,
                 actions: torch.Tensor,
@@ -59,7 +67,7 @@ class AbstractActionModel(torch.nn.Module):
         # actions.shape = (d_batch, n_abstract_steps, d_action)
         x = self.flatten_layer(actions)
         x = self.det_mdl(x)
-        x = self.prob_mdl(x)
+        x = self.prob_mdl(x, sample)
         # x = torch.softmax(x, dim=-1)
         #x = torch.nn.functional.gumbel_softmax(x, hard=True, tau=0.1)
         #x = torch.softmax(x, dim=-1)
