@@ -64,8 +64,10 @@ if __name__ == '__main__':
     section_lengths = []
     for i_ep in tqdm(range(planning_cfg['n_episodes'])):
         planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, device=mdl.device)
-        planner_abstr = CrossentropyPlanner(DistributionType.NORMAL, device=mdl.device)
-        #planner_abstr = CrossentropyPlanner(DistributionType.CATEGORICAL, device=mdl.device)
+        if mdl.abstract_action_model.distribution_type in (None, 'normal'):
+            planner_abstr = CrossentropyPlanner(DistributionType.NORMAL, device=mdl.device)
+        else:
+            planner_abstr = CrossentropyPlanner(DistributionType.CATEGORICAL, device=mdl.device)
 
         #planner_prim = GradientPlanner(DistributionType.CATEGORICAL, device=mdl.device)
         #planner_abstr = GradientPlanner(DistributionType.NORMAL, device=mdl.device)
