@@ -1,4 +1,4 @@
-from enum import Enum
+from enum import Enum, auto
 from typing import Callable, Union, Tuple, List, Optional, Dict, Iterable, Sequence, TypeVar
 from functools import reduce
 from math import ceil
@@ -34,9 +34,10 @@ def process_terminal_flag_mat(terminal_flags: torch.Tensor):
 
 
 class DistributionType(Enum):
-    NORMAL = 0
-    CATEGORICAL = 1
-    ONE_HOT_CATEGORICAL = 2
+    NONE = auto()
+    NORMAL = auto()
+    CATEGORICAL = auto()
+    ONE_HOT_CATEGORICAL = auto()
 
 
 class CrossentropyPlanner:
