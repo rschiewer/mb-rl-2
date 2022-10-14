@@ -6,8 +6,8 @@ import haste_pytorch as haste
 from RIM import RIM
 
 from mdm.utils.torch_tools import (layers_with_activation, add_time_dim, remove_time_dim, sample_from_gaussian,
-                                   make_gaussian_params, get_mu, get_sigma, RnnStateType)
-
+                                   make_gaussian_params, get_mu, get_sigma, RnnStateType, sample_from_categorical)
+from mdm.utils.utils import DistributionType
 
 
 class AbstractActionModel(torch.nn.Module):
@@ -18,33 +18,54 @@ class AbstractActionModel(torch.nn.Module):
                  d_a_abstract: int,
                  lws: tuple = (64, 64),
                  layer_norm: bool = False,
-                 activation: str = 'relu'):
+                 activation: str = 'relu',
+                 distribution_type: DistributionType = DistributionType.NONE):
         super(AbstractActionModel, self).__init__()
 
         self.d_abstract_action = d_a_abstract
+        self.distribution_type = distribution_type
 
-        lws = (d_a * abstract_step_size, *lws, d_a_abstract)
         self.flatten_layer = torch.nn.Flatten(start_dim=1)
+        if distribution_type is DistributionType.NONE:
+            lws = (d_a * abstract_step_size, *lws, d_a_abstract)
+
+            def prob_mdl(x: torch.Tensor):
+                return torch.tanh(x)
+        elif distribution_type is DistributionType.NORMAL:
+            lws = (d_a * abstract_step_size, *lws, d_a_abstract * 2)
+
+            def prob_mdl(x: torch.Tensor):
+                x = make_gaussian_params(x, 1e-3)
+                return sample_from_gaussian(x)
+        elif distribution_type is DistributionType.CATEGORICAL:
+            lws = (d_a * abstract_step_size, *lws, d_a_abstract)
+
+            def prob_mdl(x: torch.Tensor):
+                return sample_from_categorical(x)
+        else:
+            raise ValueError(f'Unsupported distribution type: {distribution_type}')
+
         self.det_mdl = torch.nn.Sequential(*layers_with_activation(lws, activation, layer_norm=layer_norm))
+        self.prob_mdl = prob_mdl
 
     def forward(self,
                 actions: torch.Tensor,
                 sample: bool = True) -> torch.Tensor:
         # actions.shape = (d_batch, n_abstract_steps, d_action)
-        macro_action = self.flatten_layer(actions)
-        macro_action = self.det_mdl(macro_action)
-        macro_action = torch.tanh(macro_action)
-        # macro_action = torch.softmax(macro_action, dim=-1)
-        #macro_action = torch.nn.functional.gumbel_softmax(macro_action, hard=True, tau=0.1)
-        #macro_action = torch.softmax(macro_action, dim=-1)
-        #macro_action = torch.nn.functional.one_hot(macro_action.argmax(-1), macro_action.shape[-1]) - macro_action.detach() + macro_action
-        #macro_action = torch.distributions.RelaxedOneHotCategorical(logits=macro_action, temperature=0.1)
+        x = self.flatten_layer(actions)
+        x = self.det_mdl(x)
+        x = self.prob_mdl(x)
+        # x = torch.softmax(x, dim=-1)
+        #x = torch.nn.functional.gumbel_softmax(x, hard=True, tau=0.1)
+        #x = torch.softmax(x, dim=-1)
+        #x = torch.nn.functional.one_hot(x.argmax(-1), x.shape[-1]) - x.detach() + x
+        #x = torch.distributions.RelaxedOneHotCategorical(logits=x, temperature=0.1)
         #if sample:
-        #    macro_action = macro_action.rsample()
+        #    x = x.rsample()
         #else:
-        #    macro_action = torch.nn.functional.one_hot(macro_action.probs.argmax(-1), self.d_abstract_action)
-        #    macro_action = macro_action.to(torch.float32)
-        return macro_action
+        #    x = torch.nn.functional.one_hot(x.probs.argmax(-1), self.d_abstract_action)
+        #    x = x.to(torch.float32)
+        return x
 
 
 class RSSM(torch.nn.Module):
@@ -257,13 +278,13 @@ class RSSM(torch.nn.Module):
     def _build_o_dist(self,
                       s: torch.Tensor) -> torch.Tensor:
         o_params = self._o_dist(s)
-        o_params = make_gaussian_params(o_params, self.epsilon)
+        o_params = make_gaussian_params(o_params, 1e-3)
         return o_params
 
     def _build_r_dist(self,
                       s: torch.Tensor) -> torch.Tensor:
         r_params = self._r_dist(s)
-        r_params = make_gaussian_params(r_params, self.epsilon)
+        r_params = make_gaussian_params(r_params, 1e-3)
         return r_params
 
     def _build_terminal_dist(self,
