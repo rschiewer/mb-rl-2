@@ -204,6 +204,31 @@ class ContinuousBernoulliBlock(FeedforwardBlock):
         return x_dist
 
 
+def build_categorical(params: torch.Tensor,
+                      temperature: float = 0.1,
+                      params_are_probs: bool = False):
+    if params_are_probs:
+        dist = torch.distributions.RelaxedOneHotCategorical(temperature, probs=params)
+    else:
+        dist = torch.distributions.RelaxedOneHotCategorical(temperature, logits=params)
+    return dist
+
+
+def sample_from_categorical(params: torch.Tensor,
+                            temperature: float = 0.1,
+                            params_are_probs : bool = False,
+                            gradient: bool = True):
+    if params_are_probs:
+        dist = torch.distributions.RelaxedOneHotCategorical(temperature, probs=params)
+    else:
+        dist = torch.distributions.RelaxedOneHotCategorical(temperature, logits=params)
+
+    if gradient:
+        return dist.rsample()
+    else:
+        return dist.sample()
+
+
 def make_gaussian_params(params: torch.Tensor,
                          epsilon: float) -> torch.Tensor:
     assert params.shape[-1] % 2 == 0
