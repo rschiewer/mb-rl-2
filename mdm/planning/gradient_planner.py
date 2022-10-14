@@ -5,7 +5,8 @@ from typing import Union, Callable, Tuple, Optional, Dict
 import numpy as np
 
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
-from mdm.planning.cem_planner import DistributionType, process_terminal_flag_mat, compute_episode_returns
+from mdm.planning.cem_planner import process_terminal_flag_mat, compute_episode_returns
+from mdm.utils.utils import DistributionType
 from mdm.utils.torch_tools import TensorData
 
 class GradientPlanner:

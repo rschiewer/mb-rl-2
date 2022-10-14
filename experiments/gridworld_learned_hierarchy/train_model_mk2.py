@@ -8,7 +8,8 @@ import numpy as np
 from PIL import Image
 
 from mdm.gridworld.gridworld import Gridworld
-from mdm.utils.utils import here, load_yaml, prepare_data, fill_placeholders, discrete_stats, compute_returns
+from mdm.utils.utils import here, load_yaml, prepare_data, fill_placeholders, discrete_stats, compute_returns, \
+    DistributionType
 from mdm.utils.torch_tools import get_mu, get_sigma, bin_every_k_steps
 from mdm.models.building_blocks import RSSM, AbstractActionModel
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
@@ -16,7 +17,7 @@ from mdm.training.dynamics_model_trainer import DynamicsModelTrainer
 from mdm.memory.trajectory_memory import TrajectoryMemory
 from mdm.training.gym_driver import GymEpisodeDriver
 from mdm.planning.planning_policy import PlanningPolicy
-from mdm.planning.cem_planner import CrossentropyPlanner, DistributionType
+from mdm.planning.cem_planner import CrossentropyPlanner
 from mdm.training.offline_rl_driver import OfflineRLDriver, SamplingType
 from mdm.logging.neptune_logger import NeptuneLogger
 from mdm.logging.not_logger import NotLogger
@@ -64,20 +65,20 @@ if __name__ == '__main__':
                                        abstract_action_model=abstr_act_mdl, **cfg['mdm'])
     model = model.to('cuda')
     model.training = True
-    optimizer = torch.optim.Adam(model.parameters(), **cfg['optim'])
-    # optimizer = torch.optim.AdamW(model.parameters(), **cfg['optim'])
+    #optimizer = torch.optim.Adam(model.parameters(), **cfg['optim'])
+    optimizer = torch.optim.AdamW(model.parameters(), **cfg['optim'])
 
     # build data pipeline
-    train_mem = TrajectoryMemory()
-    random_driver = GymEpisodeDriver(env, lambda o, r, term, i_ep: env.action_space.sample())
-    planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, device=model.device)
-    planner_abstr = CrossentropyPlanner(DistributionType.NORMAL, device=model.device)
-    policy = PlanningPolicy(model=model, env=env, planner_prim=planner_prim, planner_abstr=planner_abstr,
-                            n_rollouts=2048, n_plan_steps_abstr=30, n_optim_steps_prim=10,
-                            n_optim_steps_abstr=10, winning_perc=0.2, discount=0.95, replan_interval=5,
-                            act_noise_prim=0.01, act_noise_abstr=0.01, n_warmup_prim=model.n_warmup_prim,
-                            n_warmup_abstr=model.n_warmup_abstr)
-    planning_driver = GymEpisodeDriver(env, policy)
+    #train_mem = TrajectoryMemory()
+    #random_driver = GymEpisodeDriver(env, lambda o, r, term, i_ep: env.action_space.sample())
+    #planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, device=model.device)
+    #planner_abstr = CrossentropyPlanner(DistributionType.NORMAL, device=model.device)
+    #policy = PlanningPolicy(model=model, env=env, planner_prim=planner_prim, planner_abstr=planner_abstr,
+    #                        n_rollouts=2048, n_plan_steps_abstr=30, n_optim_steps_prim=10,
+    #                        n_optim_steps_abstr=10, winning_perc=0.2, discount=0.95, replan_interval=5,
+    #                        act_noise_prim=0.01, act_noise_abstr=0.01, n_warmup_prim=model.n_warmup_prim,
+    #                        n_warmup_abstr=model.n_warmup_abstr)
+    #planning_driver = GymEpisodeDriver(env, policy)
     d_batch, pad = cfg['trainer']['d_batch'], cfg['trainer']['pad_last_terminal_flag']
 
     train_mem = TrajectoryMemory.load(here() / cfg['train_samples'])
@@ -131,9 +132,7 @@ if __name__ == '__main__':
     model_path = f'{cfg["final_model_path"]}_{cfg["mdm"]["abstract_step_size"]}.ptmdl'
 
     # train
-
     fig = plt.figure(figsize=(10, 10))
-
 
     def eval_callback(o: torch.Tensor, a: torch.Tensor, r: torch.Tensor, term: torch.Tensor, i_step: int):
         if model.abstract_step_size <= 10:
@@ -151,7 +150,7 @@ if __name__ == '__main__':
 
         abstr_r = bin_every_k_steps(r, model.abstract_step_size, padding_val=0).sum(dim=2)
         abstr_term = bin_every_k_steps(term, model.abstract_step_size).max(dim=2).values
-        pred = model(o, a, r, term, abstr_r, abstr_term, model.n_warmup_prim, model.n_warmup_abstr)
+        pred = model(o, a, r, term, abstr_r, abstr_term, 3, 1)
         for key in ('prim_o', 'prim_r', 'abstr_o', 'abstr_r'):
             full_key = key + '_dist'
             mu = get_mu(pred[full_key]).mean()
@@ -159,13 +158,11 @@ if __name__ == '__main__':
             logger.log({full_key + '_mean': mu, full_key + '_sigma': sigma},
                        Scope.PARAMETERS() / 'model_stats', i_step)
 
-
     def train_callback(i_step: int):
         pass
         #logger.log({'n_warmup_prim': model.n_warmup_prim,
         #            'n_warmup_abstr': model.n_warmup_abstr},
         #           Scope.TRAIN(), i_step)
-
 
     trainer = DynamicsModelTrainer(model=model, optimizer=optimizer, get_batch_train=get_batch_train,
                                    get_batch_test=get_batch_test, logger=logger, train_callback=train_callback,

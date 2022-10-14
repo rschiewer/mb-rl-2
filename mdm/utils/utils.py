@@ -1,3 +1,4 @@
+from enum import Enum, auto
 from inspect import stack
 from pathlib import Path
 from typing import Union, Dict, Tuple, List, Optional
@@ -18,6 +19,13 @@ from mdm.gridworld.gridworld import Gridworld, CellType
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.memory.trajectory_memory import flatten_and_unsqueeze, TrajectoryMemory
 from mdm.utils.torch_tools import add_time_dim, get_mu, get_sigma, unpack_rnn_state, pack_rnn_state
+
+
+class DistributionType(Enum):
+    NONE = auto()
+    NORMAL = auto()
+    CATEGORICAL = auto()
+    ONE_HOT_CATEGORICAL = auto()
 
 
 def here() -> Path:

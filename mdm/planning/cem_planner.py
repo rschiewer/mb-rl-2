@@ -1,6 +1,4 @@
-from enum import Enum, auto
-from typing import Callable, Union, Tuple, List, Optional, Dict, Iterable, Sequence, TypeVar
-from functools import reduce
+from typing import Callable, Union, Tuple, Optional, Dict
 from math import ceil
 
 import torch
@@ -8,6 +6,7 @@ import numpy as np
 
 
 from mdm.utils.torch_tools import TensorData
+from mdm.utils.utils import DistributionType
 
 
 def compute_episode_returns(step_rewards: torch.Tensor,
@@ -31,13 +30,6 @@ def process_terminal_flag_mat(terminal_flags: torch.Tensor):
     terminal_flags[:, 0] = 0
     disc_mat = torch.cumprod(1 - terminal_flags, dim=1)
     return disc_mat
-
-
-class DistributionType(Enum):
-    NONE = auto()
-    NORMAL = auto()
-    CATEGORICAL = auto()
-    ONE_HOT_CATEGORICAL = auto()
 
 
 class CrossentropyPlanner:

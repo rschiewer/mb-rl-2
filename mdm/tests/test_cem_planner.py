@@ -3,9 +3,9 @@ import unittest
 
 import torch
 
-from mdm.planning.cem_planner import CrossentropyPlanner, DistributionType
+from mdm.planning.cem_planner import CrossentropyPlanner
 from mdm.gridworld.gridworld import Gridworld
-from mdm.utils.utils import here
+from mdm.utils.utils import here, DistributionType
 
 
 class CrossentropyMethodPlanner(unittest.TestCase):
