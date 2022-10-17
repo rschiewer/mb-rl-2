@@ -65,8 +65,14 @@ if __name__ == '__main__':
                                        abstract_action_model=abstr_act_mdl, **cfg['mdm'])
     model = model.to('cuda')
     model.training = True
-    #optimizer = torch.optim.Adam(model.parameters(), **cfg['optim'])
-    optimizer = torch.optim.AdamW(model.parameters(), **cfg['optim'])
+
+    optim_type = cfg['optim'].pop('type')
+    if optim_type == 'adam':
+        optimizer = torch.optim.Adam(model.parameters(), **cfg['optim'])
+    elif optim_type == 'adamW':
+        optimizer = torch.optim.AdamW(model.parameters(), **cfg['optim'])
+    else:
+        raise ValueError(f'Unknown optimizer type: {optim_type}')
 
     # build data pipeline
     #train_mem = TrajectoryMemory()

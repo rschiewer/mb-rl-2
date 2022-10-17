@@ -2,17 +2,17 @@
 env: "../../mdm/gridworld/8x8_v0.mapdata"
 neptune_cfg: "../neptune_settings.yaml"
 train_samples: "gridworld_v1_train.samples"
-test_samples: "gridworld_v1_test.samples"
+test_samples: "gridworld_v0_good_trajectories.samples"
 checkpoint_path: "checkpoints"
 final_model_path: "model"
 
 # model in general
 mdm:
   abstract_step_size: 3
-  beta_kl_primitive: 0.05 #0.005
-  beta_reg_primitive: 0.01 #0.005
-  beta_kl_abstract: 0.05 #0.005
-  beta_reg_abstract: 0.01 #0.001
+  beta_kl_primitive: 1.0 #0.005
+  beta_reg_primitive: 0.0 #0.005
+  beta_kl_abstract: 1.0 #0.005
+  beta_reg_abstract: 0.0 #0.001
   n_warmup_prim: 3
   n_warmup_abstr: 1
   detach_posteriors: False
@@ -23,13 +23,11 @@ mdm:
 prim_mdl:
   d_z: 32
   d_h: 64
-  d_s: 96
-  n_hidden_layers: 1
+  n_hidden_layers: 2
   hidden_dropout: 0.1
-  epsilon: 1.0 #0.01
+  epsilon: 0.01
   z_prior_lws: [64, 64]
   z_post_lws: [64, 64]
-  s_lws: []
   o_lws: [64, 64]
   r_lws: [64, 64]
   term_lws: [64, 64]
@@ -41,15 +39,13 @@ prim_mdl:
 abstr_mdl:
   d_z: 64
   d_h: 128
-  d_s: 192
-  d_a: 6
+  d_a: 8
   d_r: 1
-  n_hidden_layers: 5
+  n_hidden_layers: 6
   hidden_dropout: 0.1
-  epsilon: 1.0 #0.01
+  epsilon: 0.01
   z_prior_lws: [64, 64]
   z_post_lws: [64, 64]
-  s_lws: []
   o_lws: [64, 64]
   r_lws: [64, 64]
   term_lws: [64, 64]
@@ -59,11 +55,13 @@ abstr_mdl:
   stochastic_outputs: True
 
 abstr_act_mdl:
-  lws: [128, 128]
+  lws: [64, 64]
   activation: "relu"
   layer_norm: True
+  distribution_type: "categorical"
 
 optim:
+  type: 'adam'  #'adamW'
   lr: 0.001 #0.0002
 
 trainer:
