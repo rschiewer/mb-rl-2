@@ -85,8 +85,8 @@ class DynamicsModelTrainer(ABC):
                 eval_losses = self.model.eval_step(s, a, r, term)
 
                 last_total_loss = last_eval_losses.get('total', np.inf)
-                if checkpoint_path and eval_losses['total'] < last_total_loss:
-                    torch.save(self.model, Path(checkpoint_path).parent / 'checkpoint.ptmdl')
+                #if checkpoint_path and eval_losses['total'] < last_total_loss:
+                #    torch.save(self.model, Path(checkpoint_path).parent / 'checkpoint.ptmdl')
 
                 last_eval_losses = eval_losses
 
