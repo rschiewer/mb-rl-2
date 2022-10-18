@@ -254,6 +254,21 @@ class GridworldTest(unittest.TestCase):
         o, r, done, info = fully_observable_world.step(fully_observable_world.action_space.sample())
         self.assertGreater(np.sum(np.abs(o_old - o)), 0)
 
+    def test_async_vector_gridworld(self):
+        envs = gym.vector.AsyncVectorEnv([
+            lambda: Gridworld.from_cleartext(Path(__file__).parent / 'testmap.mapdata'),
+            lambda: Gridworld.from_cleartext(Path(__file__).parent / 'testmap_multi_start_pos.mapdata'),
+            lambda: Gridworld.from_cleartext(Path(__file__).parent / 'testmap_no_start_pos.mapdata'),
+            lambda: Gridworld.from_cleartext(Path(__file__).parent / 'testmap.mapdata'),
+        ])
+
+        envs.reset()
+        done = [False]
+        while not all(done):
+            a = envs.action_space.sample()
+            o, r, done, info = envs.step(a)
+
+
     @unittest.skip
     def test_render(self):
         world = self.world
