@@ -232,8 +232,8 @@ def sample_from_categorical(params: torch.Tensor,
 def make_gaussian_params(params: torch.Tensor,
                          epsilon: float) -> torch.Tensor:
     assert params.shape[-1] % 2 == 0
-    mu, sigma = torch.tensor_split(params, 2, dim=-1)
-    sigma = torch.abs(sigma) + epsilon
+    mu, logvar = torch.tensor_split(params, 2, dim=-1)
+    sigma = torch.exp(0.5 * logvar) + epsilon #torch.nn.functional.relu(logvar) + epsilon
     return torch.concat([mu, sigma], dim=-1)
 
 
