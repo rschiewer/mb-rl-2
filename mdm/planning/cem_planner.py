@@ -36,9 +36,11 @@ class CrossentropyPlanner:
 
     def __init__(self,
                  type: DistributionType = DistributionType.NORMAL,
-                 device: torch.device = 'cpu'):
+                 device: torch.device = 'cpu',
+                 **dist_args):
         self.type = type
         self.device = device
+        self.dist_args = dist_args
         if type is DistributionType.NORMAL:
             self._act_dist = torch.distributions.Normal
             self._init_dist = self._init_normal
@@ -101,8 +103,10 @@ class CrossentropyPlanner:
                      d_batch: int,
                      n_time_steps: int,
                      d_dist: int):
-        mu = 2 * torch.rand(d_batch, n_time_steps, d_dist, device=self.device) - 1
-        sigma = torch.rand(d_batch, n_time_steps, d_dist, device=self.device) + 0.01
+        mu_spread = self.dist_args.get('mu_spread', 2.0)
+        sigma_min = self.dist_args.get('sigma_min', 0.1)
+        mu = mu_spread * torch.rand(d_batch, n_time_steps, d_dist, device=self.device) - mu_spread / 2
+        sigma = torch.rand(d_batch, n_time_steps, d_dist, device=self.device) + sigma_min
         return torch.stack([mu, sigma], dim=0)
 
     def _build_normal(self,
