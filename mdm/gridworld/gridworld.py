@@ -19,6 +19,7 @@ class Gridworld(gym.Env):
 
     # up, right, down, left
     move_offset = ((-1, 0), (0, 1), (1, 0), (0, -1))
+    action_descriptions = ['up', 'right', 'down', 'left']
     colors = {
         CellType.AGENT: '#00FF00',
         CellType.REWARD: '#FF0000',
