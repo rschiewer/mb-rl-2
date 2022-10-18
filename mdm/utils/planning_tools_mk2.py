@@ -464,9 +464,6 @@ def plan_section_flexible(model: MultiscaleDynamicsModelMK2,
         a_seq = to_onehot(a_seq, n_classes=model.d_action)
         n_sequences = a_seq.shape[0]
 
-        if seq_len == 1:
-            a_seq = a_seq.unsqueeze(1)
-
         z_start = history['prim_z'][:, -1].repeat(n_sequences, 1)
         rnn_state_start = unpack_rnn_state(history['prim_rnn_state'][:, -1].repeat(n_sequences, 1, 1, 1))
         s_goal = history['abstr_o'][:, i_section].repeat(n_sequences, 1)

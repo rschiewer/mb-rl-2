@@ -242,6 +242,8 @@ def to_onehot(actions: Union[torch.Tensor, np.ndarray],
 
     actions = actions.squeeze(-1)
     if isinstance(actions, torch.Tensor):
+        if actions.ndim == 1:
+            actions = actions.unsqueeze(-1)
         actions = actions.to(dtype=torch.int64)
         actions = torch.nn.functional.one_hot(actions, num_classes=n_classes)
         actions = actions.to(device=actions.device, dtype=torch.float32)
