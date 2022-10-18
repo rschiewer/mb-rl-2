@@ -77,18 +77,18 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         prim_current = self.primitive_model.gen_init_values(d_batch, self.device)
         abstr_current = self.abstract_model.gen_init_values(d_batch, self.device)
 
-        warmup_steps_prim_left = n_warmup_prim  #self.n_warmup_prim
-        warmup_steps_abstr_left = n_warmup_abstr  #self.n_warmup_abstr
+        warmup_steps_prim_left = n_warmup_prim
+        warmup_steps_abstr_left = n_warmup_abstr
         for i_chunk in range(a_binned.shape[1]):
             i_start = i_chunk * self.abstract_step_size
             i_end = min((i_chunk + 1) * self.abstract_step_size, n_steps_prim)
 
             # primitive model rollout
-            n_warmup_prim = min(warmup_steps_prim_left, self.abstract_step_size)
+            #n_warmup_prim = min(warmup_steps_prim_left, self.abstract_step_size)
             mem, prim_current = self.rollout_primitive(a=a[:, i_start: i_end], o=o[:, i_start: i_end],
                                                        r=r[:, i_start: i_end], term=term[:, i_start: i_end],
                                                        z=prim_current['z'], rnn_state=prim_current['rnn_state'],
-                                                       n_posterior_steps=n_warmup_prim,
+                                                       n_posterior_steps=warmup_steps_prim_left,
                                                        mem=mem, sample=True)
 
             # input to abstr act mdl needs to be always of same length, so take a_binned instead of a[i_start: i_end]
@@ -100,13 +100,13 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             prim_data = mem[self.abstr_pred_target][-1].detach()
             mem['abstr_o_target'].append(prim_data)
 
-            n_warmup_abstr = 1 if warmup_steps_abstr_left > 0 else 0
+            #n_warmup_abstr = 1 if warmup_steps_abstr_left > 0 else 0
             mem, abstr_current = self.rollout_abstract(a=add_time_dim(abstr_a), r=add_time_dim(abstr_r[:, i_chunk]),
                                                        term=add_time_dim(abstr_term[:, i_chunk]),
                                                        prim_data=add_time_dim(prim_data),
                                                        z=abstr_current['z'],
                                                        rnn_state=abstr_current['rnn_state'],
-                                                       n_posterior_steps=n_warmup_abstr,
+                                                       n_posterior_steps=warmup_steps_abstr_left,
                                                        mem=mem, sample=True)
 
             # exchange primitive model's internal state with prediction from abstract model
@@ -116,8 +116,12 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             # prim_current['z'] = abstr_current['o']
 
             # warmup should only happen at first sequence chunk
-            warmup_steps_prim_left = max(warmup_steps_prim_left - self.abstract_step_size, 0)
-            warmup_steps_abstr_left = max(warmup_steps_abstr_left - 1, 0)
+            if warmup_steps_prim_left > 0:
+                warmup_steps_prim_left -= max(self.abstract_step_size, 0)
+            if warmup_steps_abstr_left > 0:
+                warmup_steps_abstr_left -= 1
+            #warmup_steps_prim_left = max(warmup_steps_prim_left - self.abstract_step_size, 0)
+            #warmup_steps_abstr_left = max(warmup_steps_abstr_left - 1, 0)
 
         mem = self.pack_mem(mem)
 
@@ -449,8 +453,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         # default argument means we use as much ground truth data as possible with the posterior
         if n_posterior_steps == -1:
             n_posterior_steps = n_groundtruth_available
-        elif n_posterior_steps > n_groundtruth_available:
-            raise ValueError(f'Can\'t perform more posterior steps as groundtruth data is available.')
+        #elif n_posterior_steps > n_groundtruth_available:
+        #    raise ValueError(f'Can\'t perform more posterior steps as groundtruth data is available.')
 
         # prediction
         for t in range(n_steps):
@@ -501,11 +505,11 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         # default argument means we use as much ground truth data as possible with the posterior
         if n_posterior_steps == -1:
             n_posterior_steps = n_groundtruth_available
-        elif n_posterior_steps > n_groundtruth_available:
-            raise ValueError(f'Can\'t perform more posterior steps as groundtruth data is available.')
+        #elif n_posterior_steps > n_groundtruth_available:
+        #    raise ValueError(f'Can\'t perform more posterior steps as groundtruth data is available.')
 
-        if a.min() < -1 or a.max() > 1:
-            raise ValueError('Abstract actions should not contain values outside of the interval [-1, 1]')
+        #if a.min() < -1 or a.max() > 1:
+        #    raise ValueError('Abstract actions should not contain values outside of the interval [-1, 1]')
 
         for t in range(n_steps):
             if t < n_groundtruth_available:
