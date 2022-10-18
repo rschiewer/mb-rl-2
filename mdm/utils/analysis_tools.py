@@ -210,7 +210,7 @@ def visualize_plan(trajectory_history: Dict[str, torch.Tensor], env: Gridworld, 
     return similarity_maps
 
 
-def primitive_action_maps(model: MultiscaleDynamicsModelMK2):
+def primitive_action_maps(env: Gridworld, model: MultiscaleDynamicsModelMK2):
     device = next(model.parameters()).device
     n_actions = model.d_action
     seq_len = model.abstract_step_size
@@ -218,7 +218,20 @@ def primitive_action_maps(model: MultiscaleDynamicsModelMK2):
     # generate all permutations of possible inputs
     available_inputs = list(range(n_actions))
     input_sequences = list(product(available_inputs, repeat=seq_len))
+    descriptions = [' '.join([env.action_descriptions[a] for a in seq]) for seq in input_sequences]
     input_sequences = torch.tensor(input_sequences).to(device)
     input_sequences = to_onehot(input_sequences, n_actions)
     abstract_actions = model.abstract_action_model(input_sequences)
-    return abstract_actions.detach().cpu().numpy()
+    return descriptions, abstract_actions.detach().cpu().numpy()
+
+
+def infer_primitive_actions(trajectory_history, action_descriptions, canonical_abstr_a):
+    n_canonical_abstr_a = canonical_abstr_a.shape[0]
+    plan_description = []
+    for abstr_a in trajectory_history['abstr_a'][0]:
+        abstr_a = abstr_a.detach().cpu().numpy()
+        abstr_a = np.tile(abstr_a, reps=(n_canonical_abstr_a, 1))
+        closest = np.sum((abstr_a - canonical_abstr_a) ** 2, axis=-1).argmin()
+        plan_description.append(action_descriptions[closest])
+    plan_description = ' | '.join(plan_description)
+    return plan_description
