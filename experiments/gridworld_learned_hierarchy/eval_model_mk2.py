@@ -88,6 +88,7 @@ if __name__ == '__main__':
                                            planning_cfg['act_noise_abstr'])
 
         plan_descr = infer_primitive_actions(trajectory_history, descriptions, canonical_abstr_a)
+        logger.log({'most_prob_prim_a': plan_descr}, Scope.TEST(), i_ep)
 
         current_section_lengths = []
         for i_sec in range(planning_cfg['n_abstract_steps']):
