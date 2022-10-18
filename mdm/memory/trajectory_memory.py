@@ -204,9 +204,9 @@ class TrajectoryMemory:
     def _update_sampling_weights(self):
         if len(self) > 0:
             weights = map(lambda t: t['w'], self._mem)
-            weights = np.fromiter(weights, dtype=float)
+            weights = np.fromiter(weights, dtype=np.float64)
             weights -= weights.min(initial=0)
-            weights /= weights.sum(initial=1.0)
+            weights = weights / np.linalg.norm(weights, ord=1)
             self._weights_cached = weights
 
     def _update_sampling_indices(self):
