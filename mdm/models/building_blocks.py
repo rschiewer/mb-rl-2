@@ -2,8 +2,8 @@ from typing import Tuple, Optional, Sequence, Union, TypeVar
 from enum import Enum
 
 import torch
-import haste_pytorch as haste
-from RIM import RIM
+#import haste_pytorch as haste
+#from RIM import RIM
 
 from mdm.utils.torch_tools import (layers_with_activation, add_time_dim, remove_time_dim, sample_from_gaussian,
                                    make_gaussian_params, get_mu, get_sigma, RnnStateType, sample_from_categorical)
@@ -46,11 +46,17 @@ class AbstractActionModel(torch.nn.Module):
 
     @staticmethod
     def _prob_mdl_normal(x: torch.Tensor, sample: bool):
-        x = make_gaussian_params(x, 1e-3)
+        x = make_gaussian_params(x, 0.1)
+
+        # restrict mean of Gaussians to (-1, 1)
+        mu, sigma = torch.tensor_split(x, 2, dim=-1)
+        mu = torch.tanh(mu)
+        x = torch.concat([mu, sigma], dim=-1)
+
         if sample:
             x = sample_from_gaussian(x)
         else:
-            x = get_mu(x)
+            x = mu
         return x
 
     @staticmethod
@@ -291,13 +297,13 @@ class RSSM(torch.nn.Module):
     def _build_o_dist(self,
                       s: torch.Tensor) -> torch.Tensor:
         o_params = self._o_dist(s)
-        o_params = make_gaussian_params(o_params, 1e-3)
+        o_params = make_gaussian_params(o_params, 1e-5)
         return o_params
 
     def _build_r_dist(self,
                       s: torch.Tensor) -> torch.Tensor:
         r_params = self._r_dist(s)
-        r_params = make_gaussian_params(r_params, 1e-3)
+        r_params = make_gaussian_params(r_params, 1e-5)
         return r_params
 
     def _build_terminal_dist(self,
