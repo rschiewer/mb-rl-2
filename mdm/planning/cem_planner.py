@@ -42,12 +42,10 @@ class CrossentropyPlanner:
         self.device = device
         self.dist_args = dist_args
         if type is DistributionType.NORMAL:
-            self._act_dist = torch.distributions.Normal
             self._init_dist = self._init_normal
             self._update_dist = self._update_normal
             self._build_dist = self._build_normal
         elif type is DistributionType.CATEGORICAL:
-            self._act_dist = torch.distributions.Categorical
             self._init_dist = self._init_categorical
             self._update_dist = self._update_categorical
             self._build_dist = self._build_categorical
@@ -152,7 +150,7 @@ class CrossentropyPlanner:
 
     def _build_categorical(self,
                            dist_params: torch.Tensor):
-        return self._act_dist(probs=dist_params)
+        return torch.distributions.Categorical(probs=dist_params)
 
     def _update_categorical(self,
                             actions: torch.Tensor,
