@@ -1,11 +1,11 @@
 ---
-n_episodes: 50
-n_rollouts: 2048
-n_optim_steps_abstr: 15
-n_optim_steps_prim: 10
-winning_perc: 0.2
-discount: 0.9
-act_noise_abstr: 0.01
-act_noise_prim: 0.01
+n_episodes: 10
+n_rollouts: 512
+n_optim_steps_abstr: 20
+n_optim_steps_prim: 20
+winning_perc: 0.3
+discount: 0.95
+act_noise_abstr: 0.0
+act_noise_prim: 0.0
 n_warmup_prim: 3
 n_warmup_abstr: 1
