@@ -92,11 +92,11 @@ if __name__ == '__main__':
 
         current_section_lengths = []
         for i_sec in range(planning_cfg['n_abstract_steps']):
-            trajectory_history, sec_len = plan_section_flexible(mdl, trajectory_history, planner_prim,
-                                                                planning_cfg['n_rollouts'],
-                                                                planning_cfg['n_optim_steps_prim'],
-                                                                planning_cfg['winning_perc'], planning_cfg['discount'],
-                                                                planning_cfg['act_noise_prim'])
+            trajectory_history, sec_len = plan_section_flexible(mdl, trajectory_history, planner_prim, i_sec,
+                                                       planning_cfg['n_rollouts'],
+                                                       planning_cfg['n_optim_steps_prim'],
+                                                       planning_cfg['winning_perc'], planning_cfg['discount'],
+                                                       planning_cfg['act_noise_prim'])
             current_section_lengths.append(sec_len)
         section_lengths.append(current_section_lengths)
         #visualize_plan(trajectory_history, env, mdl)

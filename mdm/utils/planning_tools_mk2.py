@@ -131,7 +131,7 @@ def init_abstr_s(model: MultiscaleDynamicsModelMK2,
                            for i_chunk in range(a_binned.shape[1])], dim=1)
     target = model.abstr_pred_target
     prim_data = bin_every_k_steps(history[target][:, :required_steps], model.abstract_step_size)[:, :, -1]
-    abstr_r = bin_every_k_steps(history['prim_r'][:, :required_steps], model.abstract_step_size).sum(dim=2)
+    abstr_r = bin_every_k_steps(history['prim_r'][:, :required_steps], model.abstract_step_size).mean(dim=2)
     abstr_term = bin_every_k_steps(history['prim_term'][:, :required_steps], model.abstract_step_size).max(dim=2).values
 
     mem, abstr_final = model.rollout_abstract(a=abstr_a, prim_data=prim_data, r=abstr_r,
@@ -399,6 +399,7 @@ def plan_abstract(model: MultiscaleDynamicsModelMK2,
 def plan_section(model: MultiscaleDynamicsModelMK2,
                  history: Dict[str, torch.Tensor],
                  planner_prim: CrossentropyPlanner,
+                 i_section: int,
                  n_rollouts: int,
                  n_evolution_steps: int,
                  winning_perc: float,
@@ -408,8 +409,6 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
     assert n_steps_done % model.abstract_step_size == 0, ('Warmup step count should be evenly divisible by the section '
                                                           f'length, but they are {n_steps_done} and '
                                                           f'{model.abstract_step_size}')
-    i_section = n_steps_done // model.abstract_step_size # + n_steps_done // model.abstract_step_size
-
     z_start = history['prim_z'][:, -1].repeat(n_rollouts, 1)
     rnn_state_start = unpack_rnn_state(history['prim_rnn_state'][:, -1].repeat(n_rollouts, 1, 1, 1))
     target = history['abstr_o'][:, i_section].repeat(n_rollouts, 1)
@@ -442,16 +441,14 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
 
 
 def plan_section_flexible(model: MultiscaleDynamicsModelMK2,
-                 history: Dict[str, torch.Tensor],
-                 planner_prim: CrossentropyPlanner,
-                 n_rollouts: int,
-                 n_evolution_steps: int,
-                 winning_perc: float,
-                 discount: float,
-                 a_noise_prim: float):
-    n_steps_done = history['prim_a'].shape[1]
-    i_section = n_steps_done // model.abstract_step_size
-
+                          history: Dict[str, torch.Tensor],
+                          planner_prim: CrossentropyPlanner,
+                          i_section: int,
+                          n_rollouts: int,
+                          n_evolution_steps: int,
+                          winning_perc: float,
+                          discount: float,
+                          a_noise_prim: float):
     if i_section >= history['abstr_o'].shape[1]:
         return history, 0
 
