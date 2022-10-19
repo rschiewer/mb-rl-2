@@ -398,30 +398,6 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             reconstructed = reconstructed.contiguous()
         return reconstructed
 
-    def fuse_state(self,
-                   s: torch.Tensor,
-                   rnn_state: RnnStateType) -> torch.Tensor:
-        # h_filtered = self.flatten_rnn_state(rnn_state)
-        # fused = torch.concat([s, h_filtered], dim=-1)
-        # fused = rnn_state[0][-1]
-        fused = s
-        return fused
-
-    def unfuse_state(self,
-                     fused_state: torch.Tensor) -> Tuple[torch.Tensor, RnnStateType]:
-        if fused_state.ndim == 1:
-            s = fused_state[:self.primitive_model.d_z]
-            h_filtered = fused_state[self.primitive_model.d_z:].unsqueeze(0)
-            h = self.reconstruct_rnn_state(h_filtered)
-            h = h[0].squeeze(1), h[1].squeeze(1)
-        elif fused_state.ndim == 2:
-            s = fused_state[:, :self.primitive_model.d_z]
-            h_filtered = fused_state[:, self.primitive_model.d_z:]
-            h = self.reconstruct_rnn_state(h_filtered)
-        else:
-            raise ValueError('Expected tensor with maximum one batch and one data dimension')
-        return s, h
-
     def rollout_primitive(self,
                           a: torch.Tensor,
                           o: Optional[torch.Tensor] = None,
