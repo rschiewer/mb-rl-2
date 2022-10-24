@@ -87,7 +87,7 @@ class CrossentropyMethodPlanner(unittest.TestCase):
         n_plan_steps = 100
         winning_perc = 0.25
         discount = 0.99
-        act_noise = 0.001
+        act_noise = 0.000
 
         batched_envs = [Gridworld.from_cleartext(here() / 'testmap.mapdata') for _ in range(d_batch)]
         ce_planner = CrossentropyPlanner(DistributionType.CATEGORICAL)
