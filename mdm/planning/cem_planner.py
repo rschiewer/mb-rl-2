@@ -37,10 +37,12 @@ class CrossentropyPlanner:
     def __init__(self,
                  type: DistributionType = DistributionType.NORMAL,
                  device: torch.device = 'cpu',
+                 alpha: float = 1.0,
                  **dist_args):
         self.type = type
         self.device = device
         self.dist_args = dist_args
+        self.alpha = alpha
         if type is DistributionType.NORMAL:
             self._init_dist = self._init_normal
             self._update_dist = self._update_normal
@@ -102,7 +104,7 @@ class CrossentropyPlanner:
                      n_time_steps: int,
                      d_dist: int):
         mu_spread = self.dist_args.get('mu_init_spread', 2.0)
-        sigma_min = self.dist_args.get('sigma_init_min', 0.1)
+        sigma_min = self.dist_args.get('sigma_init_min', 1.0)
         mu = mu_spread * torch.rand(d_batch, n_time_steps, d_dist, device=self.device) - mu_spread / 2
         sigma = torch.rand(d_batch, n_time_steps, d_dist, device=self.device) + sigma_min
         return torch.stack([mu, sigma], dim=0)
@@ -120,14 +122,11 @@ class CrossentropyPlanner:
         winner_actions = actions[i_winners.tolist()]
         noise = torch.tensor(noise, device=self.device)
         n_batch = dist_params.shape[1]
-        n_winners = winner_actions.shape[0]
-        lower_bound = torch.tensor(0.01, device=actions.device)
+        lower_bound = torch.tensor(0.0001, device=actions.device)
 
         # compute prototype mu and sigma
         mu_ml = winner_actions.mean(dim=0)
         sigma_ml = torch.sqrt(torch.mean((winner_actions - mu_ml.unsqueeze(0)) ** 2, dim=0)) + 0.001
-        #sigma_ml = winner_actions.var(dim=0, unbiased=False)
-        #sigma_ml = torch.where(sigma_ml == 0, sigma_ml + lower_bound, sigma_ml)
 
         # just copy prototype values along batch axis
         mu_ml = torch.tile(mu_ml, dims=(n_batch, 1, 1))
@@ -138,7 +137,11 @@ class CrossentropyPlanner:
         sigma_ml[:n_batch//2] += (2 * torch.rand_like(sigma_ml[:n_batch//2], device=self.device) - 1) * noise
         sigma_ml = torch.where(sigma_ml <= lower_bound, lower_bound, sigma_ml)  # don't accidentally make sigma < 0
 
-        return torch.stack([mu_ml, sigma_ml], dim=0)
+        mu_old, sigma_old = torch.unbind(dist_params, dim=0)
+        mu_new = (1 - self.alpha) * mu_old + self.alpha * mu_ml
+        sigma_new = (1 - self.alpha) * sigma_old + self.alpha * sigma_ml
+
+        return torch.stack([mu_new, sigma_new], dim=0)
 
     def _init_categorical(self,
                           d_batch: int,
@@ -163,13 +166,13 @@ class CrossentropyPlanner:
         n_actions = dist_params.shape[-1]
 
         actions_onehot = torch.nn.functional.one_hot(winner_actions, num_classes=n_actions)
-        dist_params = torch.mean(actions_onehot.float(), dim=(0))  # yields one list of distributions, one per time step
-        dist_params = torch.tile(dist_params, dims=(n_batch, 1, 1))  # this copies the list to all batch indices
-        #dist_params[dist_params.shape[0] // 2 :] = torch.rand_like(dist_params[dist_params.shape[0] // 2:])
+        dist_params_new = torch.mean(actions_onehot.float(), dim=(0))  # yields one list of distributions, one per time step
+        dist_params_new = torch.tile(dist_params_new, dims=(n_batch, 1, 1))  # this copies the list to all batch indices
         # add noise to diversify
-        dist_params[:n_batch//2] += (2 * torch.rand_like(dist_params[:n_batch//2], device=self.device) - 1) * noise
-        dist_params[:n_batch//2] = torch.clamp(dist_params[:n_batch//2], torch.tensor(0.0, device=self.device), torch.tensor(1.0, device=self.device))
-        dist_params /= dist_params.sum(dim=-1, keepdim=True)
+        dist_params_new[:n_batch//2] += (2 * torch.rand_like(dist_params_new[:n_batch//2], device=self.device) - 1) * noise
+        dist_params_new[:n_batch//2] = torch.clamp(dist_params_new[:n_batch//2], torch.tensor(0.0, device=self.device), torch.tensor(1.0, device=self.device))
+        dist_params_new /= dist_params_new.sum(dim=-1, keepdim=True)
+        dist_params = (1 - self.alpha) * dist_params + self.alpha * dist_params_new
         return dist_params
 
     def _init_params(self,
