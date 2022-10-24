@@ -26,10 +26,12 @@ def update_history(history: Dict[str, torch.Tensor],
 def collect_groundtruth_data(model: MultiscaleDynamicsModelMK2,
                              history: Dict[str, torch.Tensor],
                              env: gym.Env,
-                             n_warmup: int):
+                             n_warmup: int,
+                             predefined_actions: Sequence = ()):
     # prepare actions and first step's data (note: only the initial observation contains real environment info)
+    n_a_required = n_warmup - 1 - len(predefined_actions)
     groundtruth_data = {'a': [], 'o': [], 'r': [], 'term': []}
-    groundtruth_data['a'] += [0] + [env.action_space.sample() for _ in range(n_warmup - 1)]
+    groundtruth_data['a'] += [0] + list(predefined_actions) + [env.action_space.sample() for _ in range(n_a_required)]
     groundtruth_data['o'].append(env.reset())
     groundtruth_data['r'].append(0.0)
     groundtruth_data['term'].append(0.0)
