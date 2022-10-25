@@ -21,7 +21,7 @@ class DynamicsModelTrainer(ABC):
                  eval_interval: int = None,
                  scheduler: object = None,
                  logger: Logger = None,
-                 train_callback: Callable[[int], None] = None,
+                 train_callback: Callable = None,
                  eval_callback: Callable = None,
                  **kwargs):
         self.model = model
@@ -109,7 +109,7 @@ class DynamicsModelTrainer(ABC):
                     self.eval_callback(s, a, r, term, i_step)
 
             if self.train_callback:
-                self.train_callback(i_step)
+                self.train_callback(s, a, r, term, i_step)
 
         if self.logger:
             self.logger.stop_session()
