@@ -181,6 +181,12 @@ class Gridworld(gym.Env):
             self.canvas = Canvas(self._tk_master, width=self._canvas_w, height=self._canvas_h)
             self.canvas.pack(fill='both', expand=True)
 
+            def close_handler():
+                self.canvas = None
+                Tk.destroy(self._tk_master)
+
+            self._tk_master.protocol('WM_DELETE_WINDOW', close_handler)
+
         self._cell_h, self._cell_w = round(self._canvas_h / self.grid_h), round(self._canvas_w / self.grid_w)
 
         for y in range(self.grid_h):
