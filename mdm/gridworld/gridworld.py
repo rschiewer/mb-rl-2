@@ -261,6 +261,18 @@ class FullyObservableGridworld(gym.ObservationWrapper):
         return self.env.grid.flatten()
 
 
+class ResetWrapper(gym.Wrapper):
+    
+    def __init__(self, env: gym.Env):
+        super(ResetWrapper, self).__init__(env)
+
+    def reset(self, **kwargs):
+        init_o = super(ResetWrapper, self).reset(**kwargs)
+        init_r = 0.0
+        init_term = False
+        return init_o, init_r, init_term, {}
+
+
 class NormalizedObsGridworld(gym.ObservationWrapper):
 
     def __init__(self, env: gym.Env):
