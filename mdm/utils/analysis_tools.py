@@ -3,6 +3,7 @@ from typing import List, Dict
 
 import numpy as np
 import torch
+from matplotlib import pyplot as plt
 from numpy import ma as ma
 
 from mdm.gridworld.gridworld import Gridworld, CellType
@@ -147,3 +148,36 @@ def infer_primitive_actions(trajectory_history, action_descriptions, canonical_a
         plan_description.append(action_descriptions[closest])
     plan_description = ' | '.join(plan_description)
     return plan_description
+
+
+def plot_plan(env: Gridworld, traj_history: Dict[str, torch.Tensor], n_plot_steps: int):
+    obs = traj_history['abstr_o'][0, :n_plot_steps]
+    obs = obs.detach().cpu().numpy() + 0.5
+    obs[:, 0] *= (env.grid_h - 1)
+    obs[:, 1] *= (env.grid_w - 1)
+
+    actions = traj_history['prim_a'][0, :n_plot_steps]
+    actions = actions.detach().cpu().numpy().argmax(axis=-1)
+
+    rewards = traj_history['abstr_r'][0, :n_plot_steps].squeeze()
+    rewards = rewards.detach().cpu().numpy()
+
+    terminals = traj_history['abstr_term'][0, :n_plot_steps].squeeze()
+    terminals = terminals.detach().cpu().numpy()
+
+    fig, ax = plt.subplots(1, 2, figsize=(20, 10))
+
+    ax[0].matshow(env.grid)
+    for i, (y, x) in enumerate(obs):
+        c = 'cyan' if i <= env.current_ep_time else 'red'
+        dy, dx = env.move_offset[actions[i]]
+        ax[0].text(x, y, str(i), color=c, fontsize=12, ha='center', va='center')
+        ax[0].arrow(x + dx * 0.2, y + dy * 0.2, dx * 0.2, dy * 0.2, color=c)
+
+    ax[1].grid(True)
+    ax[1].plot(rewards, alpha=0.7, linewidth=2, label='reward')
+    ax[1].plot(terminals, alpha=0.7, label='terminal')
+    ax[1].plot(rewards * np.cumprod(1 - terminals), alpha=0.7, label='discounted rewards')
+
+    plt.legend()
+    plt.show()
