@@ -245,7 +245,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         abstr_steps = ceil(prim_steps / self.abstract_step_size)
 
         # sum makes sense for rewards, use padding=0 to not affect sum for last element
-        abstr_r_ground_truth = bin_every_k_steps(r_ground_truth, self.abstract_step_size, padding_val=0).sum(dim=2)
+        abstr_r_ground_truth = bin_every_k_steps(r_ground_truth, self.abstract_step_size, padding_val=0).mean(dim=2)
         # terminal flag can only be 0 or 1, so mean value with automatic padding should be used
         abstr_term_ground_truth = bin_every_k_steps(term_ground_truth, self.abstract_step_size).max(dim=2).values
 
@@ -257,8 +257,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         beta = 1  # min((self._current_train_step / self.n_warmup_schedule), 1)
 
         # primitive model loss
-        loss_mixed = self._calc_loss(pred_mixed, o_ground_truth, term_ground_truth, abstr_r_ground_truth,
-                                      abstr_term_ground_truth, r_ground_truth, beta)
+        loss_mixed = self.calc_loss(pred_mixed, o_ground_truth, term_ground_truth, abstr_r_ground_truth,
+                                    abstr_term_ground_truth, r_ground_truth, beta)
         #loss_post = self._calc_loss(pred_post, o_ground_truth, term_ground_truth, abstr_r_ground_truth,
         #                            abstr_term_ground_truth, r_ground_truth, beta)
 
@@ -275,8 +275,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         return loss_mixed
         #return loss_post
 
-    def _calc_loss(self, pred, o_ground_truth, term_ground_truth, abstr_r_ground_truth, abstr_term_ground_truth,
-                   r_ground_truth, beta):
+    def calc_loss(self, pred, o_ground_truth, term_ground_truth, abstr_r_ground_truth, abstr_term_ground_truth,
+                  r_ground_truth, beta):
         d_batch, d_time = o_ground_truth.shape[:2]
         #prim_rec_o = torch.nn.functional.mse_loss(pred['prim_o'], o_ground_truth)
         #prim_rec_r = torch.nn.functional.mse_loss(pred['prim_r'], r_ground_truth)
@@ -441,9 +441,9 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                                           + 1, device=self.device)
 
             use_posterior = t < n_posterior_steps
-            #if not use_posterior and t < n_groundtruth_available:
+            if not use_posterior and t < n_groundtruth_available and self.training:
             #    use_posterior = True
-            #    use_posterior = torch.rand(()) < 0.2
+                use_posterior = torch.rand(()) < 0.5
 
             prim_current['a'] = a[:, t]
             self._invoke_primitive_model(prim_current, x_posterior, mem, use_posterior=use_posterior,
@@ -495,9 +495,9 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                                           + 1, device=self.device)
 
             use_posterior = t < n_posterior_steps
-            #if not use_posterior and t < n_groundtruth_available:
+            if not use_posterior and t < n_groundtruth_available and self.training:
             #    use_posterior = True
-            #    use_posterior = torch.rand(()) < 0.2
+                use_posterior = torch.rand(()) < 0.5
 
             abstr_current['a'] = a[:, t]
             self._invoke_abstract_model(abstr_current, x_posterior, mem, use_posterior=use_posterior, sample=sample)

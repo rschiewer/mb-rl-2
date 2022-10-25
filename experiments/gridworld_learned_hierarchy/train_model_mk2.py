@@ -156,7 +156,9 @@ if __name__ == '__main__':
 
         abstr_r = bin_every_k_steps(r, model.abstract_step_size, padding_val=0).sum(dim=2)
         abstr_term = bin_every_k_steps(term, model.abstract_step_size).max(dim=2).values
+        model.eval()
         pred = model(o, a, r, term, abstr_r, abstr_term, cfg['eval']['n_warmup_prim'], cfg['eval']['n_warmup_abstr'])
+        model.train()
         for key in ('prim_o', 'prim_r', 'abstr_o', 'abstr_r'):
             full_key = key + '_dist'
             mu = get_mu(pred[full_key]).mean()
