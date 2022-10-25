@@ -82,7 +82,9 @@ class DynamicsModelTrainer(ABC):
                 if not compatible:
                     raise ValueError(msg)
 
+                self.model.eval()
                 eval_losses = self.model.eval_step(s, a, r, term)
+                self.model.train()
 
                 last_total_loss = last_eval_losses.get('total', np.inf)
                 #if checkpoint_path and eval_losses['total'] < last_total_loss:
