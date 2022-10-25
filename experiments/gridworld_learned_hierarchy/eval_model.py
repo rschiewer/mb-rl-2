@@ -7,7 +7,6 @@ from mdm.models.multiscale_model import MultiscaleDynamicsModel
 from mdm.planning.cem_planner import CrossentropyPlanner
 from mdm.utils.utils import here, infer_position, transform_macro_s_init_history, gen_video, \
     DistributionType
-from mdm.utils.analysis_tools import gen_macro_state_map
 from mdm.utils.planning_tools import init_macro_s, plan_section, plan_abstract
 from mdm.memory.trajectory_memory import TrajectoryMemory
 
@@ -15,8 +14,6 @@ from mdm.memory.trajectory_memory import TrajectoryMemory
 if __name__ == '__main__':
     env = Gridworld.from_cleartext(here() / '../../mdm/gridworld/8x8_v0.mapdata')
     mdl: MultiscaleDynamicsModel = torch.load(here() / 'model.ptmdl')
-    planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, device=mdl.device)
-    planner_abstr = CrossentropyPlanner(DistributionType.NORMAL, device=mdl.device)
 
     n_episodes = 10
     store_result_trajectories = False
@@ -29,8 +26,13 @@ if __name__ == '__main__':
     pln_act_noise_prim = 0.001
     pln_n_abstract_steps = 100
 
-    macro_s_init_mean, macro_s_init_std, macro_s_init_per_state_per_action = gen_macro_state_map(env, mdl, 3)
-    macro_ss_list, loc_list, act_seq_list = transform_macro_s_init_history(macro_s_init_per_state_per_action)
+    planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, device=mdl.device, d_dist=env.action_space.n,
+                                       n_evolution_steps=pln_n_optim_steps_prim, winning_perc=pln_winning_perc,
+                                       discount=pln_discount, act_noise=pln_act_noise_prim)
+    planner_abstr = CrossentropyPlanner(DistributionType.NORMAL, device=mdl.device, d_dist=mdl.d_macro_action,
+                                        n_evolution_steps=pln_n_optim_steps_abstr, winning_perc=pln_winning_perc,
+                                        discount=pln_discount, act_noise=pln_act_noise_abstr)
+
     #macro_s_lookup = np.stack([v for k, v in macro_s_init_mean.items()])
     #positions_lookup = np.stack([k for k, v in macro_s_init_mean.items()])
 

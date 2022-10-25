@@ -35,11 +35,21 @@ def process_terminal_flag_mat(terminal_flags: torch.Tensor):
 class CrossentropyPlanner:
 
     def __init__(self,
-                 type: DistributionType = DistributionType.NORMAL,
-                 device: torch.device = 'cpu',
+                 type: DistributionType,
+                 d_dist: int,
+                 n_evolution_steps: int = 10,
+                 winning_perc: float = 0.3,
+                 discount: float = 0.99,
+                 act_noise: float = 0,
                  alpha: float = 1.0,
+                 device: torch.device = 'cpu',
                  **dist_args):
         self.type = type
+        self.d_dist = d_dist
+        self.n_evolution_steps = n_evolution_steps
+        self.winning_perc = winning_perc
+        self.discount = discount
+        self.act_noise = act_noise
         self.device = device
         self.dist_args = dist_args
         self.alpha = alpha
@@ -54,16 +64,11 @@ class CrossentropyPlanner:
 
     def plan(self,
              rollout_fn: Callable[[torch.Tensor], Tuple[torch.Tensor, Optional[torch.Tensor], Dict[str, TensorData]]],
-             d_dist: int,
              n_rollouts: int,
              n_plan_steps: int,
-             n_evolution_steps: int,
-             winning_perc: float,
-             discount: float,
-             act_noise: float = 0,
              init_act_params: Union[torch.Tensor, np.ndarray] = None):
-        n_winners = ceil(n_rollouts * winning_perc)
-        act_dist_params = self._init_params(n_rollouts, n_plan_steps, d_dist, init_act_params)
+        n_winners = ceil(n_rollouts * self.winning_perc)
+        act_dist_params = self._init_params(n_rollouts, n_plan_steps, self.d_dist, init_act_params)
 
         #exponents = torch.arange(n_plan_steps, device=self.device)
         #if discount != 0:
@@ -72,11 +77,11 @@ class CrossentropyPlanner:
         #    disc_mat = None
 
         actions, i_winners, R_winners, rollout_data = None, None, None, None
-        for i_ev in range(n_evolution_steps):
+        for i_ev in range(self.n_evolution_steps):
             actions = self._build_dist(act_dist_params).sample()
             criterion, terminal_flag_mat, rollout_data = rollout_fn(actions)
 
-            disc_mat = torch.cumprod(torch.full_like(criterion, fill_value=discount), dim=1)
+            disc_mat = torch.cumprod(torch.full_like(criterion, fill_value=self.discount), dim=1)
             disc_mat = torch.roll(disc_mat, 1, dims=1)
             disc_mat[:, 0] = 1
 
@@ -89,8 +94,10 @@ class CrossentropyPlanner:
 
             i_winners, R_winners = disc_ret_sorted.indices[:n_winners], disc_ret_sorted.values[:n_winners]
 
-            if i_ev == n_evolution_steps - 1:  # disable action noise for the last update
+            if i_ev == self.n_evolution_steps - 1:  # disable action noise for the last update
                 act_noise = 0
+            else:
+                act_noise = self.act_noise
 
             # update distribution parameters with MLE parameters of the winner samples
             act_dist_params = self._update_dist(actions, act_dist_params, i_winners, act_noise)

@@ -25,7 +25,8 @@ class CrossentropyMethodPlanner(unittest.TestCase):
         r_good, r_bad = torch.tensor(1.0), torch.tensor(0.0)
         dist_type = DistributionType.CATEGORICAL
 
-        ce_planner = CrossentropyPlanner(dist_type)
+        ce_planner = CrossentropyPlanner(type=dist_type, d_dist=n_action, n_evolution_steps=n_opt_steps,
+                                         winning_perc=winning_perc, discount=discount, act_noise=act_noise)
         ground_truth_best_a = torch.randint(0, n_action, (n_plan_steps,))
 
         def rollout_fn(actions: torch.Tensor):
@@ -35,12 +36,8 @@ class CrossentropyMethodPlanner(unittest.TestCase):
                 rewards[:, t] = torch.where(actions[:, t] == ground_truth_best_a[t], r_good, r_bad)
             return rewards, None, {}
 
-        actions, dist, i_winners, R_winners, rollout_data = ce_planner.plan(rollout_fn=rollout_fn, d_dist=n_action,
-                                                                            n_rollouts=d_batch,
-                                                                            n_plan_steps=n_plan_steps,
-                                                                            n_evolution_steps=n_opt_steps,
-                                                                            winning_perc=winning_perc,
-                                                                            discount=discount, act_noise=act_noise)
+        actions, dist, i_winners, R_winners, rollout_data = ce_planner.plan(rollout_fn=rollout_fn, n_rollouts=d_batch,
+                                                                            n_plan_steps=n_plan_steps)
 
         champion_a = actions[i_winners[0]]
         champion_dist_mode = torch.argmax(dist.probs[i_winners[0]], dim=-1)
@@ -57,21 +54,19 @@ class CrossentropyMethodPlanner(unittest.TestCase):
         n_plan_steps = 20
         winning_perc = 0.1
         discount = 0.99
-        act_noise = 0.1
+        act_noise = 0.001
         dist_type = DistributionType.NORMAL
 
-        ce_planner = CrossentropyPlanner(dist_type)
+        ce_planner = CrossentropyPlanner(type=dist_type, d_dist=n_action, n_evolution_steps=n_opt_steps,
+                                         winning_perc=winning_perc, discount=discount, act_noise=act_noise)
         ground_truth_best_a = 10 * torch.rand(n_plan_steps, n_action) - 5
 
         def rollout_fn(actions: torch.Tensor):
             rewards = - torch.mean(torch.abs(actions - ground_truth_best_a.unsqueeze(0) ** 2), dim=2)
             return rewards, None, {}
 
-        actions, dist,i_winners, R_winners, rollout_data = ce_planner.plan(rollout_fn=rollout_fn,
-                                                                n_rollouts=d_batch,
-                                                                d_dist=n_action, n_plan_steps=n_plan_steps,
-                                                                n_evolution_steps=n_opt_steps, winning_perc=winning_perc,
-                                                                discount=discount, act_noise=act_noise)
+        actions, dist, i_winners, R_winners, rollout_data = ce_planner.plan(rollout_fn=rollout_fn, n_rollouts=d_batch,
+                                                                            n_plan_steps=n_plan_steps)
 
         champion_a = actions[i_winners[0]]
         champion_dist_mode = dist.mean[i_winners[0]]
@@ -88,9 +83,9 @@ class CrossentropyMethodPlanner(unittest.TestCase):
         winning_perc = 0.25
         discount = 0.99
         act_noise = 0.000
+        dist_type = DistributionType.CATEGORICAL
 
         batched_envs = [Gridworld.from_cleartext(here() / 'testmap.mapdata') for _ in range(d_batch)]
-        ce_planner = CrossentropyPlanner(DistributionType.CATEGORICAL)
 
         def rollout_fn(actions: torch.Tensor):
             rewards = torch.zeros(d_batch, n_plan_steps)
@@ -106,14 +101,12 @@ class CrossentropyMethodPlanner(unittest.TestCase):
             #terminal_flags = None
             return rewards, terminal_flags, {}
 
-        actions, dist, i_winners, R_winners, rollout_data = ce_planner.plan(rollout_fn=rollout_fn,
-                                                                 d_dist=batched_envs[0].action_space.n,
-                                                                 n_rollouts=d_batch,
-                                                                 n_plan_steps=n_plan_steps,
-                                                                 n_evolution_steps=n_opt_steps,
-                                                                 winning_perc=winning_perc,
-                                                                 discount=discount,
-                                                                 act_noise=act_noise)
+        ce_planner = CrossentropyPlanner(type=dist_type, d_dist=batched_envs[0].action_space.n,
+                                         n_evolution_steps=n_opt_steps, winning_perc=winning_perc, discount=discount,
+                                         act_noise=act_noise)
+
+        actions, dist, i_winners, R_winners, rollout_data = ce_planner.plan(rollout_fn=rollout_fn, n_rollouts=d_batch,
+                                                                 n_plan_steps=n_plan_steps)
         actions = actions[i_winners[0]]
         eval_env = batched_envs[0]
         eval_env.reset()

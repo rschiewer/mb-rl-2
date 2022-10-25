@@ -55,37 +55,29 @@ if __name__ == '__main__':
 
     descriptions, canonical_abstr_a = primitive_action_maps(env, mdl)
 
-    mem = TrajectoryMemory()
     succeeded = 0
-    n_steps = []
     action_stats = np.zeros(env.action_space.n)
+    n_steps = []
     abstract_rewards = []
     abstract_terminals = []
     section_lengths = []
     for i_ep in tqdm(range(planning_cfg['n_episodes'])):
-        planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, device=mdl.device)
         if mdl.abstract_action_model.distribution_type in (None, 'normal'):
-            planner_abstr = CrossentropyPlanner(DistributionType.NORMAL, device=mdl.device)
+            abstr_dist_type = DistributionType.NORMAL
         else:
-            planner_abstr = CrossentropyPlanner(DistributionType.CATEGORICAL, device=mdl.device)
-
-        #planner_prim = GradientPlanner(DistributionType.CATEGORICAL, device=mdl.device)
-        #planner_abstr = GradientPlanner(DistributionType.NORMAL, device=mdl.device)
-        env.reset()
+            abstr_dist_type = DistributionType.CATEGORICAL
+        planner_abstr = CrossentropyPlanner(abstr_dist_type, d_dist=mdl.d_abstract_action, device=mdl.device,
+                                            **planning_cfg['pln_abstr'])
+        planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, d_dist=mdl.d_action, device=mdl.device,
+                                           **planning_cfg['pln_prim'])
 
         trajectory_history = mdl.gen_mem()
         trajectory_history = collect_groundtruth_data(mdl, trajectory_history, env, planning_cfg['n_warmup_prim'])
         trajectory_history = init_prim_s(mdl, trajectory_history)
-        trajectory_history = init_abstr_s(mdl, trajectory_history, planning_cfg['n_warmup_abstr'], planner_prim,
-                                          planning_cfg['n_rollouts'],
-                                          planning_cfg['n_optim_steps_prim'], planning_cfg['winning_perc'],
-                                          planning_cfg['discount'],
-                                          planning_cfg['act_noise_prim'])
+        trajectory_history = init_abstr_s(mdl, trajectory_history, planner_prim, planning_cfg['n_warmup_abstr'],
+                                          planning_cfg['n_rollouts'])
         trajectory_history = plan_abstract(mdl, trajectory_history, planner_abstr, planning_cfg['n_abstract_steps'],
-                                           planning_cfg['n_rollouts'],
-                                           planning_cfg['n_optim_steps_abstr'], planning_cfg['winning_perc'],
-                                           planning_cfg['discount'],
-                                           planning_cfg['act_noise_abstr'])
+                                           planning_cfg['n_rollouts'])
 
         plan_descr = infer_primitive_actions(trajectory_history, descriptions, canonical_abstr_a)
         logger.log({'most_prob_prim_a': plan_descr}, Scope.TEST(), i_ep)
@@ -93,10 +85,7 @@ if __name__ == '__main__':
         current_section_lengths = []
         for i_sec in range(planning_cfg['n_abstract_steps']):
             trajectory_history, sec_len = plan_section_flexible(mdl, trajectory_history, planner_prim, i_sec,
-                                                       planning_cfg['n_rollouts'],
-                                                       planning_cfg['n_optim_steps_prim'],
-                                                       planning_cfg['winning_perc'], planning_cfg['discount'],
-                                                       planning_cfg['act_noise_prim'])
+                                                       planning_cfg['n_rollouts'])
             current_section_lengths.append(sec_len)
         section_lengths.append(current_section_lengths)
         #visualize_plan(trajectory_history, env, mdl)

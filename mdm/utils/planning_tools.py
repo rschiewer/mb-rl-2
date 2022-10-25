@@ -31,13 +31,8 @@ def init_macro_s(model: MultiscaleDynamicsModel,
         return predictions_ss['r'].squeeze(), predictions_ss['term'].squeeze(), predictions_ss
 
     actions, act_dist, i_winners, rollout_data = planner.plan(rollout_fn=_rollout_init_fn,
-                                                              init_data=s_start,
-                                                              d_dist=env.action_space.n,
-                                                              n_plan_steps=model.macro_step_size,
-                                                              n_evolution_steps=n_evolution_steps,
-                                                              winning_perc=winning_perc,
-                                                              discount=discount,
-                                                              act_noise=act_noise)
+                                                              n_rollouts=n_rollouts,
+                                                              n_plan_steps=model.macro_step_size)
     i_best = i_winners[0]
     best_h = rollout_data['h'][0][:, i_best].unsqueeze(1), rollout_data['h'][1][:, i_best].unsqueeze(1)
     best_a = torch.nn.functional.one_hot(actions[i_best], num_classes=model.d_action).float()
@@ -71,13 +66,8 @@ def plan_abstract(model: MultiscaleDynamicsModel,
     macro_s_batch = torch.tile(macro_s_start, dims=(n_rollouts, 1))  # time dim required
     macro_s_batch = macro_s_batch.unsqueeze(1)  # add time dimension of 1
     macro_actions, act_dist, i_winners, rollout_data = planner.plan(rollout_fn=_rollout_abstract_fn,
-                                                                    init_data=macro_s_batch,
-                                                                    d_dist=model.d_macro_action,
-                                                                    n_plan_steps=n_plan_steps,
-                                                                    n_evolution_steps=n_evolution_steps,
-                                                                    winning_perc=winning_perc,
-                                                                    discount=discount,
-                                                                    act_noise=act_noise)
+                                                                    n_rollouts=n_rollouts,
+                                                                    n_plan_steps=n_plan_steps)
     i_top_cand = i_winners[0]
     # best_macro_as = torch.nn.functional.one_hot(macro_actions[i_top_cand], num_classes=mdl.d_macro_action).float()
     best_macro_as = macro_actions[i_top_cand]
@@ -126,13 +116,8 @@ def plan_section(model: MultiscaleDynamicsModel,
         return overlap, None, pred_prim
 
     actions, act_dist, i_winners, rollout_data = planner.plan(rollout_fn=_rollout_detailed_fn,
-                                                              init_data=s_batch,
-                                                              d_dist=env.action_space.n,
-                                                              n_plan_steps=model.macro_step_size,
-                                                              n_evolution_steps=n_evolution_steps,
-                                                              winning_perc=winning_perc,
-                                                              discount=discount,
-                                                              act_noise=act_noise)
+                                                              n_rollouts=n_rollouts,
+                                                              n_plan_steps=model.macro_step_size)
     i_best = i_winners[0]
     best_a = torch.nn.functional.one_hot(actions[i_best], num_classes=model.d_action).float()
     best_s = rollout_data['s'][i_best]
