@@ -236,18 +236,23 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         self._current_train_step += 1
         return losses
 
+    def calc_abstr_r_ground_truth(self, r_ground_truth: torch.Tensor):
+        # sum makes sense for rewards, use padding=0 to not affect sum for last element
+        return bin_every_k_steps(r_ground_truth, self.abstract_step_size, padding_val=0).sum(dim=2)
+
+    def calc_abstr_term_ground_truth(self, term_ground_truth: torch.Tensor):
+        # terminal flag can only be 0 or 1, so mean value with automatic padding should be used
+        return bin_every_k_steps(term_ground_truth, self.abstract_step_size, padding_val=0).max(dim=2).values
+
     def eval_step(self,
                   o_ground_truth: torch.Tensor,
                   a_ground_truth: torch.Tensor,
                   r_ground_truth: torch.Tensor,
                   term_ground_truth: torch.Tensor) -> Dict[str, torch.Tensor]:
         prim_steps = a_ground_truth.shape[1]
-        abstr_steps = ceil(prim_steps / self.abstract_step_size)
 
-        # sum makes sense for rewards, use padding=0 to not affect sum for last element
-        abstr_r_ground_truth = bin_every_k_steps(r_ground_truth, self.abstract_step_size, padding_val=0).mean(dim=2)
-        # terminal flag can only be 0 or 1, so mean value with automatic padding should be used
-        abstr_term_ground_truth = bin_every_k_steps(term_ground_truth, self.abstract_step_size).max(dim=2).values
+        abstr_r_ground_truth = self.calc_abstr_r_ground_truth(r_ground_truth)
+        abstr_term_ground_truth = self.calc_abstr_term_ground_truth(term_ground_truth)
 
         pred_mixed = self(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, abstr_r_ground_truth,
                           abstr_term_ground_truth, self.n_warmup_prim, self.n_warmup_abstr)

@@ -132,8 +132,10 @@ def init_abstr_s(model: MultiscaleDynamicsModelMK2,
                            for i_chunk in range(a_binned.shape[1])], dim=1)
     target = model.abstr_pred_target
     prim_data = bin_every_k_steps(history[target][:, :required_steps], model.abstract_step_size)[:, :, -1]
-    abstr_r = bin_every_k_steps(history['prim_r'][:, :required_steps], model.abstract_step_size).mean(dim=2)
-    abstr_term = bin_every_k_steps(history['prim_term'][:, :required_steps], model.abstract_step_size).max(dim=2).values
+    abstr_r = model.calc_abstr_r_ground_truth(history['prim_r'][:, :required_steps])
+    abstr_term = model.calc_abstr_term_ground_truth(history['prim_term'][:, :required_steps])
+    #abstr_r = bin_every_k_steps(history['prim_r'][:, :required_steps], model.abstract_step_size).mean(dim=2)
+    #abstr_term = bin_every_k_steps(history['prim_term'][:, :required_steps], model.abstract_step_size).max(dim=2).values
 
     mem, abstr_final = model.rollout_abstract(a=abstr_a, prim_data=prim_data, r=abstr_r,
                                               term=abstr_term, sample=False, n_posterior_steps=n_warmup_abstr)
