@@ -140,20 +140,6 @@ def exhaustive_traversion(env, mdl, walk_distance):
     return traj_a, traj_o, traj_r, traj_term
 
 
-def transform_macro_s_init_history(macro_s_init_history):
-    result_macro_ss, result_locs, result_act_sequences = [], [], []
-    for loc, data in macro_s_init_history.items():
-        for a_seq in data.keys():
-            macro_s = macro_s_init_history[loc][a_seq]
-            if len(macro_s) > 1:
-                macro_s = np.mean(macro_s, axis=0)
-            result_macro_ss.append(macro_s)
-            result_locs.append(loc)
-            result_act_sequences.append(a_seq)
-
-    return np.stack(result_macro_ss), np.stack(result_locs), np.stack(result_act_sequences)
-
-
 def infer_position(env: Gridworld,
                    macro_ss: torch.Tensor,
                    macro_terms: torch.Tensor,

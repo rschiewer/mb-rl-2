@@ -5,7 +5,7 @@ from tqdm import tqdm
 from mdm.gridworld.gridworld import Gridworld
 from mdm.models.multiscale_model import MultiscaleDynamicsModel
 from mdm.planning.cem_planner import CrossentropyPlanner
-from mdm.utils.utils import here, infer_position, transform_macro_s_init_history, gen_video, \
+from mdm.utils.utils import here, infer_position, gen_video, \
     DistributionType
 from mdm.utils.planning_tools import init_macro_s, plan_section, plan_abstract
 from mdm.memory.trajectory_memory import TrajectoryMemory
