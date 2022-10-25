@@ -148,7 +148,8 @@ class TrajectoryMemory:
 
     def to_np_arrays(self,
                      padding: float = 0,
-                     pad_last_terminal_flag: bool = True,
+                     pad_last_terminal_flag: bool = False,
+                     pad_last_reward: bool = False,
                      dtype: Union[np.dtype, Iterable[np.dtype]] = None):
         if dtype is None:
             dtype = {**self._dtypes, 'w': float}
@@ -174,6 +175,8 @@ class TrajectoryMemory:
                         diff = self.longest_trajectory - len(data)
                         padding_shape = (diff, *self._shapes[name])
                         if name == 'terminal' and pad_last_terminal_flag:
+                            filler = np.full(padding_shape, fill_value=data[-1], dtype=dtype[name])
+                        elif name == 'r' and pad_last_reward:
                             filler = np.full(padding_shape, fill_value=data[-1], dtype=dtype[name])
                         else:
                             filler = np.full(padding_shape, fill_value=padding, dtype=dtype[name])

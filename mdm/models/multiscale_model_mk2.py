@@ -238,11 +238,11 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
     def calc_abstr_r_ground_truth(self, r_ground_truth: torch.Tensor):
         # sum makes sense for rewards, use padding=0 to not affect sum for last element
-        return bin_every_k_steps(r_ground_truth, self.abstract_step_size, padding_val=0).sum(dim=2)
+        return bin_every_k_steps(r_ground_truth, self.abstract_step_size, padding_val=None).sum(dim=2)
 
     def calc_abstr_term_ground_truth(self, term_ground_truth: torch.Tensor):
         # terminal flag can only be 0 or 1, so mean value with automatic padding should be used
-        return bin_every_k_steps(term_ground_truth, self.abstract_step_size, padding_val=0).max(dim=2).values
+        return bin_every_k_steps(term_ground_truth, self.abstract_step_size, padding_val=None).max(dim=2).values
 
     def eval_step(self,
                   o_ground_truth: torch.Tensor,
@@ -446,9 +446,9 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                                           + 1, device=self.device)
 
             use_posterior = t < n_posterior_steps
-            if not use_posterior and t < n_groundtruth_available and self.training:
+            #if not use_posterior and t < n_groundtruth_available and self.training:
             #    use_posterior = True
-                use_posterior = torch.rand(()) < 0.5
+            #    use_posterior = torch.rand(()) < 0.5
 
             prim_current['a'] = a[:, t]
             self._invoke_primitive_model(prim_current, x_posterior, mem, use_posterior=use_posterior,
@@ -500,9 +500,9 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                                           + 1, device=self.device)
 
             use_posterior = t < n_posterior_steps
-            if not use_posterior and t < n_groundtruth_available and self.training:
+            #if not use_posterior and t < n_groundtruth_available and self.training:
             #    use_posterior = True
-                use_posterior = torch.rand(()) < 0.5
+            #    use_posterior = torch.rand(()) < 0.5
 
             abstr_current['a'] = a[:, t]
             self._invoke_abstract_model(abstr_current, x_posterior, mem, use_posterior=use_posterior, sample=sample)
