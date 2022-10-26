@@ -221,7 +221,7 @@ def prepare_data(s: Union[np.ndarray, torch.Tensor],
 
 def compute_returns(mem: TrajectoryMemory, gamma: float = 0.99):
     s, a, r, term, w = mem.to_np_arrays()
-    disc_mat = np.cumprod(np.full_like(r, fill_value=gamma), axis=1)
+    disc_mat = np.cumprod(np.full_like(r.data, fill_value=gamma), axis=1)
     disc_mat = np.roll(disc_mat, 1, axis=1)
     disc_mat[:, 0] = 1
     ep_returns = np.sum(r * disc_mat, axis=1)
