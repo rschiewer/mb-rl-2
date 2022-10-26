@@ -225,34 +225,32 @@ class TrajectoryMemory:
         return self[indices]
 
     def plot_stats(self, bins: int):
-        lengths, actions, observations, rewards, terminals = [], [], [], [], []
+        lengths, actions, rewards, terminals = [], [], [], []
 
         for t in self:
             lengths.append(len(t['s']))
             actions.extend([a.tolist() for a in t['a']])
-            observations.extend([s.tolist() for s in t['s']])
             rewards.extend(t['r'])
             terminals.extend([t.astype(int) for t in t['terminal']])
 
         a_bins = len(np.unique(actions)) if len(np.unique(actions)) < bins else bins
-        #o_bins = len(np.unique(observations)) if len(np.unique(observations)) < bins else bins
         r_bins = len(set(rewards)) if len(set(rewards)) < bins else bins
         term_bins = len(set(terminals)) if len(set(terminals)) < bins else bins
         len_bins = len(set(lengths)) if len(set(lengths)) < bins else bins
 
-        print('starting plotting, this may take a while...')
+        print('start plotting, this may take a while...')
 
-        fig, ax = plt.subplots(2, 3, figsize=(10, 6))
+        fig, ax = plt.subplots(2, 2, figsize=(10, 10))
         fig.suptitle(f'Statistics over {len(self)} Trajectories')
 
         ax.flat[0].hist(actions, bins=a_bins, rwidth=0.5)
         ax.flat[0].set_title('actions')
-        ax.flat[2].hist(rewards, bins=r_bins, rwidth=0.5)
-        ax.flat[2].set_title('rewards')
-        ax.flat[3].hist(terminals, bins=term_bins, rwidth=0.5)
-        ax.flat[3].set_title('terminal flags')
-        ax.flat[4].hist(lengths, bins=len_bins, rwidth=0.5)
-        ax.flat[4].set_title('episode lengths')
+        ax.flat[1].hist(rewards, bins=r_bins, rwidth=0.5)
+        ax.flat[1].set_title('rewards')
+        ax.flat[2].hist(terminals, bins=term_bins, rwidth=0.5)
+        ax.flat[2].set_title('terminal flags')
+        ax.flat[3].hist(lengths, bins=len_bins, rwidth=0.5)
+        ax.flat[3].set_title('episode lengths')
         plt.show()
 
     @staticmethod
