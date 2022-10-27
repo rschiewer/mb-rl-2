@@ -96,7 +96,8 @@ def init_abstr_s(model: MultiscaleDynamicsModelMK2,
                  history: Dict[str, torch.Tensor],
                  planner_prim: CrossentropyPlanner,
                  n_warmup_abstr: int,
-                 n_rollouts: int):
+                 n_rollouts: int,
+                 allow_prim_imagination: bool = False):
     history_length = history['prim_a'].shape[1]
     required_steps = model.abstract_step_size * n_warmup_abstr
     remaining_steps = required_steps - history_length
@@ -104,10 +105,10 @@ def init_abstr_s(model: MultiscaleDynamicsModelMK2,
     assert 0 < history_length <= model.abstract_step_size * n_warmup_abstr, f'History length: {history_length}'
     assert remaining_steps >= 0
 
-    #if remaining_steps > 0:
-    #    raise ValueError('Not supported yet')
-
     if remaining_steps > 0:
+        if not allow_prim_imagination:
+            raise RuntimeError('Not enough warmup data for abstract model and data synthesis by primitive model is '
+                               'disabled.')
         z_batch = history['prim_z'][:, -1].repeat(n_rollouts, 1)
         rnn_state_batch = unpack_rnn_state(history['prim_rnn_state'][:, -1].repeat(n_rollouts, 1, 1, 1))
 
