@@ -124,14 +124,14 @@ def remove_duplicates_mp(mem: TrajectoryMemory, n_proc: int = 10):
 if __name__ == '__main__':
     map_version = 'v1'
     env = Gridworld.from_cleartext(here() / f'../../mdm/gridworld/8x8_{map_version}.mapdata')
-    n_episodes_train = 50000
+    n_episodes_train = 30000
     perc_test = 0.1
     disjunct_train_test = False
     expert_trajectories = 0.5
 
     train_mem = TrajectoryMemory()
     if expert_trajectories > 0:
-        agent = TabularQLearningPolicy(env.grid_h, env.grid_w, env.action_space.n, 0.1, 0.99, 0.1,
+        agent = TabularQLearningPolicy(env.grid_h, env.grid_w, env.action_space.n, 0.1, 0.99, 0.3,
                                        improvement_bound=1e-4, patience=10)
 
         def collect_policy(o, r, term, i_ep):
@@ -148,9 +148,11 @@ if __name__ == '__main__':
 
     collect_driver = GymEpisodeDriver(env, collect_policy)
     collect_driver.interact(round(n_episodes_train * expert_trajectories), True, train_mem)
+    print(len(train_mem))
 
     rand_driver = GymEpisodeDriver(env, lambda *args: env.action_space.sample())
     rand_driver.interact(n_episodes_train - len(train_mem), True, train_mem)
+    print(len(train_mem))
 
     if agent:
         plt.matshow(agent.q.max(axis=2))
