@@ -147,7 +147,10 @@ if __name__ == '__main__':
             return env.action_space.sample()
 
     collect_driver = GymEpisodeDriver(env, collect_policy)
-    train_mem = collect_driver.interact(n_episodes_train, True, train_mem)
+    collect_driver.interact(round(n_episodes_train * expert_trajectories), True, train_mem)
+
+    rand_driver = GymEpisodeDriver(env, lambda *args: env.action_space.sample())
+    rand_driver.interact(n_episodes_train - len(train_mem), True, train_mem)
 
     if agent:
         plt.matshow(agent.q.max(axis=2))
