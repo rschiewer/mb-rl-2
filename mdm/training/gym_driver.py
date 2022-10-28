@@ -30,8 +30,10 @@ class GymEpisodeDriver(Driver):
     def interact(self,
                  n_episodes: int,
                  progress_bar: bool = False,
+                 mem: TrajectoryMemory = None,
                  **kwargs) -> TrajectoryMemory:
-        mem = TrajectoryMemory()
+        if mem is None:
+            mem = TrajectoryMemory()
 
         ep_iter = range(n_episodes)
         if progress_bar:
