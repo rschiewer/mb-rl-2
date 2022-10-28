@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
-from typing import Dict, Iterable, Sequence, Union, Tuple
+from typing import Dict, Iterable, Sequence, Union, Tuple, TypeVar
 from copy import copy, deepcopy
 import random
 import pickle
@@ -9,6 +9,9 @@ import torch
 import numpy as np
 import numpy.ma as ma
 import matplotlib.pyplot as plt
+
+
+basic_dtype = TypeVar('basic_dtype', int, float, np.single, np.double, bool)
 
 
 class TrajectoryMemory:
@@ -150,7 +153,7 @@ class TrajectoryMemory:
                      padding: float = 0,
                      pad_last_terminal_flag: bool = False,
                      pad_last_reward: bool = False,
-                     dtype: Union[np.dtype, Iterable[np.dtype]] = None):
+                     dtype: Union[basic_dtype, Iterable[..., basic_dtype]] = None):
         if dtype is None:
             dtype = {**self._dtypes, 'w': float}
         elif isinstance(dtype, Iterable):
