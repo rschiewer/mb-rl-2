@@ -230,7 +230,10 @@ def compute_returns(mem: TrajectoryMemory, gamma: float = 0.99):
     mem.mark_modified()
 
 
-def discrete_stats(module: torch.nn.Module, n_inputs: int, seq_len: int, n_repetitions: int = 1):
+def discrete_stats(module: torch.nn.Module, n_inputs: int, seq_len: int, n_repetitions: int = 1, module_kwargs: dict = None):
+    if not module_kwargs:
+        module_kwargs = {}
+
     device = next(module.parameters()).device
 
     # generate all permutations of possible inputs
@@ -242,7 +245,7 @@ def discrete_stats(module: torch.nn.Module, n_inputs: int, seq_len: int, n_repet
     input_sequences = input_sequences.repeat(n_repetitions, 1, 1)
 
     # query the model
-    Y = module(input_sequences)
+    Y = module(input_sequences, **module_kwargs)
     d_out = Y.shape[-1]
     Y = Y.reshape(n_unique_sequences, n_repetitions, d_out)
 
