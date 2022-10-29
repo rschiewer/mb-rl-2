@@ -64,7 +64,7 @@ class AbstractActionModel(torch.nn.Module):
         if sample:
             x = sample_from_categorical(x)
         else:
-            x = torch.nn.functional.one_hot(torch.argmax(x, dim=-1), num_classes=x.shape[-1])
+            x = torch.nn.functional.one_hot(torch.argmax(x, dim=-1), num_classes=x.shape[-1]).to(torch.float32)
         return x
 
     def forward(self,
