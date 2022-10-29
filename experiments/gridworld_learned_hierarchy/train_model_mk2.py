@@ -30,6 +30,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     cfg = load_yaml(here() / 'model_cfg.yaml')
+    planning_cfg = load_yaml(here() / 'planning_cfg.yaml')
     env = Gridworld.from_cleartext(here() / cfg['env'])
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
@@ -77,14 +78,15 @@ if __name__ == '__main__':
     # build data pipeline
     #train_mem = TrajectoryMemory()
     #random_driver = GymEpisodeDriver(env, lambda o, r, term, i_ep: env.action_space.sample())
-    #planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, device=model.device)
-    #planner_abstr = CrossentropyPlanner(DistributionType.NORMAL, device=model.device)
+    #planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, d_dist=model.d_action,
+    #                                   device=model.device, **planning_cfg['pln_prim'])
+    #planner_abstr = CrossentropyPlanner(DistributionType.NORMAL, d_dist=model.d_abstract_action,
+    #                                    device=model.device, **planning_cfg['pln_abstr'])
     #policy = PlanningPolicy(model=model, env=env, planner_prim=planner_prim, planner_abstr=planner_abstr,
-    #                        n_rollouts=2048, n_plan_steps_abstr=30, n_optim_steps_prim=10,
-    #                        n_optim_steps_abstr=10, winning_perc=0.2, discount=0.95, replan_interval=5,
-    #                        act_noise_prim=0.01, act_noise_abstr=0.01, n_warmup_prim=model.n_warmup_prim,
-    #                        n_warmup_abstr=model.n_warmup_abstr)
+    #                        n_rollouts=2048, plan_horizon_prim=30, plan_horizon_abstr=20, replan_interval_prim=3,
+    #                        replan_interval_abstr=3, n_warmup_prim=3, n_warmup_abstr=1)
     #planning_driver = GymEpisodeDriver(env, policy)
+
     d_batch, pad = cfg['trainer']['d_batch'], cfg['trainer']['pad_last_terminal_flag']
 
     train_mem = TrajectoryMemory.load(here() / cfg['train_samples'])
@@ -110,11 +112,11 @@ if __name__ == '__main__':
 
     #def get_batch_train(i_step):
     #    global train_mem
-    #    if i_step < 100:
+    #    if i_step < 10:
     #        experience = random_driver.interact(10)
     #        train_mem += experience
     #    elif i_step % 100 == 0:
-    #        experience = planning_driver.interact(1)
+    #        experience = planning_driver.interact(5)
     #        train_mem += experience
     #    batch = train_mem.sample(d_batch, False)
     #    s, a, r, terminal, w, = batch.to_np_arrays(dtype=np.float32, pad_last_terminal_flag=pad)
@@ -145,7 +147,7 @@ if __name__ == '__main__':
     def eval_callback(o: torch.Tensor, a: torch.Tensor, r: torch.Tensor, term: torch.Tensor, i_step: int):
         if model.abstract_step_size <= 10:
             Y_mean, Y_std, Y_mae = discrete_stats(model.abstract_action_model, env.action_space.n,
-                                                  model.abstract_step_size, 10)
+                                                  model.abstract_step_size, 10, {'sample': False})
             plt.matshow(Y_mae, fignum=1)
             plt.colorbar()
             buffer = io.BytesIO()
