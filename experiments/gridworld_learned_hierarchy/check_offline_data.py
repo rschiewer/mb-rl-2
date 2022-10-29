@@ -8,7 +8,7 @@ from mdm.utils.utils import here, load_yaml
 if __name__ == '__main__':
     cfg = load_yaml(here() / 'model_cfg.yaml')
 
-    map_version = 'v0'
+    map_version = 'v1'
     env = Gridworld.from_cleartext(here() / f'../../mdm/gridworld/8x8_{map_version}.mapdata')
     train_mem = TrajectoryMemory.load(here() / cfg['train_samples'])
     test_mem = TrajectoryMemory.load(here() / cfg['test_samples'])
