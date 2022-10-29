@@ -74,16 +74,6 @@ class AbstractActionModel(torch.nn.Module):
         x = self.flatten_layer(actions)
         x = self.det_mdl(x)
         x = self.prob_mdl(x, sample)
-        # x = torch.softmax(x, dim=-1)
-        #x = torch.nn.functional.gumbel_softmax(x, hard=True, tau=0.1)
-        #x = torch.softmax(x, dim=-1)
-        #x = torch.nn.functional.one_hot(x.argmax(-1), x.shape[-1]) - x.detach() + x
-        #x = torch.distributions.RelaxedOneHotCategorical(logits=x, temperature=0.1)
-        #if sample:
-        #    x = x.rsample()
-        #else:
-        #    x = torch.nn.functional.one_hot(x.probs.argmax(-1), self.d_abstract_action)
-        #    x = x.to(torch.float32)
         return x
 
 
@@ -100,7 +90,6 @@ class RSSM(torch.nn.Module):
                  n_hidden_layers: int = 1,
                  hidden_dropout: float = 0.1,
                  epsilon: float = 0.01,
-                 s_lws: Sequence[int] = (),
                  z_prior_lws: Sequence[int] = (32, 32),
                  z_post_lws: Sequence[int] = (32, 32),
                  o_lws: Sequence[int] = (32, 32),
@@ -131,7 +120,7 @@ class RSSM(torch.nn.Module):
         o_lws = (d_h + d_z, *o_lws, d_o * 2)
         r_lws = (d_h + d_z, *r_lws, d_r * 2)
         term_lws = (d_h + d_z, *term_lws, 1)
-        z_preproc_lws = (d_z, d_z)
+        z_preproc_lws = (d_z, d_z, d_z)
 
         if rnn_type == 'lstm':
             rnn_constr = torch.nn.LSTM
