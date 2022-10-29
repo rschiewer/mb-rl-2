@@ -262,8 +262,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         beta = 1  # min((self._current_train_step / self.n_warmup_schedule), 1)
 
         # primitive model loss
-        loss_mixed = self.calc_loss(pred_mixed, o_ground_truth, term_ground_truth, abstr_r_ground_truth,
-                                    abstr_term_ground_truth, r_ground_truth, beta)
+        loss_mixed = self.calc_loss(pred_mixed, o_ground_truth, r_ground_truth, term_ground_truth, abstr_r_ground_truth,
+                                    abstr_term_ground_truth, beta)
         #loss_post = self._calc_loss(pred_post, o_ground_truth, term_ground_truth, abstr_r_ground_truth,
         #                            abstr_term_ground_truth, r_ground_truth, beta)
 
@@ -280,8 +280,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         return loss_mixed
         #return loss_post
 
-    def calc_loss(self, pred, o_ground_truth, term_ground_truth, abstr_r_ground_truth, abstr_term_ground_truth,
-                  r_ground_truth, beta):
+    def calc_loss(self, pred, o_ground_truth, r_ground_truth, term_ground_truth, abstr_r_ground_truth,
+                  abstr_term_ground_truth, beta):
         d_batch, d_time = o_ground_truth.shape[:2]
         #prim_rec_o = torch.nn.functional.mse_loss(pred['prim_o'], o_ground_truth)
         #prim_rec_r = torch.nn.functional.mse_loss(pred['prim_r'], r_ground_truth)
@@ -342,8 +342,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             abstr_factor = 0  # disable abstract model loss in case we only use the primitive level
 
         total = prim_rec_o + prim_rec_r + prim_rec_term + prim_kl_s + prim_kl_s_reg
-        total += abstr_factor * (abstr_rec_o + abstr_rec_r + abstr_rec_term + abstr_kl_s + abstr_kl_s_reg
-                                 + abstr_a_loss)
+        total += abstr_factor * (abstr_rec_o + abstr_rec_r + abstr_rec_term + abstr_kl_s + abstr_kl_s_reg)
         prim_o_mae = torch.mean(torch.abs(pred['prim_o'] - o_ground_truth))
         prim_r_mae = torch.mean(torch.abs(pred['prim_r'] - r_ground_truth))
         prim_term_mae = torch.mean(torch.abs(pred['prim_term'] - term_ground_truth))

@@ -170,7 +170,7 @@ if __name__ == '__main__':
             logger.log({full_key + '_mean': mu, full_key + '_sigma': sigma},
                        Scope.PARAMETERS() / 'model_stats', i_step)
 
-        losses = model.calc_loss(pred, o, term, abstr_r, abstr_term, r, 1)
+        losses = model.calc_loss(pred, o, r, term, abstr_r, abstr_term, 1)
         losses = {k: v.detach().cpu().numpy() for k, v in losses.items()}
         logger.log(losses, Scope.TEST() / 'with_warmup', i_step)
 
