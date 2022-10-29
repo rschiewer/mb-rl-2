@@ -105,8 +105,8 @@ if __name__ == '__main__':
 
     def get_batch_train(i_step):
         s, a, r, terminal, w = train_driver.interact(d_batch).to_np_arrays(dtype=np.float32,
-                                                                           pad_last_terminal_flag=True,
-                                                                           pad_last_reward=True)
+                                                                           pad_last_terminal_flag=pad,
+                                                                           pad_last_reward=pad)
         s, a, r, terminal = prepare_data(s, a, r, terminal, env)
         return s, a, r, terminal
 
@@ -125,8 +125,9 @@ if __name__ == '__main__':
 
 
     def get_batch_test(i_step):
-        s, a, r, terminal, w = test_driver.interact(d_batch).to_np_arrays(dtype=np.float32, pad_last_terminal_flag=True,
-                                                                          pad_last_reward=True)
+        s, a, r, terminal, w = test_driver.interact(d_batch).to_np_arrays(dtype=np.float32,
+                                                                          pad_last_terminal_flag=pad,
+                                                                          pad_last_reward=pad)
         #experience = planning_driver.interact(1)
         #total_reward = experience[0]['r'].sum()
         #logger.log({'planning_r': total_reward}, Scope.TEST() / 'planning_reward', i_step)
