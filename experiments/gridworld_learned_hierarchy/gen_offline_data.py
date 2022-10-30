@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 from mdm.training.gym_driver import GymEpisodeDriver
 from mdm.memory.trajectory_memory import TrajectoryMemory
-from mdm.gridworld.gridworld import Gridworld
+from mdm.gridworld.gridworld import Gridworld, CellType, FullyObservableGridworld
 from mdm.utils.utils import here
 
 
@@ -23,19 +23,25 @@ class TabularQLearningPolicy:
         self.patience = patience
         self._current_patience = patience
 
-    def _update(self, s_t, a_t, r_t, term_t, s_tt):
-        s_t = tuple(s_t)
-        s_tt = tuple(s_tt)
-        target = r_t
-        if not term_t:  # unnecessary for q initialized to zeros
-            target += self.gamma * self.q[s_tt].max()
-
-        q_new = (1 - self.alpha) * self.q[s_t][a_t] + self.alpha * target
-        delta = np.abs(self.q[s_t][a_t] - q_new)
-        self.q[s_t][a_t] = q_new
-        return delta
+    def _translate_obs(self, s):
+        if np.shape(s)[-1] == 2:
+            return s
+        else:
+            if np.ndim(s) == 1:
+                s = np.reshape(s, self.q.shape[0: 2])
+                s = np.argwhere(s == CellType.AGENT).squeeze()
+            else:
+                d_batch = np.shape(s)[0]
+                s = np.reshape(s, (d_batch, *self.q.shape[0: 2]))
+                s = np.argwhere(s == CellType.AGENT)[:, 1:].squeeze()
+                if len(s) != d_batch:
+                    pad = np.zeros((d_batch - len(s), *np.shape(s)[1:]), dtype=int)
+                    s = np.concatenate([s, pad], axis=0)
+        return s
 
     def _update_vec(self, s_t, a_t, r_t, term_t, s_tt):
+        s_t = self._translate_obs(s_t)
+        s_tt = self._translate_obs(s_tt)
         target = r_t + self.gamma * self.q[s_tt[:, 0], s_tt[:, 1]].max(axis=-1)
         new_q = (1 - self.alpha) * self.q[s_t[:, 0], s_t[:, 1], a_t] + self.alpha * target
         diff = np.sum(np.abs(self.q[s_t[:, 0], s_t[:, 1], a_t] - new_q))
@@ -66,6 +72,7 @@ class TabularQLearningPolicy:
         if np.random.rand() < self.epsilon:
             a = np.random.choice(range(self.n_actions))
         else:
+            o = self._translate_obs(o)
             aa = self.q[tuple(o.astype(int))]
             a = np.argmax(np.random.random(aa.shape) * (aa == aa.max()))
         return a
@@ -124,14 +131,15 @@ def remove_duplicates_mp(mem: TrajectoryMemory, n_proc: int = 10):
 if __name__ == '__main__':
     map_version = 'v1'
     env = Gridworld.from_cleartext(here() / f'../../mdm/gridworld/8x8_{map_version}.mapdata')
-    n_episodes_train = 30000
+    #env = FullyObservableGridworld(env)
+    n_episodes_train = 100000
     perc_test = 0.1
     disjunct_train_test = False
-    expert_trajectories = 0.5
+    expert_trajectories = 0.75
 
     train_mem = TrajectoryMemory()
     if expert_trajectories > 0:
-        agent = TabularQLearningPolicy(env.grid_h, env.grid_w, env.action_space.n, 0.1, 0.99, 0.3,
+        agent = TabularQLearningPolicy(env.grid_h, env.grid_w, env.action_space.n, 0.1, 0.99, 0.1,
                                        improvement_bound=1e-4, patience=10)
 
         def collect_policy(o, r, term, i_ep):

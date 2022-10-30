@@ -1,11 +1,12 @@
 from mdm.training.gym_driver import GymEpisodeDriver
 from mdm.memory.trajectory_memory import TrajectoryMemory
-from mdm.gridworld.gridworld import Gridworld
+from mdm.gridworld.gridworld import Gridworld, FullyObservableGridworld
 from mdm.utils.utils import here, compute_returns
 
 if __name__ == '__main__':
     map_version = 'v0'
     env = Gridworld.from_cleartext(here() / f'../../mdm/gridworld/8x8_{map_version}.mapdata')
+    #env = FullyObservableGridworld(env)
 
     actions = [0, 0, 1, 1, 0, 0, 0, 1, 1, 1, 0, 1, 0, 1]
     actions += [1, 0, 1, 0, 1, 1, 1, 0, 0, 0, 1, 0, 1, 0]
