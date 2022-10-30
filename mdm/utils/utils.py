@@ -247,11 +247,11 @@ def discrete_stats(module: torch.nn.Module, n_inputs: int, seq_len: int, n_repet
     # query the model
     Y = module(input_sequences, **module_kwargs)
     d_out = Y.shape[-1]
-    Y = Y.reshape(n_unique_sequences, n_repetitions, d_out)
+    Y = Y.reshape(n_repetitions, n_unique_sequences, d_out)
 
     # per sequence mean and std
-    Y_mean = torch.mean(Y, dim=1)
-    Y_std = torch.std(Y, dim=1)
+    Y_mean = torch.mean(Y, dim=0)
+    Y_std = torch.std(Y, dim=0)
 
     # similarity matrix
     # note: torch tensors are row-major
