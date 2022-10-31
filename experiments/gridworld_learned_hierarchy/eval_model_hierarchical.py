@@ -7,7 +7,7 @@ import numpy as np
 from tqdm import tqdm
 
 
-from mdm.gridworld.gridworld import Gridworld
+from mdm.gridworld.gridworld import Gridworld, FullyObservableGridworld
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.planning.cem_planner import CrossentropyPlanner
 from mdm.planning.gradient_planner import GradientPlanner
@@ -39,6 +39,7 @@ if __name__ == '__main__':
         model_path = f'{cfg["final_model_path"]}_{args.id[0]}.ptmdl'
 
     env = Gridworld.from_cleartext(here() / '../../mdm/gridworld/8x8_v0.mapdata')
+    #env = FullyObservableGridworld(env)
     mdl: MultiscaleDynamicsModelMK2 = torch.load(here() / model_path).to('cuda')
     mdl.eval()  # deactivate dropout in RNN
 
@@ -49,7 +50,7 @@ if __name__ == '__main__':
     else:
         logger = NotLogger()
 
-    planning_cfg['n_abstract_steps'] = ceil(100 / mdl.abstract_step_size) - planning_cfg['n_warmup_abstr']
+    planning_cfg['n_abstract_steps'] = ceil(50 / mdl.abstract_step_size) - planning_cfg['n_warmup_abstr']
 
     logger.log(planning_cfg, Scope.HYPERPARAMETERS() / 'plan')
 
@@ -75,7 +76,7 @@ if __name__ == '__main__':
         trajectory_history = collect_groundtruth_data(mdl, trajectory_history, env, planning_cfg['n_warmup_prim'])
         trajectory_history = init_prim_s(mdl, trajectory_history)
         trajectory_history = init_abstr_s(mdl, trajectory_history, planner_prim, planning_cfg['n_warmup_abstr'],
-                                          planning_cfg['n_rollouts'])
+                                          planning_cfg['n_rollouts'], allow_prim_imagination=True)
         trajectory_history = plan_abstract(mdl, trajectory_history, planner_abstr, planning_cfg['n_abstract_steps'],
                                            planning_cfg['n_rollouts'])
 
