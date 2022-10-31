@@ -378,13 +378,6 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                 'monitoring_abstr_term': abstr_term_mae, 'monitoring_abstr_kl': abstr_kl_unscaled,
                 'monitoring_abstr_kl_reg': abstr_kl_reg_unscaled}
 
-    def input_compatible(self,
-                         o_ground_truth: torch.Tensor,
-                         a_ground_truth: torch.Tensor,
-                         r_ground_truth: torch.Tensor) -> Tuple[bool, str]:
-        # laziness ahead
-        return True, ''
-
     def filter_rnn_state(self,
                          h: RnnStateType):
         if isinstance(h, tuple):

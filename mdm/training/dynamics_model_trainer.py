@@ -55,10 +55,6 @@ class DynamicsModelTrainer(ABC):
             s, a, r, term, mask = [torch.from_numpy(x).to(device=device, dtype=torch.float32) for x
                                    in (s, a, r, term, r.mask)]
 
-            compatible, msg = self.model.input_compatible(s, a, r)
-            if not compatible:
-                raise ValueError(msg)
-
             #with profile(activities=[ProfilerActivity.CPU], record_shapes=True) as prof:
             #    with record_function("model_training"):
             train_losses = self.model.train_step(s, a, r, term, mask, self.optimizer)
@@ -79,10 +75,6 @@ class DynamicsModelTrainer(ABC):
                 s, a, r, term = self.get_batch_test(i_step)
                 s, a, r, term, mask = [torch.from_numpy(x).to(device=device, dtype=torch.float32) for x in
                                        (s, a, r, term, r.mask)]
-
-                compatible, msg = self.model.input_compatible(s, a, r)
-                if not compatible:
-                    raise ValueError(msg)
 
                 self.model.eval()
                 eval_losses = self.model.eval_step(s, a, r, term, mask)

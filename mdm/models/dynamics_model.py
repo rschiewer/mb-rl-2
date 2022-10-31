@@ -22,6 +22,7 @@ class DynamicsModel(torch.nn.Module, ABC):
                    a_ground_truth: torch.Tensor,
                    r_ground_truth: torch.Tensor,
                    term_ground_truth: torch.Tensor,
+                   mask: torch.Tensor,
                    optimizer: torch.optim.Optimizer) -> Dict[str, torch.Tensor]:
         pass
 
@@ -30,13 +31,6 @@ class DynamicsModel(torch.nn.Module, ABC):
                   o_ground_truth: torch.Tensor,
                   a_ground_truth: torch.Tensor,
                   r_ground_truth: torch.Tensor,
-                  term_ground_truth: torch.Tensor) -> Dict[str, torch.Tensor]:
-        pass
-
-    @abstractmethod
-    def input_compatible(self,
-                         o_ground_truth: torch.Tensor,
-                         a_ground_truth: torch.Tensor,
-                         r_ground_truth: torch.Tensor) -> Tuple[bool, str]:
-        # TODO: add term_ground_truth here as well
+                  term_ground_truth: torch.Tensor,
+                  mask: torch.Tensor) -> Dict[str, torch.Tensor]:
         pass
