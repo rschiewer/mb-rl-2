@@ -7,7 +7,7 @@ import torch
 import numpy as np
 from PIL import Image
 
-from mdm.gridworld.gridworld import Gridworld
+from mdm.gridworld.gridworld import Gridworld, FullyObservableGridworld
 from mdm.utils.utils import here, load_yaml, prepare_data, fill_placeholders, discrete_stats, compute_returns, \
     DistributionType
 from mdm.utils.torch_tools import get_mu, get_sigma, bin_every_k_steps
@@ -32,6 +32,7 @@ if __name__ == '__main__':
     cfg = load_yaml(here() / 'model_cfg.yaml')
     planning_cfg = load_yaml(here() / 'planning_cfg.yaml')
     env = Gridworld.from_cleartext(here() / cfg['env'])
+    #env = FullyObservableGridworld(env)
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
     # infer missing config values
@@ -145,7 +146,7 @@ if __name__ == '__main__':
     # train
     fig = plt.figure(figsize=(10, 10))
 
-    def eval_callback(o: torch.Tensor, a: torch.Tensor, r: torch.Tensor, term: torch.Tensor, i_step: int):
+    def eval_callback(o: torch.Tensor, a: torch.Tensor, r: torch.Tensor, term: torch.Tensor, mask, i_step: int):
         if model.abstract_step_size <= 10:
             Y_mean, Y_std, Y_mae = discrete_stats(model.abstract_action_model, env.action_space.n,
                                                   model.abstract_step_size, 10, {'sample': False})
@@ -171,11 +172,11 @@ if __name__ == '__main__':
             logger.log({full_key + '_mean': mu, full_key + '_sigma': sigma},
                        Scope.PARAMETERS() / 'model_stats', i_step)
 
-        losses = model.calc_loss(pred, o, r, term, abstr_r, abstr_term, 1)
+        losses = model.calc_loss(pred, o, r, term, abstr_r, abstr_term, mask, 1)
         losses = {k: v.detach().cpu().numpy() for k, v in losses.items()}
         logger.log(losses, Scope.TEST() / 'with_warmup', i_step)
 
-    def train_callback(o: torch.Tensor, a: torch.Tensor, r: torch.Tensor, term: torch.Tensor, i_step: int):
+    def train_callback(o: torch.Tensor, a: torch.Tensor, r: torch.Tensor, term: torch.Tensor, mask, i_step: int):
         pass
         #logger.log({'n_warmup_prim': model.n_warmup_prim,
         #            'n_warmup_abstr': model.n_warmup_abstr},

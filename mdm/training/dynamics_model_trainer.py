@@ -52,7 +52,8 @@ class DynamicsModelTrainer(ABC):
         self.model.prepare_for_training()
         for i_step in step_iter:
             s, a, r, term = self.get_batch_train(i_step)
-            s, a, r, term = [torch.from_numpy(x).to(device=device, dtype=torch.float32) for x in (s, a, r, term)]
+            s, a, r, term, mask = [torch.from_numpy(x).to(device=device, dtype=torch.float32) for x
+                                   in (s, a, r, term, r.mask)]
 
             compatible, msg = self.model.input_compatible(s, a, r)
             if not compatible:
@@ -60,7 +61,7 @@ class DynamicsModelTrainer(ABC):
 
             #with profile(activities=[ProfilerActivity.CPU], record_shapes=True) as prof:
             #    with record_function("model_training"):
-            train_losses = self.model.train_step(s, a, r, term, self.optimizer)
+            train_losses = self.model.train_step(s, a, r, term, mask, self.optimizer)
             #print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
 
             if progress_bar:
@@ -76,14 +77,15 @@ class DynamicsModelTrainer(ABC):
 
             if self.eval_interval is not None and i_step % self.eval_interval == 0:
                 s, a, r, term = self.get_batch_test(i_step)
-                s, a, r, term = [torch.from_numpy(x).to(device=device, dtype=torch.float32) for x in (s, a, r, term)]
+                s, a, r, term, mask = [torch.from_numpy(x).to(device=device, dtype=torch.float32) for x in
+                                       (s, a, r, term, r.mask)]
 
                 compatible, msg = self.model.input_compatible(s, a, r)
                 if not compatible:
                     raise ValueError(msg)
 
                 self.model.eval()
-                eval_losses = self.model.eval_step(s, a, r, term)
+                eval_losses = self.model.eval_step(s, a, r, term, mask)
                 self.model.train()
 
                 last_total_loss = last_eval_losses.get('total', np.inf)
@@ -108,10 +110,10 @@ class DynamicsModelTrainer(ABC):
                     self.logger.log(means, Scope.PARAMETERS(), i_step)
 
                 if self.eval_callback:
-                    self.eval_callback(s, a, r, term, i_step)
+                    self.eval_callback(s, a, r, term, mask, i_step)
 
             if self.train_callback:
-                self.train_callback(s, a, r, term, i_step)
+                self.train_callback(s, a, r, term, mask, i_step)
 
         if self.logger:
             self.logger.stop_session()

@@ -97,7 +97,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             # abstract model rollout
             # ctx_low_level = self.fuse_state(prim_current['z'], prim_current['rnn_state']).detach()
             # mem['ctx_low_level'].append(ctx_low_level)
-            prim_data = mem[self.abstr_pred_target][-1].detach()
+            #prim_data = mem[self.abstr_pred_target][-1].detach()
+            prim_data = o[:, i_end - 1]
             mem['abstr_o_target'].append(prim_data)
 
             #n_warmup_abstr = 1 if warmup_steps_abstr_left > 0 else 0
@@ -152,6 +153,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         # store things
         mem['prim_z'].append(pred['z'])
         mem['prim_z_prior'].append(pred['z_prior'])
+        #mem['prim_z_post'].append(pred['z_post'])
         if use_posterior:
             mem['prim_z_post'].append(pred['z_post'])
         else:
@@ -187,6 +189,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         # store things
         mem['abstr_z'].append(pred['z'])
         mem['abstr_z_prior'].append(pred['z_prior'])
+        #mem['abstr_z_post'].append(pred['z_post'])
         if use_posterior:
             mem['abstr_z_post'].append(pred['z_post'])
         else:
@@ -227,9 +230,10 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                    a_ground_truth: torch.Tensor,
                    r_ground_truth: torch.Tensor,
                    term_ground_truth: torch.Tensor,
+                   mask: torch.Tensor,
                    optimizer: torch.optim.Optimizer) -> Dict[str, torch.Tensor]:
         optimizer.zero_grad(set_to_none=True)
-        losses = self.eval_step(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth)
+        losses = self.eval_step(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, mask)
         losses['total'].backward()
         optimizer.step()
         torch.nn.utils.clip_grad_norm(self.parameters(), 1.0)
@@ -248,7 +252,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                   o_ground_truth: torch.Tensor,
                   a_ground_truth: torch.Tensor,
                   r_ground_truth: torch.Tensor,
-                  term_ground_truth: torch.Tensor) -> Dict[str, torch.Tensor]:
+                  term_ground_truth: torch.Tensor,
+                  mask: torch.Tensor) -> Dict[str, torch.Tensor]:
         prim_steps = a_ground_truth.shape[1]
 
         abstr_r_ground_truth = self.calc_abstr_r_ground_truth(r_ground_truth)
@@ -263,7 +268,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
         # primitive model loss
         loss_mixed = self.calc_loss(pred_mixed, o_ground_truth, r_ground_truth, term_ground_truth, abstr_r_ground_truth,
-                                    abstr_term_ground_truth, beta)
+                                    abstr_term_ground_truth, mask, beta)
         #loss_post = self._calc_loss(pred_post, o_ground_truth, term_ground_truth, abstr_r_ground_truth,
         #                            abstr_term_ground_truth, r_ground_truth, beta)
 
@@ -281,14 +286,22 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         #return loss_post
 
     def calc_loss(self, pred, o_ground_truth, r_ground_truth, term_ground_truth, abstr_r_ground_truth,
-                  abstr_term_ground_truth, beta):
-        d_batch, d_time = o_ground_truth.shape[:2]
+                  abstr_term_ground_truth, mask, beta):
+        assert mask.ndim == 3
+        assert mask.shape[-1] == 1
+
+        mask = 1 - mask
+        mask_abstr = bin_every_k_steps(mask, self.abstract_step_size).max(dim=2).values
+
         #prim_rec_o = torch.nn.functional.mse_loss(pred['prim_o'], o_ground_truth)
         #prim_rec_r = torch.nn.functional.mse_loss(pred['prim_r'], r_ground_truth)
-        prim_rec_term = torch.nn.functional.binary_cross_entropy(pred['prim_term'], term_ground_truth)
-        prim_rec_o = - build_gaussian(pred['prim_o_dist']).log_prob(o_ground_truth).mean()
+        prim_rec_term = torch.nn.functional.binary_cross_entropy(pred['prim_term'], term_ground_truth, reduction='none')
+        prim_rec_term = (prim_rec_term * mask).mean()
+        prim_rec_o = - build_gaussian(pred['prim_o_dist']).log_prob(o_ground_truth)
+        prim_rec_o = (prim_rec_o * mask).mean()
         #prim_rec_o /= (d_batch * d_time)
-        prim_rec_r = - build_gaussian(pred['prim_r_dist']).log_prob(r_ground_truth).mean()
+        prim_rec_r = - build_gaussian(pred['prim_r_dist']).log_prob(r_ground_truth)
+        prim_rec_r = (prim_rec_r * mask).mean()
         #prim_rec_r /= (d_batch * d_time)
 
         #prim_rec_term = - build_bernoulli(pred['prim_term']).log_prob(term_ground_truth).mean()
@@ -297,10 +310,11 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         prim_s_post = build_gaussian(pred['prim_z_post'])
         unit_gaussian_prim = torch.distributions.Normal(loc=torch.zeros_like(prim_s_post.loc),
                                                         scale=torch.ones_like(prim_s_post.scale))
-        prim_kl_s = beta * self.beta_kl_prim * (torch.distributions.kl_divergence(prim_s_post, prim_s_prior).mean())
+        prim_kl_s = beta * self.beta_kl_prim * (torch.distributions.kl_divergence(prim_s_post, prim_s_prior))
+        prim_kl_s = (prim_kl_s * mask).mean()
         # + torch.distributions.kl_divergence(prim_s_prior, prim_s_post).mean())
-        prim_kl_s_reg = beta * self.beta_reg_prim * torch.distributions.kl_divergence(prim_s_post,
-                                                                                      unit_gaussian_prim).mean()
+        prim_kl_s_reg = beta * self.beta_reg_prim * torch.distributions.kl_divergence(prim_s_post, unit_gaussian_prim)
+        prim_kl_s_reg = (prim_kl_s_reg * mask).mean()
         # ctx_low_level_dist = build_gaussian(pred_mixed['ctx_low_level'].detach())
         # abstr_o_dist = build_gaussian(pred_mixed['abstr_o_dist'])
         # abstr_rec_o = self.beta_abstract_model * torch.distributions.kl_divergence(ctx_low_level_dist, abstr_o_dist).mean()
@@ -315,10 +329,13 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         # diff = torch.sum(abstr_o_target - pred_mixed['abstr_o_target'], dim=(1, 2))
         #abstr_rec_o = torch.nn.functional.mse_loss(pred['abstr_o'], pred['abstr_o_target'])
         #abstr_rec_r = torch.nn.functional.mse_loss(pred['abstr_r'], abstr_r_ground_truth)
-        abstr_rec_term = torch.nn.functional.binary_cross_entropy(pred['abstr_term'], abstr_term_ground_truth)
-        abstr_rec_o = - build_gaussian(pred['abstr_o_dist']).log_prob(pred['abstr_o_target']).mean()
+        abstr_rec_term = torch.nn.functional.binary_cross_entropy(pred['abstr_term'], abstr_term_ground_truth, reduction='none')
+        abstr_rec_term = (abstr_rec_term * mask_abstr).mean()
+        abstr_rec_o = - build_gaussian(pred['abstr_o_dist']).log_prob(pred['abstr_o_target'])
+        abstr_rec_o = (abstr_rec_o * mask_abstr).mean()
         #abstr_rec_o /= (d_batch * d_time)
-        abstr_rec_r = - build_gaussian(pred['abstr_r_dist']).log_prob(abstr_r_ground_truth).mean()
+        abstr_rec_r = - build_gaussian(pred['abstr_r_dist']).log_prob(abstr_r_ground_truth)
+        abstr_rec_r = (abstr_rec_r * mask_abstr).mean()
         #abstr_rec_r /= (d_batch * d_time)
         #abstr_rec_term = torch.nn.functional.binary_cross_entropy(pred['abstr_term'], abstr_term_ground_truth)
 
@@ -326,15 +343,12 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         abstr_s_post = build_gaussian(pred['abstr_z_post'])
         unit_gaussian_abstr = torch.distributions.Normal(loc=torch.zeros_like(abstr_s_post.loc),
                                                          scale=torch.ones_like(abstr_s_post.scale))
-        abstr_kl_s = beta * self.beta_kl_abstr * (torch.distributions.kl_divergence(abstr_s_post, abstr_s_prior).mean())
+        abstr_kl_s = beta * self.beta_kl_abstr * torch.distributions.kl_divergence(abstr_s_post, abstr_s_prior)
+        abstr_kl_s = (abstr_kl_s * mask_abstr).mean()
         # + torch.distributions.kl_divergence(abstr_s_prior, abstr_s_post).mean())
         abstr_kl_s_reg = beta * self.beta_reg_abstr * torch.distributions.kl_divergence(abstr_s_post,
-                                                                                        unit_gaussian_abstr).mean()
-        # abstract action model loss
-        scale = pred['abstr_a'].reshape(-1, self.abstract_model.d_action).std(dim=0, unbiased=False)
-        abstr_a_loss = torch.distributions.Normal(loc=0.0, scale=scale + 0.001).entropy()
-        abstr_a_loss = -torch.sum(torch.abs(abstr_a_loss))
-        abstr_a_loss *= self.beta_abstract_action
+                                                                                        unit_gaussian_abstr)
+        abstr_kl_s_reg = (abstr_kl_s_reg * mask_abstr).mean()
 
         if pred['abstr_o'].shape[1] > 1:
             abstr_factor = 1
@@ -343,21 +357,21 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
         total = prim_rec_o + prim_rec_r + prim_rec_term + prim_kl_s + prim_kl_s_reg
         total += abstr_factor * (abstr_rec_o + abstr_rec_r + abstr_rec_term + abstr_kl_s + abstr_kl_s_reg)
-        prim_o_mae = torch.mean(torch.abs(pred['prim_o'] - o_ground_truth))
-        prim_r_mae = torch.mean(torch.abs(pred['prim_r'] - r_ground_truth))
-        prim_term_mae = torch.mean(torch.abs(pred['prim_term'] - term_ground_truth))
-        prim_kl_unscaled = torch.distributions.kl_divergence(prim_s_post, prim_s_prior).mean()
-        prim_kl_reg_unscaled = torch.distributions.kl_divergence(prim_s_post, unit_gaussian_prim).mean()
-        abstr_o_mae = torch.mean(torch.abs(pred['abstr_o'] - pred['abstr_o_target']))
-        abstr_r_mae = torch.mean(torch.abs(pred['abstr_r'] - abstr_r_ground_truth))
-        abstr_term_mae = torch.mean(torch.abs(pred['abstr_term'] - abstr_term_ground_truth))
-        abstr_kl_unscaled = torch.distributions.kl.kl_divergence(abstr_s_post, abstr_s_prior).mean()
-        abstr_kl_reg_unscaled = torch.distributions.kl_divergence(abstr_s_post, unit_gaussian_abstr).mean()
+        prim_o_mae = torch.mean(torch.abs(pred['prim_o'] - o_ground_truth) * mask)
+        prim_r_mae = torch.mean(torch.abs(pred['prim_r'] - r_ground_truth) * mask)
+        prim_term_mae = torch.mean(torch.abs(pred['prim_term'] - term_ground_truth) * mask)
+        prim_kl_unscaled = (torch.distributions.kl_divergence(prim_s_post, prim_s_prior) * mask).mean()
+        prim_kl_reg_unscaled = (torch.distributions.kl_divergence(prim_s_post, unit_gaussian_prim) * mask).mean()
+        abstr_o_mae = torch.mean(torch.abs(pred['abstr_o'] - pred['abstr_o_target']) * mask_abstr)
+        abstr_r_mae = torch.mean(torch.abs(pred['abstr_r'] - abstr_r_ground_truth) * mask_abstr)
+        abstr_term_mae = torch.mean(torch.abs(pred['abstr_term'] - abstr_term_ground_truth) * mask_abstr)
+        abstr_kl_unscaled = (torch.distributions.kl.kl_divergence(abstr_s_post, abstr_s_prior) * mask_abstr).mean()
+        abstr_kl_reg_unscaled = (torch.distributions.kl_divergence(abstr_s_post, unit_gaussian_abstr) * mask_abstr).mean()
 
         return {'total': total, 'prim_o': prim_rec_o, 'prim_r': prim_rec_r, 'prim_term': prim_rec_term,
                 'prim_kl_s': prim_kl_s, 'prim_kl_s_reg': prim_kl_s_reg, 'abstr_o': abstr_rec_o,
                 'abstr_r': abstr_rec_r, 'abstr_term': abstr_rec_term, 'abstr_kl_s': abstr_kl_s,
-                'abstr_kl_s_reg': abstr_kl_s_reg, 'abstr_a_var': abstr_a_loss, 'monitoring_prim_o': prim_o_mae,
+                'abstr_kl_s_reg': abstr_kl_s_reg, 'monitoring_prim_o': prim_o_mae,
                 'monitoring_prim_r': prim_r_mae, 'monitoring_prim_term': prim_term_mae,
                 'monitoring_prim_kl': prim_kl_unscaled, 'monitoring_prim_kl_reg': prim_kl_reg_unscaled,
                 'monitoring_abstr_o': abstr_o_mae, 'monitoring_abstr_r': abstr_r_mae,
@@ -445,6 +459,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                                           + 1, device=self.device)
 
             use_posterior = t < n_posterior_steps
+            if use_posterior and self.training:
+                use_posterior = torch.rand(()) < 0.2
             #if not use_posterior and t < n_groundtruth_available and self.training:
             #    use_posterior = True
             #    use_posterior = torch.rand(()) < 0.5
@@ -499,6 +515,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                                           + 1, device=self.device)
 
             use_posterior = t < n_posterior_steps
+            if use_posterior and self.training:
+                use_posterior = torch.rand(()) < 0.2
             #if not use_posterior and t < n_groundtruth_available and self.training:
             #    use_posterior = True
             #    use_posterior = torch.rand(()) < 0.5
