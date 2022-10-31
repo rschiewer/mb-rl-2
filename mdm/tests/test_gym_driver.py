@@ -41,14 +41,14 @@ class GymEpisodeDriverTest(unittest.TestCase):
         self.rand_seed = 42
         self.batch_sizes = [1, 10]
         self.num_batches = 3
-        self.envs = [gym.make('CartPole-v0'), gym.make('MountainCar-v0'), gym.make('PongNoFrameskip-v4')]
+        self.envs = [gym.make('CartPole-v0'), gym.make('MountainCar-v0')]
 
     def test_get_batch(self):
         for batch_size in self.batch_sizes:
             for env in self.envs:
                 env.seed(self.rand_seed + batch_size)
                 np.random.seed(self.rand_seed + batch_size)
-                collector = GymEpisodeDriver(env, lambda s, r, term: env.action_space.sample())
+                collector = GymEpisodeDriver(env, lambda s, r, term, i_ep: env.action_space.sample())
 
                 trajectories = []
                 for _ in range(self.num_batches):
