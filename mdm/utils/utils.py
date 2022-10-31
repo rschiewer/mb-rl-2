@@ -185,7 +185,7 @@ def normalize_obs(obs: Union[torch.Tensor, np.ndarray],
     if isinstance(obs, torch.Tensor):
         denom = torch.from_numpy(denom).to(obs.device)
 
-    return obs / denom - 0.5
+    return obs / denom
 
 
 def to_onehot(actions: Union[torch.Tensor, np.ndarray],
