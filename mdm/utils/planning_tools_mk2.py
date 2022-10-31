@@ -23,12 +23,105 @@ def update_history(history: Dict[str, torch.Tensor],
     return history
 
 
-def plan_flat(model: MultiscaleDynamicsModelMK2,
-              history: Dict[str, torch.Tensor],
-              n_plan_steps: int,
-              n_rollouts: int):
-    pass
+def plan_prim_free(model: MultiscaleDynamicsModelMK2,
+                   planner_prim: object,
+                   prim_rnn_state: RnnStateType,
+                   prim_z: torch.Tensor,
+                   n_plan_steps: int,
+                   n_rollouts: int):
+    rnn_state_start = unpack_rnn_state(pack_rnn_state(prim_rnn_state).repeat(n_rollouts, 1, 1, 1))
+    z_start = prim_z.repeat(n_rollouts, 1)
 
+    def _rollout_fn(_a: torch.Tensor):
+        _a = to_onehot(_a, n_classes=model.d_action)
+        _mem, _prim_final = model.rollout_primitive(a=_a, z=z_start, rnn_state=rnn_state_start, sample=False)
+        _mem = model.pack_mem(_mem)
+
+        _criterion = _mem['prim_r'].squeeze(-1)
+        _discount = _mem['prim_term'].squeeze(-1)
+        return _criterion, _discount, _mem
+
+    a, a_dist, i_win, R_win, data = planner_prim.plan(rollout_fn=_rollout_fn, n_rollouts=n_rollouts,
+                                                      n_plan_steps=n_plan_steps)
+
+    data = {k: v[i_win[0], None] if len(v) > 0 else v for k, v in data.items()}
+    return a[i_win[0]], data
+
+
+def plan_prim_chunk(model: MultiscaleDynamicsModelMK2,
+                    planner_prim: object,
+                    prim_rnn_state: RnnStateType,
+                    prim_z: torch.Tensor,
+                    abstr_target: torch.Tensor,
+                    abstr_r: torch.Tensor,
+                    abstr_term: torch.Tensor,
+                    n_plan_steps: Union[int, Sequence[int]],
+                    n_rollouts: int):
+    rnn_state_start = unpack_rnn_state(pack_rnn_state(prim_rnn_state).repeat(n_rollouts, 1, 1, 1))
+    z_start = prim_z.repeat(n_rollouts, 1)
+    target = abstr_target.repeat(n_rollouts, 1)
+    r_goal = abstr_r.repeat(n_rollouts, 1)
+    term_goal = abstr_term.repeat(n_rollouts, 1)
+
+    if type(n_plan_steps) is int:
+        n_plan_steps = (n_plan_steps, )
+
+    R_best = -np.inf
+    a_best = None
+    data_best = None
+    i_win_best = None
+    for n_steps in n_plan_steps:
+        def _rollout_fn(_a: torch.Tensor):
+            _a = to_onehot(_a, n_classes=model.d_action)
+            _mem, _prim_final = model.rollout_primitive(a=_a, z=z_start, rnn_state=rnn_state_start, sample=False)
+            _mem = model.pack_mem(_mem)
+
+            _abstr_r_rollout = model.calc_abstr_r_ground_truth(_mem['prim_r'])[:, -1]
+            _abstr_term_rollout = model.calc_abstr_term_ground_truth(_mem['prim_term'])[:, -1]
+            _abstr_target_rollout = _mem[model.abstr_pred_target][:, -1]
+            _criterion = - torch.mean((_abstr_target_rollout - target) ** 2, dim=1, keepdim=True)
+            _criterion -= torch.mean((_abstr_r_rollout - r_goal) ** 2, dim=1, keepdim=True)
+            _criterion -= torch.mean((_abstr_term_rollout - term_goal) ** 2, dim=1, keepdim=True)
+            return _criterion, None, _mem
+
+        a, a_dist, i_win, R_win, data = planner_prim.plan(rollout_fn=_rollout_fn, n_rollouts=n_rollouts,
+                                                          n_plan_steps=n_steps)
+        if R_win[0] > R_best:
+            a_best = a
+            data_best = data
+            i_win_best = i_win
+
+    data_best = {k: v[i_win_best[0], None] if len(v) > 0 else v for k, v in data_best.items()}
+    return a_best[i_win_best[0]], data_best
+
+
+def plan_abstr(model: MultiscaleDynamicsModelMK2,
+               planner_abstr: object,
+               abstr_rnn_state: RnnStateType,
+               abstr_z: torch.Tensor,
+               n_plan_steps: int,
+               n_rollouts: int):
+    rnn_state_start = unpack_rnn_state(pack_rnn_state(abstr_rnn_state).repeat(n_rollouts, 1, 1, 1))
+    z_start = abstr_z.repeat(n_rollouts, 1)
+
+    def _rollout_fn(_a: torch.Tensor):
+        if model.abstract_action_model.distribution_type is None:
+            _a = torch.clamp(_a, -0.99, 0.99)  # limit action range to allowed values
+        elif model.abstract_action_model.distribution_type == 'categorical':
+            _a = to_onehot(_a, model.abstract_model.d_action)
+        _mem, _abstr_final = model.rollout_abstract(a=_a, z=z_start, rnn_state=rnn_state_start,
+                                                    n_posterior_steps=0, sample=False)
+        _mem = model.pack_mem(_mem)
+
+        _criterion = _mem['abstr_r'].squeeze(-1)
+        _discount = _mem['abstr_term'].squeeze(-1)
+        return _criterion, _discount, _mem
+
+    a, a_dist, i_win, R_win, data = planner_abstr.plan(rollout_fn=_rollout_fn, n_rollouts=n_rollouts,
+                                                      n_plan_steps=n_plan_steps)
+
+    data = {k: v[i_win[0], None] if len(v) > 0 else v for k, v in data.items()}
+    return a[i_win[0]], data
 
 
 def collect_groundtruth_data(model: MultiscaleDynamicsModelMK2,
@@ -139,7 +232,7 @@ def init_abstr_s(model: MultiscaleDynamicsModelMK2,
     #abstr_term = bin_every_k_steps(history['prim_term'][:, :required_steps], model.abstract_step_size).max(dim=2).values
 
     mem, abstr_final = model.rollout_abstract(a=abstr_a, prim_data=prim_data, r=abstr_r,
-                                              term=abstr_term, sample=False, n_posterior_steps=n_warmup_abstr)
+                                              term=abstr_term, sample=False, n_posterior_steps=-1)
     mem = model.pack_mem(mem)
     history = update_history(history, mem)
     return history
@@ -223,7 +316,7 @@ def plan_section_flexible(model: MultiscaleDynamicsModelMK2,
 
     best_data = None
     best_criterion = np.inf
-    for seq_len in range(model.abstract_step_size - 2, model.abstract_step_size + 2):
+    for seq_len in range(model.abstract_step_size - 1, model.abstract_step_size + 2):
         available_actions = list(range(model.d_action))
         a_seq = np.stack(list(product(available_actions, repeat=seq_len)))
         a_seq = torch.tensor(a_seq, device=model.device)
