@@ -282,7 +282,7 @@ def bin_every_k_steps(data: torch.Tensor,
 
     if padding_val is None:
         last_valid = (n_macro_steps - 1) * k
-        padding_val = torch.mean(data[:, last_valid:], dim=1, keepdim=True)
+        padding_val = torch.mean(data[:, last_valid:], dim=1, keepdim=True, dtype=data.dtype)
         padding = torch.repeat_interleave(padding_val, d_padding, dim=1)
     else:
         padding = torch.full((d_batch, d_padding, d_data), fill_value=padding_val, dtype=data.dtype, device=data.device)
