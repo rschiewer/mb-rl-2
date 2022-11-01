@@ -160,8 +160,9 @@ if __name__ == '__main__':
             logger.log({'abstr_a_mean': Y_mean.mean(), 'abstr_a_std': Y_std.mean()},
                        Scope.PARAMETERS() / 'abstr_a_stats', i_step)
 
-        abstr_r = bin_every_k_steps(r, model.abstract_step_size, padding_val=0).sum(dim=2)
-        abstr_term = bin_every_k_steps(term, model.abstract_step_size).max(dim=2).values
+
+        abstr_r = model.calc_abstr_r_ground_truth(r)
+        abstr_term = model.calc_abstr_term_ground_truth(term)
         model.eval()
         pred = model(o, a, r, term, abstr_r, abstr_term, cfg['eval']['n_warmup_prim'], cfg['eval']['n_warmup_abstr'])
         model.train()
