@@ -100,15 +100,25 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             #prim_data = mem[self.abstr_pred_target][-1].detach()
             prim_data = o[:, i_end - 1]
             mem['abstr_o_target'].append(prim_data)
+            abstr_r_groundtruth = torch.stack(mem['prim_r'][i_start:i_end], dim=1)
+            abstr_r_groundtruth = self.calc_abstr_r_ground_truth(abstr_r_groundtruth)
+            abstr_term_groundtruth = torch.stack(mem['prim_term'][i_start:i_end], dim=1)
+            abstr_term_groundtruth = self.calc_abstr_term_ground_truth(abstr_term_groundtruth)
 
-            #n_warmup_abstr = 1 if warmup_steps_abstr_left > 0 else 0
-            mem, abstr_current = self.rollout_abstract(a=add_time_dim(abstr_a), r=add_time_dim(abstr_r[:, i_chunk]),
-                                                       term=add_time_dim(abstr_term[:, i_chunk]),
+            mem, abstr_current = self.rollout_abstract(a=add_time_dim(abstr_a), r=abstr_r_groundtruth,
+                                                       term=abstr_term_groundtruth,
                                                        prim_data=add_time_dim(prim_data),
                                                        z=abstr_current['z'],
                                                        rnn_state=abstr_current['rnn_state'],
                                                        n_posterior_steps=warmup_steps_abstr_left,
                                                        mem=mem, sample=True)
+            #mem, abstr_current = self.rollout_abstract(a=add_time_dim(abstr_a), r=add_time_dim(abstr_r[:, i_chunk]),
+            #                                           term=add_time_dim(abstr_term[:, i_chunk]),
+            #                                           prim_data=add_time_dim(prim_data),
+            #                                           z=abstr_current['z'],
+            #                                           rnn_state=abstr_current['rnn_state'],
+            #                                           n_posterior_steps=warmup_steps_abstr_left,
+            #                                           mem=mem, sample=True)
 
             # exchange primitive model's internal state with prediction from abstract model
             # prim_data, prim_rnn_state = self.unfuse_state(abstr_current['o'])
@@ -235,8 +245,17 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         optimizer.zero_grad(set_to_none=True)
         losses = self.eval_step(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, mask)
         losses['total'].backward()
+        grad_norms = []
+        for p in self.parameters():
+            grad = p.grad
+            if grad is not None:
+                grad_norms.append(torch.linalg.norm(grad.detach()).cpu().numpy())
+            else:
+                grad_norms.append(-1.0)
+
+        #norms = [torch.linalg.norm(p.grad.detach()).cpu().numpy() for p in self.parameters()]
+        torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
         optimizer.step()
-        torch.nn.utils.clip_grad_norm(self.parameters(), 1.0)
         self._current_train_step += 1
         return losses
 
@@ -247,6 +266,20 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
     def calc_abstr_term_ground_truth(self, term_ground_truth: torch.Tensor):
         # terminal flag can only be 0 or 1, so mean value with automatic padding should be used
         return bin_every_k_steps(term_ground_truth, self.abstract_step_size, padding_val=None).max(dim=2).values
+
+    def _calc_beta_schedule(self,
+                            t: int,
+                            max_beta: float):
+        """
+        Calculates truncated sawtooth beta value like this:
+            ___    ___    ___
+          /   |  /   |  /   |
+        /     |/     |/     | ...
+        """
+        rise = 500
+        stay = 500
+        beta = min(t % (rise + stay) * max_beta / rise, max_beta)
+        return beta
 
     def eval_step(self,
                   o_ground_truth: torch.Tensor,
@@ -264,7 +297,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         #pred_post = self(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, abstr_r_ground_truth,
         #                 abstr_term_ground_truth, prim_steps, abstr_steps)
 
-        beta = 1  # min((self._current_train_step / self.n_warmup_schedule), 1)
+        beta = self._calc_beta_schedule(self._current_train_step, self.beta_kl_prim)
 
         # primitive model loss
         loss_mixed = self.calc_loss(pred_mixed, o_ground_truth, r_ground_truth, term_ground_truth, abstr_r_ground_truth,
@@ -282,6 +315,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
         #loss_mixed['total'] += loss_post['total'] + prim_consistency + abstr_consistency
 
+        loss_mixed['beta'] = torch.tensor(beta)
         return loss_mixed
         #return loss_post
 
@@ -452,8 +486,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                                           + 1, device=self.device)
 
             use_posterior = t < n_posterior_steps
-            if use_posterior and self.training:
-                use_posterior = torch.rand(()) < 0.2
+            #if use_posterior and self.training:
+            #    use_posterior = torch.rand(()) < 0.2
             #if not use_posterior and t < n_groundtruth_available and self.training:
             #    use_posterior = True
             #    use_posterior = torch.rand(()) < 0.5
@@ -508,8 +542,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                                           + 1, device=self.device)
 
             use_posterior = t < n_posterior_steps
-            if use_posterior and self.training:
-                use_posterior = torch.rand(()) < 0.2
+            #if use_posterior and self.training:
+            #    use_posterior = torch.rand(()) < 0.2
             #if not use_posterior and t < n_groundtruth_available and self.training:
             #    use_posterior = True
             #    use_posterior = torch.rand(()) < 0.5
