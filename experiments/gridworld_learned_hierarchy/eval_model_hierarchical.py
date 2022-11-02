@@ -50,9 +50,7 @@ if __name__ == '__main__':
     else:
         logger = NotLogger()
 
-    planning_cfg['n_abstract_steps'] = ceil(50 / mdl.abstract_step_size) - planning_cfg['n_warmup_abstr']
-
-    logger.log(planning_cfg, Scope.HYPERPARAMETERS() / 'plan')
+    logger.log(planning_cfg, Scope.HYPERPARAMETERS() / 'plan/hierarchical')
 
     descriptions, canonical_abstr_a = primitive_action_maps(env, mdl)
 
@@ -77,15 +75,15 @@ if __name__ == '__main__':
         trajectory_history = init_prim_s(mdl, trajectory_history)
         trajectory_history = init_abstr_s(mdl, trajectory_history, planner_prim, planning_cfg['n_warmup_abstr'],
                                           planning_cfg['n_rollouts'], allow_prim_imagination=True)
-        trajectory_history = plan_abstract(mdl, trajectory_history, planner_abstr, planning_cfg['n_abstract_steps'],
+        trajectory_history = plan_abstract(mdl, trajectory_history, planner_abstr, planning_cfg['n_plan_steps_abstr'],
                                            planning_cfg['n_rollouts'])
 
         plan_descr = infer_primitive_actions(trajectory_history, descriptions, canonical_abstr_a)
         logger.log({'most_prob_prim_a': plan_descr}, Scope.TEST(), i_ep)
 
         current_section_lengths = []
-        for i_sec in range(planning_cfg['n_abstract_steps']):
-            trajectory_history, sec_len = plan_section_flexible(mdl, trajectory_history, planner_prim, i_sec,
+        for i_sec in range(planning_cfg['n_plan_steps_abstr']):
+            trajectory_history, sec_len = plan_section(mdl, trajectory_history, planner_prim, i_sec,
                                                        planning_cfg['n_rollouts'])
             current_section_lengths.append(sec_len)
         section_lengths.append(current_section_lengths)

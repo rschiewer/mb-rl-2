@@ -65,7 +65,7 @@ if __name__ == '__main__':
         trajectory_history = init_prim_s(mdl, trajectory_history)
         rnn_state = unpack_rnn_state(trajectory_history['prim_rnn_state'][:, -1])
         z = trajectory_history['prim_z'][:, -1]
-        a, i_win = plan_prim_free(mdl, planner_prim, rnn_state, z, env.time_limit - planning_cfg['n_warmup_prim'],
+        a, i_win = plan_prim_free(mdl, planner_prim, rnn_state, z, planning_cfg['n_plan_steps_prim'],
                                   planning_cfg['n_rollouts'])
 
         action_iter = iter(a.detach().cpu().numpy())
