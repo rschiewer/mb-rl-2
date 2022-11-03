@@ -19,6 +19,7 @@ class NeptuneLogger(Logger):
                  run_handler: Run = None,
                  run_id: str = None,
                  api_token: str = None):
+        super(NeptuneLogger, self).__init__()
         self._project = project
         self._run = run_handler
         self._token = api_token
