@@ -24,6 +24,7 @@ from mdm.logging.not_logger import NotLogger
 from mdm.logging.logger import Scope
 from mdm.training.data_loader import ConcurrentDataLoader
 
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-log', default=False, action='store_true')
@@ -73,6 +74,8 @@ if __name__ == '__main__':
         optimizer = torch.optim.Adam(model.parameters(), **cfg['optim'])
     elif optim_type == 'adamW':
         optimizer = torch.optim.AdamW(model.parameters(), **cfg['optim'])
+    elif optim_type == 'sgd':
+        optimizer = torch.optim.SGD(model.parameters(), **cfg['optim'])
     else:
         raise ValueError(f'Unknown optimizer type: {optim_type}')
 
@@ -110,6 +113,51 @@ if __name__ == '__main__':
                                                                            pad_last_reward=pad)
         s, a, r, terminal = prepare_data(s, a, r, terminal, env)
         return s, a, r, terminal
+
+    if True:
+        def log_fn_prim(m, grad_input, grad_output):
+            if model._current_train_step % 50 != 0:
+                return
+            if isinstance(m, torch.nn.Sequential):
+                mod_name = next(m.named_children())[0]
+                mod_name = mod_name[:mod_name.rindex('_')]
+            else:
+                mod_name = m.__class__.__name__
+            scope = Scope.PARAMETERS() / 'gradients' / 'prim_mdl' / mod_name
+            if grad_input is None or grad_input[0] is None:
+                grad_input_norm = -1,
+            else:
+                grad_input_norm = grad_input[0].norm()
+            if grad_output is None or grad_output[0] is None:
+                grad_output_norm = -1,
+            else:
+                grad_output_norm = grad_output[0].norm()
+            logger.log({'grad_in_norm': grad_input_norm, 'grad_out_norm': grad_output_norm}, scope)
+
+        def log_fn_abstr(m, grad_input, grad_output):
+            if model._current_train_step % 10 != 0:
+                return
+            if isinstance(m, torch.nn.Sequential):
+                mod_name = next(m.named_children())[0]
+                mod_name = mod_name[:mod_name.rindex('_')]
+            else:
+                mod_name = m.__class__.__name__
+            scope = Scope.PARAMETERS() / 'gradients' / 'abstr_mdl' / mod_name
+            if grad_input is None or grad_input[0] is None:
+                grad_input_norm = -1,
+            else:
+                grad_input_norm = grad_input[0].norm()
+            if grad_output is None or grad_output[0] is None:
+                grad_output_norm = -1,
+            else:
+                grad_output_norm = grad_output[0].norm()
+            logger.log({'grad_in_norm': grad_input_norm, 'grad_out_norm': grad_output_norm}, scope)
+
+        for module in model.primitive_model.children():
+            module.register_full_backward_hook(log_fn_prim)
+
+        for module in model.abstract_model.children():
+            module.register_full_backward_hook(log_fn_abstr)
 
     #def get_batch_train(i_step):
     #    global train_mem
