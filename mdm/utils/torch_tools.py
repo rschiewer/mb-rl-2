@@ -1,6 +1,6 @@
 from typing import Tuple, Union, Iterable, List, Sequence, TypeVar
 from enum import Enum
-from collections import namedtuple
+from collections import namedtuple, OrderedDict
 from functools import reduce, wraps
 from math import ceil
 
@@ -309,7 +309,7 @@ def bin_every_k_steps(data: torch.Tensor,
     return binned
 
 
-def layers_with_activation(lws: Sequence[int], activation: str = 'relu', layer_norm: bool = False):
+def layers_with_activation(lws: Sequence[int], activation: str = 'relu', layer_norm: bool = False, name: str = None):
     if activation == 'relu':
         act_constr = torch.nn.ReLU
     elif activation == 'gelu':
@@ -330,7 +330,9 @@ def layers_with_activation(lws: Sequence[int], activation: str = 'relu', layer_n
         else:
             layers += [torch.nn.Linear(w_in, w_out), act_constr()]
     layers.append(torch.nn.Linear(lws[-2], lws[-1]))
-    #layers.pop(-1)  # remove last activation function for final linear layer
+
+    if name:
+        layers = OrderedDict([(f'{name}_{i}', l) for i, l in enumerate(layers)])
 
     return layers
 
@@ -458,4 +460,3 @@ def pack_rnn_state(rnn_state: RnnStateType):
         return torch.stack([rnn_state[0].transpose(0, 1), rnn_state[1].transpose(0, 1)], dim=-2)
     else:
         return torch.stack([rnn_state.transpose(0, 1)], dim=-2)
-
