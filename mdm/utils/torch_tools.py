@@ -205,26 +205,25 @@ class ContinuousBernoulliBlock(FeedforwardBlock):
 
 
 def build_categorical(params: torch.Tensor,
-                      temperature: float = 0.1,
                       params_are_probs: bool = False):
     if params_are_probs:
-        dist = torch.distributions.RelaxedOneHotCategorical(temperature, probs=params)
+        dist = torch.distributions.OneHotCategorical(probs=params)
     else:
-        dist = torch.distributions.RelaxedOneHotCategorical(temperature, logits=params)
+        dist = torch.distributions.OneHotCategorical(logits=params)
     return dist
 
 
 def sample_from_categorical(params: torch.Tensor,
-                            temperature: float = 0.1,
                             params_are_probs : bool = False,
                             gradient: bool = True):
     if params_are_probs:
-        dist = torch.distributions.RelaxedOneHotCategorical(temperature, probs=params)
+        dist = torch.distributions.OneHotCategorical(probs=params)
     else:
-        dist = torch.distributions.RelaxedOneHotCategorical(temperature, logits=params)
+        dist = torch.distributions.OneHotCategorical(logits=params)
 
     if gradient:
-        return dist.rsample()
+        probs = torch.nn.functional.softmax(dist.probs, dim=-1)
+        return dist.sample() + probs - probs.detach()
     else:
         return dist.sample()
 
@@ -268,9 +267,22 @@ def get_sigma(gaussian_params: torch.Tensor) -> torch.Tensor:
 
 
 def build_bernoulli(params: torch.Tensor) -> torch.distributions.ContinuousBernoulli:
-    torch.all(torch.logical_and(0 <= params, params <= 1))
-    dist = torch.distributions.ContinuousBernoulli(probs=params)
+    dist = torch.distributions.ContinuousBernoulli(logits=params)
     return dist
+
+
+def make_bernoulli_params(params: torch.Tensor) -> torch.Tensor:
+    #params = torch.nn.functional.sigmoid(params)
+    return params
+
+
+def sample_from_bernoulli(params: torch.Tensor,
+                          gradient: bool = True) -> torch.Tensor:
+    dist = build_bernoulli(params)
+    if gradient:
+        return dist.rsample()
+    else:
+        return dist.sample()
 
 
 def bin_every_k_steps(data: torch.Tensor,
