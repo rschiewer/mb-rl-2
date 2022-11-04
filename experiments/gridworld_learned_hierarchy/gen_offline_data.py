@@ -129,13 +129,13 @@ def remove_duplicates_mp(mem: TrajectoryMemory, n_proc: int = 10):
 
 
 if __name__ == '__main__':
-    map_version = 'v1'
+    map_version = 'v2'
     env = Gridworld.from_cleartext(here() / f'../../mdm/gridworld/8x8_{map_version}.mapdata')
     #env = FullyObservableGridworld(env)
     n_episodes_train = 100000
     perc_test = 0.1
     disjunct_train_test = False
-    expert_trajectories = 0.75
+    expert_trajectories = 0.80
 
     train_mem = TrajectoryMemory()
     if expert_trajectories > 0:
