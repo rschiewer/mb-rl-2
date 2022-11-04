@@ -192,6 +192,8 @@ def to_onehot(actions: Union[torch.Tensor, np.ndarray],
               n_classes: int) -> Union[torch.Tensor, np.ndarray]:
     if (actions % 1 != 0).any():
         raise ValueError('All elements in actions must be ints or castable to int without loss of precision')
+    if (actions > n_classes).any():
+        raise ValueError('Actions contains elements that are larger than n_classes!')
 
     actions = actions.squeeze(-1)
     if isinstance(actions, torch.Tensor):
