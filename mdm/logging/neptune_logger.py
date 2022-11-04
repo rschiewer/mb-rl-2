@@ -37,10 +37,6 @@ class NeptuneLogger(Logger):
         self._project = new_project
 
     @property
-    def run_id(self):
-        return self._run_id
-
-    @property
     def token(self):
         if self._token:
             return self._token

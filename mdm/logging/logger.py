@@ -73,6 +73,10 @@ class Logger(ABC):
     def __del__(self):
         self.stop_session()
 
+    @property
+    def run_id(self):
+        return self._run_id
+
     @abstractmethod
     def start_session(self):
         pass
