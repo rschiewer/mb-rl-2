@@ -337,6 +337,18 @@ def layers_with_activation(lws: Sequence[int], activation: str = 'relu', layer_n
     return layers
 
 
+def get_dist_params(d: torch.distributions.Distribution):
+    if isinstance(d, (torch.distributions.Normal, torch.distributions.Cauchy, torch.distributions.Gumbel,
+                      torch.distributions.Laplace, torch.distributions.LogNormal)):
+        return d.loc, d.scale
+    elif hasattr(d, 'logits'):
+        return (d.logits,)
+    elif hasattr(d, 'probs'):
+        return (d.probs,)
+    else:
+        raise RuntimeError(f'Can\'t extract parameters of the given distribution: {d}')
+
+
 def add_time_dim(*xs: torch.Tensor,
                  batch_first: bool = True):
     i_unsqueeze = 1 if batch_first else 0
