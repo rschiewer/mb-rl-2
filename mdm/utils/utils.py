@@ -1,7 +1,7 @@
 from enum import Enum, auto
 from inspect import stack
 from pathlib import Path
-from typing import Union, Dict, Tuple
+from typing import Union, Dict, Tuple, TypeVar, Sequence
 from itertools import product
 import sys
 import re
@@ -17,6 +17,9 @@ import pandas as pd
 
 from mdm.gridworld.gridworld import Gridworld, CellType
 from mdm.memory.trajectory_memory import flatten_and_unsqueeze, TrajectoryMemory
+
+
+SliceType = TypeVar("SliceType", bound=Sequence)
 
 
 class DistributionType(Enum):
@@ -77,14 +80,6 @@ def np_one_hot(x: np.array,
                n_categories: int) -> np.ndarray:
     if not np.issubdtype(x.dtype, np.integer):
         raise ValueError('Only integer arrays can be converted to one-hot encoding')
-
-    #x = np.squeeze(x, axis=-1)  # remove possible redundant 1-dim data dimension
-    #x = np.expand_dims(x, -1)
-    #x_onehot = np.zeros((*x.shape, n_categories))
-    #x = x[..., np.newaxis]  # make sure x_onehot and x have same number of dimensions
-    #np.put_along_axis(x_onehot, x, 1, axis=-1)  # use x as index array for x_onehot and put 1 at respective indices
-
-    #return x_onehot
 
     # this solution works with masked arrays as well
     x = np.expand_dims(x, -1)
@@ -188,36 +183,45 @@ def normalize_obs(obs: Union[torch.Tensor, np.ndarray],
     return obs / denom
 
 
-def to_onehot(actions: Union[torch.Tensor, np.ndarray],
+def to_onehot(x: Union[torch.Tensor, np.ndarray],
               n_classes: int) -> Union[torch.Tensor, np.ndarray]:
-    if (actions % 1 != 0).any():
+    if (x % 1 != 0).any():
         raise ValueError('All elements in actions must be ints or castable to int without loss of precision')
-    if (actions > n_classes).any():
+    if (x > n_classes).any():
         raise ValueError('Actions contains elements that are larger than n_classes!')
 
-    actions = actions.squeeze(-1)
-    if isinstance(actions, torch.Tensor):
-        if actions.ndim == 1:
-            actions = actions.unsqueeze(-1)
-        actions = actions.to(dtype=torch.int64)
-        actions = torch.nn.functional.one_hot(actions, num_classes=n_classes)
-        actions = actions.to(device=actions.device, dtype=torch.float32)
-    else:
-        actions = actions.astype(np.int64)
-        actions = np_one_hot(actions, n_classes)
+    # remove redundant last dimension if present
+    if x.shape[-1] == 1:
+        x = x.squeeze(-1)
 
-    return actions
+    if isinstance(x, torch.Tensor):
+        if x.ndim <= 1:
+            x = x.unsqueeze(-1)
+        x = x.to(dtype=torch.int64)
+        x = torch.nn.functional.one_hot(x, num_classes=n_classes)
+        x = x.to(device=x.device, dtype=torch.float32)
+    else:
+        x = x.astype(np.int64)
+        x = np_one_hot(x, n_classes)
+
+    return x
 
 
 def prepare_data(s: Union[np.ndarray, torch.Tensor],
                  a: Union[np.ndarray, torch.Tensor],
                  r: Union[np.ndarray, torch.Tensor],
                  terminal: Union[np.ndarray, torch.Tensor],
-                 env: gym.Env) -> Tuple[Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
-                                        Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray]]:
+                 env: Gridworld) -> Tuple[Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
+                                          Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray]]:
     s, a, r, terminal = flatten_and_unsqueeze(s, a, r, terminal)
-    s = normalize_obs(s, env)
+    s = to_onehot(s, max(env.grid_w, env.grid_h))
+    #s = normalize_obs(s, env)
     a = to_onehot(a, env.action_space.n)  # don't care about the action being [1, 0, ... ] if it's always this way
+    # swap batch and time axis
+    s = s.swapaxes(0, 1)
+    a = a.swapaxes(0, 1)
+    r = r.swapaxes(0, 1)
+    terminal = terminal.swapaxes(0, 1)
     return s, a, r, terminal
 
 

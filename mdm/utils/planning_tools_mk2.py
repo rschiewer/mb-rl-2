@@ -1,4 +1,4 @@
-from typing import Union, Tuple, Sequence, Dict
+from typing import Union, Tuple, Sequence, Dict, TypeVar
 from itertools import product
 
 import gym
@@ -8,8 +8,9 @@ import numpy as np
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.models.building_blocks import RnnStateType
 from mdm.planning.cem_planner import CrossentropyPlanner, TensorData
-from mdm.utils.utils import normalize_obs, to_onehot, prepare_data, flatten_and_unsqueeze, sensitivity_analysis
-from mdm.utils.torch_tools import add_time_dim, build_gaussian, bin_every_k_steps, pack_rnn_state, unpack_rnn_state
+from mdm.utils.utils import SliceType, to_onehot, prepare_data, flatten_and_unsqueeze, sensitivity_analysis
+from mdm.utils.torch_tools import (extract_sub_distribution, bin_every_k_steps, pack_rnn_state, unpack_rnn_state,
+                                   TensorIndex)
 
 
 def update_history(history: Dict[str, torch.Tensor],
@@ -17,10 +18,31 @@ def update_history(history: Dict[str, torch.Tensor],
     for k, v in new_data.items():
         if len(v) > 0:
             if len(history[k]) > 0:
-                history[k] = torch.concat([history[k], v], dim=1)
+                history[k] += v
             else:
                 history[k] = v
     return history
+
+
+def select_batch_items(mem: Dict[str, Union[torch.Tensor, torch.distributions.Distribution]],
+                       i: TensorIndex,
+                       keepdim: bool = False):
+    if keepdim and type(i) is int:
+        i = slice(i, i+1)
+
+    ret = {}
+    for name, val in mem.items():
+        if len(val) == 0 or val[0] is None:
+            ret[name] = []
+        elif isinstance(val[0], torch.Tensor):
+            ret[name] = [timestep[i] for timestep in val]
+        elif isinstance(val[0], torch.distributions.Distribution):
+            ret[name] = [extract_sub_distribution(timestep, i, keepdim=keepdim) for timestep in val]
+        elif 'rnn_state' in name:
+            ret[name] = [unpack_rnn_state(pack_rnn_state(timestep)[i]) for timestep in val]
+        else:
+            raise ValueError(f'Unknown memory content for key {name}: {val[0]}')
+    return ret
 
 
 def plan_prim_free(model: MultiscaleDynamicsModelMK2,
@@ -33,18 +55,19 @@ def plan_prim_free(model: MultiscaleDynamicsModelMK2,
     z_start = prim_z.repeat(n_rollouts, 1)
 
     def _rollout_fn(_a: torch.Tensor):
-        _a = to_onehot(_a, n_classes=model.d_action)
-        _mem, _prim_final = model.rollout_primitive(a=_a, z=z_start, rnn_state=rnn_state_start, sample=False)
-        _mem = model.pack_mem(_mem)
+        _a = to_onehot(_a, n_classes=model.primitive_model.d_action)
+        _a = _a.swapaxes(0, 1)
+        _mem, _prim_final = model.rollout_primitive(a=_a, z=z_start, rnn_state=rnn_state_start, sample=True)
 
-        _criterion = _mem['prim_r'].squeeze(-1)
-        _discount = _mem['prim_term'].squeeze(-1)
+        _criterion = torch.stack(_mem['prim_r'], dim=1).squeeze(-1)
+        _discount = torch.stack(_mem['prim_term'], dim=1).squeeze(-1)
         return _criterion, _discount, _mem
 
     a, a_dist, i_win, R_win, data = planner_prim.plan(rollout_fn=_rollout_fn, n_rollouts=n_rollouts,
                                                       n_plan_steps=n_plan_steps)
 
-    data = {k: v[i_win[0], None] if len(v) > 0 else v for k, v in data.items()}
+    # select winner per per memory element per timestep
+    data = select_batch_items(data, i_win[0], keepdim=True)
     return a[i_win[0]], data
 
 
@@ -73,8 +96,8 @@ def plan_prim_chunk(model: MultiscaleDynamicsModelMK2,
     for n_steps in n_plan_steps:
         def _rollout_fn(_a: torch.Tensor):
             _a = to_onehot(_a, n_classes=model.d_action)
+            _a = _a.swapaxes(0, 1)
             _mem, _prim_final = model.rollout_primitive(a=_a, z=z_start, rnn_state=rnn_state_start, sample=False)
-            _mem = model.pack_mem(_mem)
 
             _abstr_r_rollout = model.calc_abstr_r_ground_truth(_mem['prim_r'])[:, -1]
             _abstr_term_rollout = model.calc_abstr_term_ground_truth(_mem['prim_term'])[:, -1]
@@ -91,7 +114,7 @@ def plan_prim_chunk(model: MultiscaleDynamicsModelMK2,
             data_best = data
             i_win_best = i_win
 
-    data_best = {k: v[i_win_best[0], None] if len(v) > 0 else v for k, v in data_best.items()}
+    data_best = select_batch_items(data_best, i_win_best[0], keepdim=True)
     return a_best[i_win_best[0]], data_best
 
 
@@ -146,15 +169,21 @@ def collect_groundtruth_data(model: MultiscaleDynamicsModelMK2,
         if term:
             raise RuntimeError('Environment terminated during warmup')
 
-    # prepare groundtruth data
+    # batch and convert groundtruth data
     o = torch.from_numpy(np.stack(groundtruth_data['o']))
     a = torch.tensor(groundtruth_data['a'])
     r = torch.tensor(groundtruth_data['r'])
     term = torch.tensor(groundtruth_data['term'])
-
     o, a, r, term = o.to(model.device), a.to(model.device), r.to(model.device), term.to(model.device)
     o, a, r, term = o.unsqueeze(0), a.unsqueeze(0), r.unsqueeze(0), term.unsqueeze(0)  # need batch dim for preparation
     o, a, r, term = prepare_data(o, a, r, term, env)
+
+    # make time first dimension and use lists instead of tensor objects to match new convention
+    # this is ugly but works
+    o = list(o.unbind(0))
+    a = list(a.unbind(0))
+    r = list(r.unbind(0))
+    term = list(term.unbind(0))
 
     history['prim_o'] = o
     history['prim_a'] = a
@@ -166,14 +195,14 @@ def collect_groundtruth_data(model: MultiscaleDynamicsModelMK2,
 
 def init_prim_s(model: MultiscaleDynamicsModelMK2,
                 history: Dict[str, torch.Tensor]):
-    o_start_batch = history['prim_o']
-    a_start_batch = history['prim_a']
-    r_start_batch = history['prim_r']
-    term_start_batch = history['prim_term']
+    o_start_batch = torch.stack(history['prim_o'])
+    a_start_batch = torch.stack(history['prim_a'])
+    r_start_batch = torch.stack(history['prim_r'])
+    term_start_batch = torch.stack(history['prim_term'])
 
     mem, prim_current = model.rollout_primitive(a=a_start_batch, o=o_start_batch, r=r_start_batch,
                                                 term=term_start_batch, n_posterior_steps=-1, sample=False)
-    mem = model.pack_mem(mem)
+    #mem = model.pack_mem(mem)
 
     # remove the rollout data from mem that is already present as groundtruth data
     mem['prim_o'] = []

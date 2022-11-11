@@ -4,17 +4,14 @@ from functools import reduce
 from collections import namedtuple
 
 import torch
-from torch import device, dtype
+
+from mdm.utils.torch_tools import StatefulTrainingModule
 
 
-class DynamicsModel(torch.nn.Module, ABC):
+class DynamicsModel(StatefulTrainingModule, ABC):
 
     def __init__(self):
         super(DynamicsModel, self).__init__()
-
-    @abstractmethod
-    def prepare_for_training(self):
-        pass
 
     @abstractmethod
     def train_step(self,

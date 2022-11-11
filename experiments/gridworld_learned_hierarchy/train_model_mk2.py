@@ -11,7 +11,7 @@ from mdm.gridworld.gridworld import Gridworld, FullyObservableGridworld
 from mdm.utils.utils import here, load_yaml, prepare_data, fill_placeholders, discrete_stats, compute_returns, \
     DistributionType
 from mdm.utils.torch_tools import get_mu, get_sigma, bin_every_k_steps
-from mdm.models.building_blocks import RSSM, AbstractActionModel
+from mdm.models.building_blocks import RSSM, AbstractActionModel, OneHotDecoder, OneHotEncoder, GaussianDecoder, BinomialDecoder
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.training.dynamics_model_trainer import DynamicsModelTrainer
 from mdm.memory.trajectory_memory import TrajectoryMemory
@@ -32,38 +32,49 @@ if __name__ == '__main__':
 
     cfg = load_yaml(here() / 'model_cfg.yaml')
     planning_cfg = load_yaml(here() / 'planning_cfg.yaml')
-    env = Gridworld.from_cleartext(here() / cfg['env'])
-    #env = FullyObservableGridworld(env)
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
+    env = Gridworld.from_cleartext(here() / cfg['env'])
+    #env = FullyObservableGridworld(env)
+
     # infer missing config values
-    cfg['prim_mdl']['d_o'] = env.observation_space.shape[0]
     cfg['prim_mdl']['d_a'] = env.action_space.n
-    cfg['prim_mdl']['d_r'] = 1
-    cfg['prim_mdl']['d_ctx_high_level'] = 0
-    cfg['prim_mdl']['d_x_posterior'] = env.observation_space.shape[0] + 2  # observation, terminal flag and reward
-
-    #prim_d_cell = 2 if cfg['prim_mdl']['rnn_type'] == 'lstm' else 1
-    #cfg['abstr_mdl']['d_observation'] = cfg['prim_mdl']['d_state'] + cfg['prim_mdl']['d_hidden'] \
-    #                                    * cfg['prim_mdl']['n_hidden_layers'] * prim_d_cell
-    prim_mdl_key = cfg['mdm']['abstract_pred_target']
-    prim_mdl_key = prim_mdl_key[prim_mdl_key.index('_') + 1:]
-    prim_mdl_key = 'd_' + prim_mdl_key
-    cfg['abstr_mdl']['d_o'] = cfg['prim_mdl'][prim_mdl_key]
-
-    cfg['abstr_mdl']['d_ctx_high_level'] = 0
-    #cfg['abstr_mdl']['d_x_posterior'] = cfg['abstr_mdl']['d_observation'] + cfg['abstr_mdl']['d_reward'] + \
-    #                                    1 + cfg['prim_mdl']['d_hidden']
-    cfg['abstr_mdl']['d_x_posterior'] = cfg['abstr_mdl']['d_o'] + cfg['abstr_mdl']['d_r'] + 1
-
     cfg['abstr_act_mdl']['d_a'] = env.action_space.n
     cfg['abstr_act_mdl']['abstract_step_size'] = cfg['mdm']['abstract_step_size']
     cfg['abstr_act_mdl']['d_a_abstract'] = cfg['abstr_mdl']['d_a']
 
+    # calculate missing model parameter dimensions
+    d_prim_s = cfg['prim_mdl']['d_h'] + cfg['prim_mdl']['d_z']
+    d_abstr_s = cfg['abstr_mdl']['d_h'] + cfg['abstr_mdl']['d_z']
+
+    o_shape = (*env.observation_space.shape, max(env.grid_h, env.grid_w))
+    abstr_target = cfg['mdm']['abstract_pred_target']
+    if abstr_target == 'prim_o':
+        abstr_o_shape = o_shape
+    elif abstr_target == 'prim_h':
+        abstr_o_shape = cfg['prim_mdl']['d_h']
+    elif abstr_target == 'prim_z':
+        abstr_o_shape = cfg['prim_mdl']['d_z']
+    else:
+        raise ValueError(f'Unknown abstract o prediction target: {abstr_target}')
+
     # build model
-    prim_mdl = RSSM(**cfg['prim_mdl'])
-    abstr_mdl = RSSM(**cfg['abstr_mdl'])
+    prim_obs_enc = OneHotEncoder(s_x_orig=o_shape, **cfg['prim_o_enc'])
+    prim_obs_dec = OneHotDecoder(s_x_orig=o_shape, d_x_encoded=d_prim_s, **cfg['prim_o_dec'])
+    prim_r_dec = GaussianDecoder(s_x_orig=1, d_x_encoded=d_prim_s, **cfg['prim_r_dec'])
+    prim_term_dec = BinomialDecoder(s_x_orig=1, d_x_encoded=d_prim_s, **cfg['prim_term_dec'])
+    prim_mdl = RSSM(obs_encoder=prim_obs_enc, obs_decoder=prim_obs_dec, r_decoder=prim_r_dec,
+                    term_decoder=prim_term_dec, **cfg['prim_mdl'])
+
+    abstr_obs_enc = OneHotEncoder(s_x_orig=abstr_o_shape, **cfg['abstr_o_enc'])
+    abstr_obs_dec = OneHotDecoder(s_x_orig=abstr_o_shape, d_x_encoded=d_abstr_s, **cfg['abstr_o_dec'])
+    abstr_r_dec = GaussianDecoder(s_x_orig=1, d_x_encoded=d_abstr_s, **cfg['abstr_r_dec'])
+    abstr_term_dec = BinomialDecoder(s_x_orig=1, d_x_encoded=d_abstr_s, **cfg['abstr_term_dec'])
+    abstr_mdl = RSSM(obs_encoder=abstr_obs_enc, obs_decoder=abstr_obs_dec, r_decoder=abstr_r_dec,
+                     term_decoder=abstr_term_dec, **cfg['abstr_mdl'])
+
     abstr_act_mdl = AbstractActionModel(**cfg['abstr_act_mdl'])
+
     model = MultiscaleDynamicsModelMK2(primitive_model=prim_mdl, abstract_model=abstr_mdl,
                                        abstract_action_model=abstr_act_mdl, **cfg['mdm'])
     model = model.to('cuda')
@@ -79,42 +90,7 @@ if __name__ == '__main__':
     else:
         raise ValueError(f'Unknown optimizer type: {optim_type}')
 
-    # build data pipeline
-    #train_mem = TrajectoryMemory()
-    #random_driver = GymEpisodeDriver(env, lambda o, r, term, i_ep: env.action_space.sample())
-    #planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, d_dist=model.d_action,
-    #                                   device=model.device, **planning_cfg['pln_prim'])
-    #planner_abstr = CrossentropyPlanner(DistributionType.NORMAL, d_dist=model.d_abstract_action,
-    #                                    device=model.device, **planning_cfg['pln_abstr'])
-    #policy = PlanningPolicy(model=model, env=env, planner_prim=planner_prim, planner_abstr=planner_abstr,
-    #                        n_rollouts=2048, plan_horizon_prim=30, plan_horizon_abstr=20, replan_interval_prim=3,
-    #                        replan_interval_abstr=3, n_warmup_prim=3, n_warmup_abstr=1)
-    #planning_driver = GymEpisodeDriver(env, policy)
-
-    d_batch, pad = cfg['trainer']['d_batch'], cfg['trainer']['pad_last_terminal_flag']
-
-    train_mem = TrajectoryMemory.load(here() / cfg['train_samples'])
-    compute_returns(train_mem)
-    train_driver = OfflineRLDriver(train_mem, sampling_type=SamplingType.RANDOM)
-    test_mem = TrajectoryMemory.load(here() / cfg['test_samples'])
-    compute_returns(test_mem)
-    test_driver = OfflineRLDriver(test_mem, sampling_type=SamplingType.RANDOM)
-
-    if args.log:
-        logger = NeptuneLogger(neptune_cfg['PROJECT_NAME'], api_token=neptune_cfg['NEPTUNE_API_TOKEN'])
-        logger.start_session()
-        logger.log(cfg, Scope.HYPERPARAMETERS())
-    else:
-        logger = NotLogger()
-
-    def get_batch_train(i_step):
-        s, a, r, terminal, w = train_driver.interact(d_batch).to_np_arrays(dtype=np.float32,
-                                                                           pad_last_terminal_flag=pad,
-                                                                           pad_last_reward=pad)
-        s, a, r, terminal = prepare_data(s, a, r, terminal, env)
-        return s, a, r, terminal
-
-    if True:
+    if False:
         def log_fn_prim(m, grad_input, grad_output):
             if model._current_train_step % 50 != 0:
                 return
@@ -159,6 +135,42 @@ if __name__ == '__main__':
         for module in model.abstract_model.children():
             module.register_full_backward_hook(log_fn_abstr)
 
+    # build data pipeline
+    # train_mem = TrajectoryMemory()
+    # random_driver = GymEpisodeDriver(env, lambda o, r, term, i_ep: env.action_space.sample())
+    # planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, d_dist=model.d_action,
+    #                                   device=model.device, **planning_cfg['pln_prim'])
+    # planner_abstr = CrossentropyPlanner(DistributionType.NORMAL, d_dist=model.d_abstract_action,
+    #                                    device=model.device, **planning_cfg['pln_abstr'])
+    # policy = PlanningPolicy(model=model, env=env, planner_prim=planner_prim, planner_abstr=planner_abstr,
+    #                        n_rollouts=2048, plan_horizon_prim=30, plan_horizon_abstr=20, replan_interval_prim=3,
+    #                        replan_interval_abstr=3, n_warmup_prim=3, n_warmup_abstr=1)
+    # planning_driver = GymEpisodeDriver(env, policy)
+
+    train_mem = TrajectoryMemory.load(here() / cfg['train_samples'])
+    compute_returns(train_mem)
+    train_driver = OfflineRLDriver(train_mem, sampling_type=SamplingType.RANDOM)
+    test_mem = TrajectoryMemory.load(here() / cfg['test_samples'])
+    compute_returns(test_mem)
+    test_driver = OfflineRLDriver(test_mem, sampling_type=SamplingType.RANDOM)
+
+    if args.log:
+        logger = NeptuneLogger(neptune_cfg['PROJECT_NAME'], api_token=neptune_cfg['NEPTUNE_API_TOKEN'])
+        logger.start_session()
+        logger.log(cfg, Scope.HYPERPARAMETERS())
+    else:
+        logger = NotLogger()
+
+    d_batch, pad = cfg['trainer']['d_batch'], cfg['trainer']['pad_last_terminal_flag']
+
+    def get_batch_train(i_step):
+        s, a, r, terminal, w = train_driver.interact(d_batch).to_np_arrays(dtype=np.float32,
+                                                                           pad_last_terminal_flag=pad,
+                                                                           pad_last_reward=pad)
+        s, a, r, terminal = prepare_data(s, a, r, terminal, env)
+        return s, a, r, terminal
+
+
     #def get_batch_train(i_step):
     #    global train_mem
     #    if i_step < 10:
@@ -184,11 +196,6 @@ if __name__ == '__main__':
         s, a, r, terminal = prepare_data(s, a, r, terminal, env)
         return s, a, r, terminal
 
-
-    #loader_train = ConcurrentDataLoader(get_batch_train, queue_len=10)
-    #loader_test = ConcurrentDataLoader(get_batch_test, queue_len=10)
-    #get_batch_train = loader_train.get_batch
-    #get_batch_test = loader_test.get_batch
     model_path = f'{cfg["final_model_path"]}_{cfg["mdm"]["abstract_step_size"]}.ptmdl'
 
     # train
@@ -214,13 +221,13 @@ if __name__ == '__main__':
         model.eval()
         pred = model(o, a, r, term, abstr_r, abstr_term, cfg['eval']['n_warmup_prim'], cfg['eval']['n_warmup_abstr'])
         model.train()
-        for key in ('prim_o', 'prim_r', 'abstr_o', 'abstr_r'):
-            full_key = key + '_dist'
-            mu = get_mu(pred[full_key]).mean()
-            sigma = get_sigma(pred[full_key]).mean()
-            logger.log({full_key + '_mean': mu, full_key + '_sigma': sigma},
-                       Scope.PARAMETERS() / 'model_stats', i_step)
-
+        #for key in ('prim_o', 'prim_r', 'abstr_o', 'abstr_r'):
+        #    full_key = key + '_dist'
+        #    mu = get_mu(pred[full_key]).mean()
+        #    sigma = get_sigma(pred[full_key]).mean()
+        #    logger.log({full_key + '_mean': mu, full_key + '_sigma': sigma},
+        #               Scope.PARAMETERS() / 'model_stats', i_step)
+        #
         losses = model.calc_loss(pred, o, r, term, abstr_r, abstr_term, mask, 1)
         losses = {k: v.detach().cpu().numpy() for k, v in losses.items()}
         logger.log(losses, Scope.TEST() / 'with_warmup', i_step)

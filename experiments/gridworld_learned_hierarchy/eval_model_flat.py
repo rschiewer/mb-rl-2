@@ -57,14 +57,14 @@ if __name__ == '__main__':
     action_stats = np.zeros(env.action_space.n)
     n_steps = []
     for i_ep in tqdm(range(planning_cfg['n_episodes'])):
-        planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, d_dist=mdl.d_action, device=mdl.device,
-                                           **planning_cfg['pln_prim'])
+        planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, d_dist=mdl.primitive_model.d_action,
+                                           device=mdl.device, **planning_cfg['pln_prim'])
 
         trajectory_history = mdl.gen_mem()
         trajectory_history = collect_groundtruth_data(mdl, trajectory_history, env, planning_cfg['n_warmup_prim'])
         trajectory_history = init_prim_s(mdl, trajectory_history)
-        rnn_state = unpack_rnn_state(trajectory_history['prim_rnn_state'][:, -1])
-        z = trajectory_history['prim_z'][:, -1]
+        rnn_state = trajectory_history['prim_rnn_state'][-1]
+        z = trajectory_history['prim_z'][-1]
         a, i_win = plan_prim_free(mdl, planner_prim, rnn_state, z, planning_cfg['n_plan_steps_prim'],
                                   planning_cfg['n_rollouts'])
 
