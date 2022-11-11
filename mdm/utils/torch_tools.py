@@ -7,11 +7,12 @@ from math import ceil
 import torch
 import torch.jit as jit
 
+from mdm.utils.utils import SliceType
+
 
 RnnStateType = TypeVar('RnnStateType', torch.Tensor, Tuple[torch.Tensor, torch.Tensor])
-
-
 TensorData = TypeVar('TensorData', torch.Tensor, Tuple[torch.Tensor, ...], List[torch.Tensor])
+TensorIndex = TypeVar('TensorIndex', int, SliceType, torch.Tensor)
 _Placeholder = namedtuple('placeholder', 'device')
 
 
@@ -88,6 +89,43 @@ class FuzzyDeviceMixin(torch.nn.Module):
         device = device if device else 0
         self._device = torch.device(f'cuda:{device}')
         return super().cuda(device)
+
+
+class StatefulTrainingModule(torch.nn.Module):
+
+    def __init__(self):
+        super(StatefulTrainingModule, self).__init__()
+        self._current_train_step = None
+        self.register_forward_hook(self._incr_counter)
+
+    def _incr_counter(self, *args):
+        if self.training:
+            self._current_train_step += 1
+
+    def prepare_for_training(self,
+                             _processed: List[torch.nn.Module] = None):
+        if _processed is None:
+            _processed = []
+
+        # call all modules (including myself)
+        for m in self.modules():
+            if m in _processed:  # in case of recursion, which should not happen in normal scenarios
+                continue
+
+            # basic preparation for all stateful modules
+            m._current_train_step = 0
+
+            # check if there are custom preparations to be made
+            prepare_fn = getattr(m, '_prepare_for_training', None)
+            if callable(prepare_fn):
+                prepare_fn()
+
+            # remember that we're done with preparing this module
+            _processed.append(m)
+
+            # call prepare on children modules of m recursively, which should not be necessary
+            if isinstance(m, StatefulTrainingModule):
+                m.prepare_for_training(_processed)
 
 
 class RecurrentBlock(torch.nn.Module, DeviceMixin):
@@ -288,18 +326,16 @@ def sample_from_bernoulli(params: torch.Tensor,
 def bin_every_k_steps(data: torch.Tensor,
                       k: int,
                       padding_val: Union[int, float, None] = None):
-    d_batch, d_time, d_data = data.shape
+    d_time, d_batch, d_data = data.shape
     n_macro_steps = ceil(d_time / k)
     d_padding = n_macro_steps * k - d_time
 
     if padding_val is None:
-        last_valid = (n_macro_steps - 1) * k
-        padding_val = torch.mean(data[:, last_valid:], dim=1, keepdim=True, dtype=data.dtype)
-        padding = torch.repeat_interleave(padding_val, d_padding, dim=1)
+        padding = torch.repeat_interleave(data[-1, None], d_padding, dim=0)
     else:
-        padding = torch.full((d_batch, d_padding, d_data), fill_value=padding_val, dtype=data.dtype, device=data.device)
-    data_padded = torch.concat([data, padding], dim=1)
-    binned = data_padded.reshape(d_batch, (d_time + d_padding) // k, k, d_data)
+        padding = torch.full((d_padding, d_batch, d_data), fill_value=padding_val, dtype=data.dtype, device=data.device)
+    data_padded = torch.concat([data, padding], dim=0)
+    binned = data_padded.reshape((d_time + d_padding) // k, k, d_batch, d_data)
 
     #bins = []
     #for i in range(0, d_time, k):
@@ -350,7 +386,7 @@ def get_dist_params(d: torch.distributions.Distribution):
 
 
 def add_time_dim(*xs: torch.Tensor,
-                 batch_first: bool = True):
+                 batch_first: bool = False):
     i_unsqueeze = 1 if batch_first else 0
     unsqueezed = [x.unsqueeze(i_unsqueeze) if x.ndim > 1 else x.unsqueeze(0) for x in xs]
     if len(unsqueezed) == 1:
@@ -359,7 +395,7 @@ def add_time_dim(*xs: torch.Tensor,
 
 
 def remove_time_dim(*xs: torch.Tensor,
-                    batch_first: bool = True):
+                    batch_first: bool = False):
     i_unsqueeze = 1 if batch_first else 0
     squeezed = [x.squeeze(i_unsqueeze) for x in xs]
     if len(squeezed) == 1:
@@ -374,26 +410,25 @@ def add_data_dim(*xs: torch.Tensor):
     return unsqueezed
 
 
-def make_time_constant(*xs: torch.Tensor,
-                       n_timesteps: int,
-                       batch_first: bool = True):
-    if batch_first:
-        consts = [x.unsqueeze(1).expand(x.shape[0], n_timesteps, *x.shape[1:]) for x in xs]
-    else:
-        consts = [x.unsqueeze(0).expand(n_timesteps, *x.shape) for x in xs]
-    if len(consts) == 1:
-        consts = consts[0]
-    return consts
-
-
-def extract_sub_distribution(d: torch.distributions.Distribution, *idx: int):
+def extract_sub_distribution(d: torch.distributions.Distribution,
+                             *idx: TensorIndex,
+                             keepdim: bool = False):
     if len(d.batch_shape) < len(idx):
         raise ValueError(f'Batch size of distribution should be smaller or equal to number of specified indices ',
                          f'but found {len(d.batch_shape)} and {len(idx)}')
+    if keepdim:  # make single int indices to slices of length 1 to prevent loss of dimension
+        idx = [slice(i, i+1) if type(i) is int else i for i in idx]
     if isinstance(d, torch.distributions.Normal):
-        return torch.distributions.Normal(loc=d.loc[idx], scale=d.scale[idx])
+        d_extracted = torch.distributions.Normal(loc=d.loc[idx], scale=d.scale[idx])
+    elif isinstance(d, torch.distributions.OneHotCategorical):
+        d_extracted = torch.distributions.OneHotCategorical(logits=d.logits[idx])
+    elif isinstance(d, torch.distributions.RelaxedOneHotCategorical):
+        d_extracted = torch.distributions.RelaxedOneHotCategorical(d.temperature, logits=d.logits[idx])
+    elif isinstance(d, torch.distributions.ContinuousBernoulli):
+        d_extracted = torch.distributions.ContinuousBernoulli(logits=d.logits[idx])
     else:
         raise ValueError(f'Distribution class not supported: {type(d)}')
+    return d_extracted
 
 
 def reconstruction_loss(y_hat: torch.Tensor, y_true: torch.Tensor):
