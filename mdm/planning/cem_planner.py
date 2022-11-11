@@ -140,8 +140,8 @@ class CrossentropyPlanner:
         sigma_ml = torch.tile(sigma_ml, dims=(n_batch, 1, 1))
 
         # add noise to diversify half of distributions
-        mu_ml[:n_batch//2] += (2 * torch.rand_like(mu_ml[:n_batch//2], device=self.device) - 1) * noise
-        sigma_ml[:n_batch//2] += (2 * torch.rand_like(sigma_ml[:n_batch//2], device=self.device) - 1) * noise
+        mu_ml[n_batch//2:] += (2 * torch.rand_like(mu_ml[n_batch//2:], device=self.device) - 1) * noise
+        sigma_ml[n_batch//2:] += (2 * torch.rand_like(sigma_ml[n_batch//2:], device=self.device) - 1) * noise
         sigma_ml = torch.where(sigma_ml <= lower_bound, lower_bound, sigma_ml)  # don't accidentally make sigma < 0
 
         mu_old, sigma_old = torch.unbind(dist_params, dim=0)
@@ -176,8 +176,8 @@ class CrossentropyPlanner:
         dist_params_new = torch.mean(actions_onehot.float(), dim=(0))  # yields one list of distributions, one per time step
         dist_params_new = torch.tile(dist_params_new, dims=(n_batch, 1, 1))  # this copies the list to all batch indices
         # add noise to diversify
-        dist_params_new[:n_batch//2] += (2 * torch.rand_like(dist_params_new[:n_batch//2], device=self.device) - 1) * noise
-        dist_params_new[:n_batch//2] = torch.clamp(dist_params_new[:n_batch//2], torch.tensor(0.0, device=self.device), torch.tensor(1.0, device=self.device))
+        dist_params_new[n_batch//2:] += (2 * torch.rand_like(dist_params_new[n_batch//2:], device=self.device) - 1) * noise
+        dist_params_new[n_batch//2:] = torch.clamp(dist_params_new[n_batch//2:], torch.tensor(0.0, device=self.device), torch.tensor(1.0, device=self.device))
         dist_params_new /= dist_params_new.sum(dim=-1, keepdim=True)
         dist_params = (1 - self.alpha) * dist_params + self.alpha * dist_params_new
         return dist_params
