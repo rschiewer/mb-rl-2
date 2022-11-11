@@ -326,16 +326,17 @@ def sample_from_bernoulli(params: torch.Tensor,
 def bin_every_k_steps(data: torch.Tensor,
                       k: int,
                       padding_val: Union[int, float, None] = None):
-    d_time, d_batch, d_data = data.shape
+    d_time, d_batch = data.shape[:2]
+    d_data = data.shape[2:]
     n_macro_steps = ceil(d_time / k)
     d_padding = n_macro_steps * k - d_time
 
     if padding_val is None:
         padding = torch.repeat_interleave(data[-1, None], d_padding, dim=0)
     else:
-        padding = torch.full((d_padding, d_batch, d_data), fill_value=padding_val, dtype=data.dtype, device=data.device)
+        padding = torch.full((d_padding, d_batch, *d_data), fill_value=padding_val, dtype=data.dtype, device=data.device)
     data_padded = torch.concat([data, padding], dim=0)
-    binned = data_padded.reshape((d_time + d_padding) // k, k, d_batch, d_data)
+    binned = data_padded.reshape((d_time + d_padding) // k, k, d_batch, *d_data)
 
     #bins = []
     #for i in range(0, d_time, k):
