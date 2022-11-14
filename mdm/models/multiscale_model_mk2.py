@@ -67,7 +67,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                 abstr_r: torch.Tensor,
                 abstr_term: torch.Tensor,
                 n_warmup_prim: int,
-                n_warmup_abstr: int):
+                n_warmup_abstr: int,
+                sample: bool = True):
         assert o.shape[1] == r.shape[1] == term.shape[1] == a.shape[1]
 
         mem = self.gen_mem()
@@ -90,7 +91,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                                                        r=r[i_start: i_end], term=term[i_start: i_end],
                                                        z=prim_current['z'], rnn_state=prim_current['rnn_state'],
                                                        n_posterior_steps=warmup_steps_prim_left,
-                                                       mem=mem, sample=True)
+                                                       mem=mem, sample=sample)
 
             # input to abstr act mdl needs to be always of same length, so take a_binned instead of a[i_start: i_end]
             abstr_a = self.abstract_action_model(a_binned[i_chunk].swapaxes(0, 1))
@@ -102,9 +103,9 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             prim_data = o[i_end - 1]
             mem['abstr_o_target'].append(prim_data)
             abstr_r_groundtruth = torch.stack(mem['prim_r'][i_start:i_end], dim=0)
-            abstr_r_groundtruth = self.calc_abstr_r_ground_truth(abstr_r_groundtruth)
+            abstr_r_groundtruth = self.calc_abstr_r_ground_truth(abstr_r_groundtruth).detach()
             abstr_term_groundtruth = torch.stack(mem['prim_term'][i_start:i_end], dim=0)
-            abstr_term_groundtruth = self.calc_abstr_term_ground_truth(abstr_term_groundtruth)
+            abstr_term_groundtruth = self.calc_abstr_term_ground_truth(abstr_term_groundtruth).detach()
 
             mem, abstr_current = self.rollout_abstract(a=add_time_dim(abstr_a), r=abstr_r_groundtruth,
                                                        term=abstr_term_groundtruth,
@@ -112,7 +113,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                                                        z=abstr_current['z'],
                                                        rnn_state=abstr_current['rnn_state'],
                                                        n_posterior_steps=warmup_steps_abstr_left,
-                                                       mem=mem, sample=True)
+                                                       mem=mem, sample=sample)
             #abstr_r_groundtruth = self.calc_abstr_r_ground_truth(abstr_r_groundtruth)
             #abstr_term_groundtruth = self.calc_abstr_term_ground_truth(abstr_term_groundtruth)
             #mem, abstr_current = self.rollout_abstract(a=add_time_dim(abstr_a), r=add_time_dim(abstr_r[:, i_chunk]),
@@ -268,7 +269,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
     def calc_abstr_r_ground_truth(self, r_ground_truth: torch.Tensor):
         # sum makes sense for rewards, use padding=0 to not affect sum for last element
-        return bin_every_k_steps(r_ground_truth, self.abstract_step_size, padding_val=None).sum(dim=1)
+        return bin_every_k_steps(r_ground_truth, self.abstract_step_size, padding_val=0).sum(dim=1)
 
     def calc_abstr_term_ground_truth(self, term_ground_truth: torch.Tensor):
         # terminal flag can only be 0 or 1, so mean value with automatic padding should be used
@@ -298,7 +299,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         abstr_term_ground_truth = self.calc_abstr_term_ground_truth(term_ground_truth)
 
         pred_mixed = self(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, abstr_r_ground_truth,
-                          abstr_term_ground_truth, self.n_warmup_prim, self.n_warmup_abstr)
+                          abstr_term_ground_truth, self.n_warmup_prim, self.n_warmup_abstr, sample=True)
         #pred_post = self(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, abstr_r_ground_truth,
         #                 abstr_term_ground_truth, prim_steps, abstr_steps)
 
