@@ -128,6 +128,19 @@ class StatefulTrainingModule(torch.nn.Module):
                 m.prepare_for_training(_processed)
 
 
+class ManagedStatefulTrainingModule(torch.nn.Module):
+
+    def __init__(self):
+        super(ManagedStatefulTrainingModule, self).__init__()
+        self._current_train_step = None
+
+    def prepare_for_training(self):
+        self._current_train_step = 0
+
+    def increase_train_step(self):
+        self._current_train_step += 1
+
+
 class RecurrentBlock(torch.nn.Module, DeviceMixin):
 
     def __init__(self,
