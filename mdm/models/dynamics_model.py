@@ -5,10 +5,8 @@ from collections import namedtuple
 
 import torch
 
-from mdm.utils.torch_tools import StatefulTrainingModule
 
-
-class DynamicsModel(StatefulTrainingModule, ABC):
+class DynamicsModel(torch.nn.Module, ABC):
 
     def __init__(self):
         super(DynamicsModel, self).__init__()

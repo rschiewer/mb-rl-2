@@ -7,7 +7,7 @@ import torch
 import numpy as np
 from mdm.utils.torch_tools import (layers_with_activation as lwa, add_time_dim, remove_time_dim, sample_from_gaussian,
                                    make_gaussian_params, get_dist_params, RnnStateType, sample_from_categorical,
-                                   StatefulTrainingModule)
+                                   ManagedStatefulTrainingModule)
 from mdm.utils.utils import DistributionType
 
 
@@ -421,7 +421,7 @@ class GaussianDecoder(OutputDecoder):
         return d, s
 
 
-class OneHotDecoder(OutputDecoder, StatefulTrainingModule):
+class OneHotDecoder(OutputDecoder, ManagedStatefulTrainingModule):
 
     def __init__(self,
                  s_x_orig: Union[int, Sequence[int]],
@@ -445,11 +445,13 @@ class OneHotDecoder(OutputDecoder, StatefulTrainingModule):
             self._temp_min = temperature_min
         self._temp_decr_steps = temperature_decrease_steps
         self._temp_decr_per_step = (self._temp - self._temp_min) / max(self._temp_decr_steps, 1)
-        self._current_train_step = None
 
     @property
     def temperature(self):
-        return max(self._temp - self._current_train_step * self._temp_decr_per_step, self._temp_min)
+        if self.training:
+            return max(self._temp - self._current_train_step * self._temp_decr_per_step, self._temp_min)
+        else:
+            return self._temp_min
 
     def forward(self,
                 x_enc: torch.Tensor,

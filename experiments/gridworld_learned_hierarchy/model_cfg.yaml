@@ -1,7 +1,7 @@
 ---
 env: "../../mdm/gridworld/8x8_v0.mapdata"
 neptune_cfg: "../neptune_settings.yaml"
-train_samples: "gridworld_v2_train.samples"#"gridworld_v0_good_trajectories.samples"
+train_samples: "gridworld_v0_train.samples"#"gridworld_v0_good_trajectories.samples"
 test_samples: "gridworld_v0_good_trajectories.samples"
 checkpoint_path: "checkpoints"
 final_model_path: "model"
@@ -10,9 +10,11 @@ final_model_path: "model"
 mdm:
   abstract_step_size: 2
   beta_kl_primitive: 1.0 #0.005
-  beta_reg_primitive: 0.01 #0.005
+  beta_reg_primitive: 1.0 #0.005
   beta_kl_abstract: 1.0 #0.005
-  beta_reg_abstract: 0.01 #0.001
+  beta_reg_abstract: 1.0 #0.001
+  beta_sched_stay: 1500
+  beta_sched_rise: 1500
   n_warmup_prim: -1
   n_warmup_abstr: -1
   detach_posteriors: False
@@ -44,18 +46,18 @@ prim_o_dec:
   lws: [64, 32]
   layer_norm: True
   activation: "relu"
-  temperature: 1.0
-  temperature_min: 0.01
-  temperature_decrease_steps: 10
+  temperature: 10.0
+  temperature_min: 0.1  # choose larger than 0.01!
+  temperature_decrease_steps: 5000
 
 prim_r_dec:
-  lws: [32]
+  lws: [64, 32]
   layer_norm: True
   activation: "relu"
-  epsilon: 0.01
+  epsilon: 0.0001
 
 prim_term_dec:
-  lws: [32]
+  lws: [64, 32]
   layer_norm: True
   activation: "relu"
 
@@ -84,16 +86,18 @@ abstr_o_dec:
   lws: [64, 32]
   layer_norm: True
   activation: "relu"
-  temperature: 1.0
+  temperature: 10.0
+  temperature_min: 0.1  # choose larger than 0.01!
+  temperature_decrease_steps: 5000
 
 abstr_r_dec:
-  lws: [32]
+  lws: [64, 32]
   layer_norm: True
   activation: "relu"
-  epsilon: 0.01
+  epsilon: 0.0001
 
 abstr_term_dec:
-  lws: [32]
+  lws: [64, 32]
   layer_norm: True
   activation: "relu"
 
@@ -104,11 +108,11 @@ abstr_act_mdl:
   distribution_type: "categorical"
 
 optim:
-  type: 'adam'  #'adamW'
-  lr: 0.001 #0.0002
+  type: 'adamW'  #'adamW'
+  lr: 0.002 #0.0002
 
 trainer:
-  n_train_steps: 100
+  n_train_steps: 15000
   eval_interval: 100
   d_batch: 2048
   pad_last_terminal_flag: False

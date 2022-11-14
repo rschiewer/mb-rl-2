@@ -23,6 +23,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                  beta_reg_abstract: float = 0.001,
                  beta_abstract_model: float = 1.0,
                  beta_abstract_action: float = 1.0,
+                 beta_sched_stay: int = 1000,
+                 beta_sched_rise: int = 1000,
                  n_warmup_prim: Union[int, Sequence[int]] = 1,
                  n_warmup_abstr: Union[int, Sequence[int]] = 1,
                  detach_posteriors: bool = False):
@@ -44,30 +46,18 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         self.beta_reg_abstr = beta_reg_abstract
         self.beta_abstract_model = beta_abstract_model
         self.beta_abstract_action = beta_abstract_action
+        self.beta_stay = beta_sched_stay
+        self.beta_rise = beta_sched_rise
         self.n_warmup_prim = n_warmup_prim
         self.n_warmup_abstr = n_warmup_abstr
         self.detach_posteriors = detach_posteriors
         self._current_train_step = None
 
-    """
-    def prepare_for_training(self,
-                             processed: List[torch.nn.Module] = None):
-        if processed is None:
-            processed = []
+    def prepare_for_training(self):
         self._current_train_step = 0
-
-        # call children modules
         for m in self.modules():
-            if m is self:
-                continue
-
-            prepare_fn = getattr(m, 'prepare_for_training', None)
-            if callable(prepare_fn):
-                print('!')
-            if callable(prepare_fn) and self not in processed:
-                processed.append(self)
-                m.prepare_for_training(processed)
-    """
+            if isinstance(m, ManagedStatefulTrainingModule):
+                m.prepare_for_training()
 
     def forward(self,
                 o: torch.Tensor,
@@ -111,9 +101,9 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             #prim_data = mem[self.abstr_pred_target][-1].detach()
             prim_data = o[i_end - 1]
             mem['abstr_o_target'].append(prim_data)
-            abstr_r_groundtruth = torch.stack(mem['prim_r'][i_start:i_end], dim=0).detach()
+            abstr_r_groundtruth = torch.stack(mem['prim_r'][i_start:i_end], dim=0)
             abstr_r_groundtruth = self.calc_abstr_r_ground_truth(abstr_r_groundtruth)
-            abstr_term_groundtruth = torch.stack(mem['prim_term'][i_start:i_end], dim=0).detach()
+            abstr_term_groundtruth = torch.stack(mem['prim_term'][i_start:i_end], dim=0)
             abstr_term_groundtruth = self.calc_abstr_term_ground_truth(abstr_term_groundtruth)
 
             mem, abstr_current = self.rollout_abstract(a=add_time_dim(abstr_a), r=abstr_r_groundtruth,
@@ -218,11 +208,11 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         # store things
         mem['abstr_z'].append(pred['z'])
         mem['abstr_z_prior'].append(pred['z_prior'])
-        #mem['abstr_z_post'].append(pred['z_post'])
-        if use_posterior:
-            mem['abstr_z_post'].append(pred['z_post'])
-        else:
-            mem['abstr_z_post'].append(pred['z_prior'])  # hack to make loss calculation easier
+        mem['abstr_z_post'].append(pred['z_post'])
+        #if use_posterior:
+        #    mem['abstr_z_post'].append(pred['z_post'])
+        #else:
+        #    mem['abstr_z_post'].append(pred['z_prior'])  # hack to make loss calculation easier
         mem['abstr_rnn_state'].append(pred['rnn_state'])
         mem['abstr_h'].append(pred['h'])
         mem['abstr_s'].append(pred['s'])
@@ -268,7 +258,12 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         losses['total'].backward()
         torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
         optimizer.step()
-        #self._current_train_step += 1
+
+        self._current_train_step += 1
+        for m in self.modules():
+            if isinstance(m, ManagedStatefulTrainingModule):
+                m.increase_train_step()
+
         return losses
 
     def calc_abstr_r_ground_truth(self, r_ground_truth: torch.Tensor):
@@ -279,8 +274,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         # terminal flag can only be 0 or 1, so mean value with automatic padding should be used
         return bin_every_k_steps(term_ground_truth, self.abstract_step_size, padding_val=None).max(dim=1).values
 
-    @staticmethod
-    def _calc_beta_schedule(t: int,
+    def _calc_beta_schedule(self,
+                            t: int,
                             max_beta: float):
         """
         Calculates truncated sawtooth beta value like this:
@@ -288,9 +283,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
           /   |  /   |  /   |
         /     |/     |/     | ...
         """
-        rise = 1000
-        stay = 1000
-        beta = min(t % (rise + stay) * max_beta / rise, max_beta)
+        beta = min(t % (self.beta_rise + self.beta_stay) * max_beta / self.beta_rise, max_beta)
         return beta
 
     def eval_step(self,
