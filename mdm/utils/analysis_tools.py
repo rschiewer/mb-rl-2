@@ -104,8 +104,6 @@ def gen_value_map_prim(env: Gridworld,
 
 
 def visualize_plan(trajectory_history: Dict[str, torch.Tensor], env: Gridworld, mdl: MultiscaleDynamicsModelMK2):
-    assert trajectory_history['abstr_o'].shape[0] == 1, 'Batch size of trajectory history should be 1'
-
     map_mean, map_std = gen_value_map_prim(env, mdl)
     map_flat = map_mean.reshape((mdl.primitive_model.d_z, -1))
     map_flat = np.transpose(map_flat, (1, 0))
@@ -125,7 +123,7 @@ def visualize_plan(trajectory_history: Dict[str, torch.Tensor], env: Gridworld, 
 
 def primitive_action_maps(env: Gridworld, model: MultiscaleDynamicsModelMK2):
     device = next(model.parameters()).device
-    n_actions = model.d_action
+    n_actions = model.primitive_model.d_action
     seq_len = model.abstract_step_size
 
     # generate all permutations of possible inputs
