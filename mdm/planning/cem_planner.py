@@ -81,6 +81,8 @@ class CrossentropyPlanner:
             actions = self._build_dist(act_dist_params).sample()
             criterion, terminal_flag_mat, rollout_data = rollout_fn(actions)
 
+            assert criterion.ndim == 2
+
             disc_mat = torch.cumprod(torch.full_like(criterion, fill_value=self.discount), dim=1)
             disc_mat = torch.roll(disc_mat, 1, dims=1)
             disc_mat[:, 0] = 1
