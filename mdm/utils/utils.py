@@ -5,6 +5,7 @@ from typing import Union, Dict, Tuple, TypeVar, Sequence
 from itertools import product
 import sys
 import re
+import io
 
 import gym
 import numpy as np
@@ -14,6 +15,7 @@ import torch
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import pandas as pd
+from PIL import Image
 
 from mdm.gridworld.gridworld import Gridworld, CellType
 from mdm.memory.trajectory_memory import flatten_and_unsqueeze, TrajectoryMemory
@@ -205,6 +207,15 @@ def to_onehot(x: Union[torch.Tensor, np.ndarray],
         x = np_one_hot(x, n_classes)
 
     return x
+
+
+def fig_to_img(fig, clear_fig: bool = True):
+    buffer = io.BytesIO()
+    fig.savefig(buffer)
+    if clear_fig:
+        plt.clf()
+    buffer.seek(0)
+    return Image.open(buffer)
 
 
 def prepare_data(s: Union[np.ndarray, torch.Tensor],

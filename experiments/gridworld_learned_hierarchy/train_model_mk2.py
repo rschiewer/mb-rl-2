@@ -8,8 +8,7 @@ import numpy as np
 from PIL import Image
 
 from mdm.gridworld.gridworld import Gridworld, FullyObservableGridworld
-from mdm.utils.utils import here, load_yaml, prepare_data, fill_placeholders, discrete_stats, compute_returns, \
-    DistributionType
+from mdm.utils.utils import here, load_yaml, prepare_data, discrete_stats, compute_returns, fig_to_img
 from mdm.utils.torch_tools import get_mu, get_sigma, bin_every_k_steps
 from mdm.models.building_blocks import RSSM, AbstractActionModel, OneHotDecoder, OneHotEncoder, GaussianDecoder, BinomialDecoder
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
@@ -207,27 +206,47 @@ if __name__ == '__main__':
                                                   model.abstract_step_size, 10, {'sample': False})
             plt.matshow(Y_mae, fignum=1)
             plt.colorbar()
-            buffer = io.BytesIO()
-            fig.savefig(buffer)
-            plt.clf()
-            buffer.seek(0)
-            logger.log_plot(Image.open(buffer), Scope.PARAMETERS() / 'abstr_a_stats/plots', i_step)
+            logger.log_plot(fig_to_img(fig), Scope.PARAMETERS() / 'abstr_a_stats/plots', i_step)
             logger.log({'abstr_a_mean': Y_mean.mean(), 'abstr_a_std': Y_std.mean()},
                        Scope.PARAMETERS() / 'abstr_a_stats', i_step)
 
+        logger.log({'abstr_o_dec': model.abstract_model.obs_decoder.temperature,
+                    'prim_o_dec': model.primitive_model.obs_decoder.temperature},
+                   Scope.TEST() / 'RelaxedOneHotCategorical', i_step)
 
         abstr_r = model.calc_abstr_r_ground_truth(r)
         abstr_term = model.calc_abstr_term_ground_truth(term)
         model.eval()
         pred = model(o, a, r, term, abstr_r, abstr_term, cfg['eval']['n_warmup_prim'], cfg['eval']['n_warmup_abstr'])
         model.train()
-        #for key in ('prim_o', 'prim_r', 'abstr_o', 'abstr_r'):
-        #    full_key = key + '_dist'
-        #    mu = get_mu(pred[full_key]).mean()
-        #    sigma = get_sigma(pred[full_key]).mean()
-        #    logger.log({full_key + '_mean': mu, full_key + '_sigma': sigma},
-        #               Scope.PARAMETERS() / 'model_stats', i_step)
-        #
+
+        prim_r_mean = torch.stack([r_dist.loc for r_dist in pred['prim_r_dist']]).mean(dim=1).squeeze().detach().cpu().numpy()
+        prim_r_std = torch.stack([r_dist.scale for r_dist in pred['prim_r_dist']]).mean(dim=1).squeeze().detach().cpu().numpy()
+        prim_term_mean = torch.stack([term_dist.probs for term_dist in pred['prim_term_dist']]).mean(dim=1).squeeze().detach().cpu().numpy()
+        prim_term_std = torch.stack([term_dist.probs for term_dist in pred['prim_term_dist']]).std(dim=1).squeeze().detach().cpu().numpy()
+        abstr_r_mean = torch.stack([r_dist.loc for r_dist in pred['abstr_r_dist']]).mean(dim=1).detach().cpu().numpy()
+        abstr_r_std= torch.stack([r_dist.scale for r_dist in pred['abstr_r_dist']]).mean(dim=1).detach().cpu().numpy()
+        abstr_term_mean = torch.stack([term_dist.probs for term_dist in pred['abstr_term_dist']]).mean(dim=1).detach().cpu().numpy()
+        abstr_term_std = torch.stack([term_dist.probs for term_dist in pred['abstr_term_dist']]).std(dim=1).detach().cpu().numpy()
+
+        plt.plot(prim_r_mean, label='mean')
+        plt.plot(prim_r_std, label='std')
+        plt.legend()
+        plt.show()
+        logger.log_plot(fig_to_img(fig), Scope.PARAMETERS() / 'model_stats/prim_r', i_step)
+        plt.plot(prim_term_mean, label='mean')
+        plt.plot(prim_term_std, label='std')
+        plt.legend()
+        logger.log_plot(fig_to_img(fig), Scope.PARAMETERS() / 'model_stats/prim_term', i_step)
+        plt.plot(abstr_r_mean, label='mean')
+        plt.plot(abstr_r_std, label='std')
+        plt.legend()
+        logger.log_plot(fig_to_img(fig), Scope.PARAMETERS() / 'model_stats/abstr_r', i_step)
+        plt.plot(abstr_term_mean, label='mean')
+        plt.plot(abstr_term_std, label='std')
+        plt.legend()
+        logger.log_plot(fig_to_img(fig), Scope.PARAMETERS() / 'model_stats/abstr_term', i_step)
+
         losses = model.calc_loss(pred, o, r, term, abstr_r, abstr_term, mask, 1)
         losses = {k: v.detach().cpu().numpy() for k, v in losses.items()}
         logger.log(losses, Scope.TEST() / 'with_warmup', i_step)
