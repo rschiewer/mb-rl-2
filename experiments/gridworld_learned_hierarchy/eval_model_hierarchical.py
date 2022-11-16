@@ -65,10 +65,10 @@ if __name__ == '__main__':
             abstr_dist_type = DistributionType.NORMAL
         else:
             abstr_dist_type = DistributionType.CATEGORICAL
-        planner_abstr = CrossentropyPlanner(abstr_dist_type, d_dist=mdl.d_abstract_action, device=mdl.device,
+        planner_abstr = CrossentropyPlanner(abstr_dist_type, d_dist=mdl.abstract_model.d_action, device=mdl.device,
                                             **planning_cfg['pln_abstr'])
-        planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, d_dist=mdl.d_action, device=mdl.device,
-                                           **planning_cfg['pln_prim'])
+        planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, d_dist=mdl.primitive_model.d_action,
+                                           device=mdl.device, **planning_cfg['pln_prim'])
 
         trajectory_history = mdl.gen_mem()
         trajectory_history = collect_groundtruth_data(mdl, trajectory_history, env, planning_cfg['n_warmup_prim'])
@@ -78,9 +78,6 @@ if __name__ == '__main__':
         trajectory_history = plan_abstract(mdl, trajectory_history, planner_abstr, planning_cfg['n_plan_steps_abstr'],
                                            planning_cfg['n_rollouts'])
 
-        plan_descr = infer_primitive_actions(trajectory_history, descriptions, canonical_abstr_a)
-        logger.log({'most_prob_prim_a': plan_descr}, Scope.TEST(), i_ep)
-
         current_section_lengths = []
         for i_sec in range(planning_cfg['n_plan_steps_abstr']):
             trajectory_history, sec_len = plan_section(mdl, trajectory_history, planner_prim, i_sec,
@@ -89,11 +86,15 @@ if __name__ == '__main__':
         section_lengths.append(current_section_lengths)
         #visualize_plan(trajectory_history, env, mdl)
 
-        actions = trajectory_history['prim_a'][0]
+        plan_descr = infer_primitive_actions(trajectory_history, descriptions, canonical_abstr_a)
+        logger.log({'most_prob_prim_a': plan_descr}, Scope.TEST(), i_ep)
+
+        # re-use batch dim or 1 here for concatenating as new time dim
+        actions = torch.concat(trajectory_history['prim_a'], dim=0)
         actions = actions[planning_cfg['n_warmup_prim']:]  # remove the first default and the warmup actions
 
-        abstract_rewards.append(trajectory_history['abstr_r'].detach().cpu().numpy())
-        abstract_terminals.append(trajectory_history['abstr_term'].detach().cpu().numpy())
+        abstract_rewards.append(torch.stack(trajectory_history['abstr_r']).detach().cpu().numpy())
+        abstract_terminals.append(torch.stack(trajectory_history['abstr_term']).detach().cpu().numpy())
 
         #diffs = []
         #for i_step, abstr_a in enumerate(trajectory_history['abstr_a'][0].detach().cpu().numpy()):
@@ -134,8 +135,8 @@ if __name__ == '__main__':
         #ani = gen_video(plot_mats, 1000, 2000)
         #ani.save(f'animation_{i_ep}.mp4')
 
-    abstract_rewards = np.stack(abstract_rewards)
-    abstract_terminals = np.stack(abstract_terminals)
+    abstract_rewards = np.stack(abstract_rewards).squeeze()
+    abstract_terminals = np.stack(abstract_terminals).squeeze()
     section_lengths = np.stack(section_lengths)
 
     # final debug output

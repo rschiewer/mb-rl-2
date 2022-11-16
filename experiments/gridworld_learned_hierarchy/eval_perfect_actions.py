@@ -58,14 +58,14 @@ if __name__ == '__main__':
     trajectory_history = collect_groundtruth_data(mdl, trajectory_history, env, n_warmup, warmup_actions)
     trajectory_history = init_prim_s(mdl, trajectory_history)
 
-    z = trajectory_history['prim_z'][:, -1]
-    rnn_state = unpack_rnn_state(trajectory_history['prim_rnn_state'][:, -1])
+    z = trajectory_history['prim_z'][-1]
+    rnn_state = trajectory_history['prim_rnn_state'][-1]
     perfect_actions_torch = torch.tensor(perfect_actions[n_warmup:], dtype=torch.float32)
-    perfect_actions_torch = perfect_actions_torch.to(mdl.device).unsqueeze(0)
+    perfect_actions_torch = perfect_actions_torch.to(mdl.device).unsqueeze(1)
     perfect_actions_torch = to_onehot(perfect_actions_torch, env.action_space.n)
     a_binned = bin_every_k_steps(perfect_actions_torch, mdl.abstract_step_size)
-    abstr_a = torch.stack([mdl.abstract_action_model(a_binned[:, i_chunk], sample=False)
-                           for i_chunk in range(a_binned.shape[1])], dim=1)
+    #abstr_a = torch.stack([mdl.abstract_action_model(a_binned[i_chunk], sample=False)
+    #                       for i_chunk in range(a_binned.shape[1])], dim=1)
     mem, prim_final = mdl.rollout_primitive(perfect_actions_torch, z=z, rnn_state=rnn_state, sample=False)
     mem = mdl.pack_mem(mem)
     #z = trajectory_history['prim_z'][:, -1]
