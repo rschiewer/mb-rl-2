@@ -232,7 +232,6 @@ if __name__ == '__main__':
         plt.plot(prim_r_mean, label='mean')
         plt.plot(prim_r_std, label='std')
         plt.legend()
-        plt.show()
         logger.log_plot(fig_to_img(fig), Scope.PARAMETERS() / 'model_stats/prim_r', i_step)
         plt.plot(prim_term_mean, label='mean')
         plt.plot(prim_term_std, label='std')
