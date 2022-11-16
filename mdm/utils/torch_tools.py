@@ -391,12 +391,28 @@ def get_dist_params(d: torch.distributions.Distribution):
     if isinstance(d, (torch.distributions.Normal, torch.distributions.Cauchy, torch.distributions.Gumbel,
                       torch.distributions.Laplace, torch.distributions.LogNormal)):
         return d.loc, d.scale
+    elif isinstance(d, torch.distributions.RelaxedOneHotCategorical):
+        return d.logits, d.temperature
     elif hasattr(d, 'logits'):
         return (d.logits,)
     elif hasattr(d, 'probs'):
         return (d.probs,)
     else:
         raise RuntimeError(f'Can\'t extract parameters of the given distribution: {d}')
+
+
+def detach_dist(d: torch.distributions.Distribution):
+    if isinstance(d, (torch.distributions.Normal, torch.distributions.Cauchy, torch.distributions.Gumbel,
+                      torch.distributions.Laplace, torch.distributions.LogNormal)):
+        return type(d)(loc=d.loc.detach(), scale=d.scale.detach())
+    elif isinstance(d, torch.distributions.RelaxedOneHotCategorical):
+        return type(d)(temperature=d.temperature.detach(), logits=d.logits.detach())
+    elif hasattr(d, 'logits'):
+        return type(d)(logits=d.logits.detach())
+    elif hasattr(d, 'probs'):
+        return type(d)(probs=d.probs.detach())
+    else:
+        raise RuntimeError(f'Can\'t detach the given distribution: {d}')
 
 
 def add_time_dim(*xs: torch.Tensor,
