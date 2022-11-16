@@ -68,6 +68,10 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                 abstr_term: torch.Tensor,
                 n_warmup_prim: int,
                 n_warmup_abstr: int,
+                prim_z_start: torch.Tensor = None,
+                prim_rnn_state_start: torch.Tensor = None,
+                abstr_z_start: torch.Tensor = None,
+                abstr_rnn_state_start: torch.Tensor = None,
                 sample: bool = True):
         assert o.shape[1] == r.shape[1] == term.shape[1] == a.shape[1]
 
@@ -77,7 +81,15 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         n_steps_abstr = a_binned.shape[0]
 
         prim_current = self.primitive_model.gen_init_values(d_batch, self.device)
+        if prim_z_start is not None:
+            prim_current['z'] = prim_z_start
+        if prim_rnn_state_start is not None:
+            prim_current['rnn_state'] = prim_rnn_state_start
         abstr_current = self.abstract_model.gen_init_values(d_batch, self.device)
+        if abstr_z_start is not None:
+            abstr_current['z'] = abstr_z_start
+        if abstr_rnn_state_start is not None:
+            abstr_current['rnn_state'] = abstr_rnn_state_start
 
         warmup_steps_prim_left = n_warmup_prim
         warmup_steps_abstr_left = n_warmup_abstr
@@ -293,21 +305,49 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                   r_ground_truth: torch.Tensor,
                   term_ground_truth: torch.Tensor,
                   mask: torch.Tensor) -> Dict[str, torch.Tensor]:
-        prim_steps = a_ground_truth.shape[0]
+        n_steps = a_ground_truth.shape[0]
+        abstr_steps = ceil(a_ground_truth.shape[0] / self.abstract_step_size)
 
         abstr_r_ground_truth = self.calc_abstr_r_ground_truth(r_ground_truth)
         abstr_term_ground_truth = self.calc_abstr_term_ground_truth(term_ground_truth)
-
-        pred_mixed = self(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, abstr_r_ground_truth,
-                          abstr_term_ground_truth, self.n_warmup_prim, self.n_warmup_abstr, sample=True)
-        #pred_post = self(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, abstr_r_ground_truth,
-        #                 abstr_term_ground_truth, prim_steps, abstr_steps)
-
         beta = self._calc_beta_schedule(self._current_train_step, self.beta_kl_prim)
 
+        pred_post = self(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, abstr_r_ground_truth,
+                          abstr_term_ground_truth, n_warmup_prim=-1, n_warmup_abstr=-1, sample=True)
+        loss = self.calc_loss(pred_post, o_ground_truth, r_ground_truth, term_ground_truth, abstr_r_ground_truth,
+                              abstr_term_ground_truth, mask, beta)
+        loss['beta'] = torch.tensor(beta)
+
+        for i_chunk in range(1, abstr_steps):
+            t = i_chunk * self.abstract_step_size
+            prim_z = pred_post['prim_z'][t]
+            prim_rnn_state = pred_post['prim_rnn_state'][t]
+            abstr_z = pred_post['abstr_z'][i_chunk]
+            abstr_rnn_state = pred_post['abstr_rnn_state'][i_chunk]
+            pred_latent = self(o_ground_truth[t:], a_ground_truth[t:], r_ground_truth[t:],
+                               term_ground_truth[t:], abstr_r_ground_truth[i_chunk:],
+                               abstr_term_ground_truth[i_chunk:], prim_z_start=prim_z,
+                               prim_rnn_state_start=prim_rnn_state,
+                               abstr_z_start=abstr_z, abstr_rnn_state_start=abstr_rnn_state,
+                               n_warmup_prim=self.abstract_step_size,
+                               n_warmup_abstr=1, sample=True)
+            pred_latent['prim_z_post'] = pred_post['prim_z_post'][t:]
+            pred_latent['abstr_z_post'] = pred_post['abstr_z_post'][i_chunk:]
+            loss_latent = self.calc_loss(pred_latent, o_ground_truth[t:], r_ground_truth[t:],
+                                         term_ground_truth[t:], abstr_r_ground_truth[i_chunk:],
+                                         abstr_term_ground_truth[i_chunk:],
+                                         mask[t:], beta)
+            for k, v in loss_latent.items():
+                loss[k] += v
+
+        return loss
+        #pred_mixed = self(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, abstr_r_ground_truth,
+        #                  abstr_term_ground_truth, self.n_warmup_prim, self.n_warmup_abstr, sample=True)
+
+
         # primitive model loss
-        loss_mixed = self.calc_loss(pred_mixed, o_ground_truth, r_ground_truth, term_ground_truth, abstr_r_ground_truth,
-                                    abstr_term_ground_truth, mask, beta)
+        #loss_mixed = self.calc_loss(pred_mixed, o_ground_truth, r_ground_truth, term_ground_truth, abstr_r_ground_truth,
+        #                            abstr_term_ground_truth, mask, beta)
         #loss_post = self._calc_loss(pred_post, o_ground_truth, term_ground_truth, abstr_r_ground_truth,
         #                            abstr_term_ground_truth, r_ground_truth, beta)
 
@@ -321,8 +361,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
         #loss_mixed['total'] += loss_post['total'] + prim_consistency + abstr_consistency
 
-        loss_mixed['beta'] = torch.tensor(beta)
-        return loss_mixed
+        #loss_mixed['beta'] = torch.tensor(beta)
+        #return loss_mixed
         #return loss_post
 
     @staticmethod
@@ -344,7 +384,10 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
     @staticmethod
     def _kl_div(ps: List[torch.distributions.Distribution],
                 qs: List[torch.distributions.Distribution],
-                mask: torch.Tensor):
+                mask: torch.Tensor,
+                detach_posterior: bool = False):
+        if detach_posterior:
+            ps = [detach_dist(p) for p in ps]
         kl_div = [torch.distributions.kl_divergence(p, q) * m for p, q, m in zip(ps, qs, mask) if None not in (p, q)]
         kl_div = torch.stack(kl_div, dim=0).mean()
         return kl_div
