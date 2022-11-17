@@ -528,7 +528,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         else:
             assert o is not None and r is not None and term is not None, 'Need o, r, and term groundtruth'
             assert o.shape[1] == r.shape[1] == term.shape[1], 'All groundtruth data has to have the same length'
-            n_groundtruth_available = o.shape[1]
+            n_groundtruth_available = o.shape[0]
 
         # default argument means we use as much ground truth data as possible with the posterior
         if n_posterior_steps == -1:
@@ -581,7 +581,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         if prim_data is None:
             n_groundtruth_available = 0
         else:
-            n_groundtruth_available = prim_data.shape[1]
+            n_groundtruth_available = prim_data.shape[0]
 
         # default argument means we use as much ground truth data as possible with the posterior
         if n_posterior_steps == -1:
