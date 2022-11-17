@@ -233,6 +233,7 @@ def prepare_data(s: Union[np.ndarray, torch.Tensor],
     a = a.swapaxes(0, 1)
     r = r.swapaxes(0, 1)
     terminal = terminal.swapaxes(0, 1)
+
     return s, a, r, terminal
 
 

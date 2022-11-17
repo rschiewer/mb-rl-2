@@ -280,13 +280,17 @@ class RSSM(torch.nn.Module):
                 term_current: torch.Tensor,
                 ctx_high_level: torch.Tensor,
                 use_posterior: bool = True,
+                reconstruct: bool = True,
                 sample: bool = True):
         if use_posterior:
             world_state = self.observe(z, rnn_state, a, o_current, r_current, term_current, ctx_high_level, sample)
         else:
             world_state = self.imagine(z, rnn_state, ctx_high_level, a, sample)
             world_state['z_post'] = None
-        reconstruction = self.reconstruct(world_state['z'], world_state['h'], sample)
+        if reconstruct:
+            reconstruction = self.reconstruct(world_state['z'], world_state['h'], sample)
+        else:
+            reconstruction = {}
 
         return {**world_state, **reconstruction}
 
