@@ -9,25 +9,26 @@ final_model_path: "model"
 # model in general
 mdm:
   abstract_step_size: 2
-  beta_kl_primitive: 1.0 #0.005
-  beta_reg_primitive: 0.0 #0.005
-  beta_kl_abstract: 1.0 #0.005
-  beta_reg_abstract: 0.0 #0.001
+  beta_kl_primitive: 10.0 #0.005
+  beta_reg_primitive: 0.000 #0.005
+  beta_kl_abstract: 10.0 #0.005
+  beta_reg_abstract: 0.000 #0.001
   beta_sched_stay: 1500
   beta_sched_rise: 1500
   n_warmup_prim: -1
   n_warmup_abstr: -1
-  detach_posteriors: False
+  detach_posteriors: True
+  latent_overshooting: True
   beta_abstract_action: 0.0
   beta_abstract_model: 1.0
   abstract_pred_target: "prim_o"
 
 prim_mdl:
-  d_z: 10
+  d_z: 2
   d_h: 64
-  n_hidden_layers: 1
+  n_hidden_layers: 3
   hidden_dropout: 0.1
-  epsilon: 0.01
+  epsilon: 1.0
   z_prior_lws: [64, 64, 64]
   z_post_lws: [64, 64, 64]
   layer_norm: True
@@ -43,31 +44,31 @@ prim_o_enc:
   d_x_encoded: 32
 
 prim_o_dec:
-  lws: [32]
+  lws: [64, 32]
   layer_norm: True
   activation: "relu"
-  temperature: 1.0
+  temperature: 3.0
   temperature_min: 1.0  # choose larger than 0.01!
   temperature_decrease_steps: 5000
 
 prim_r_dec:
-  lws: [32]
+  lws: [64, 32]
   layer_norm: True
   activation: "relu"
   epsilon: 0.0001
 
 prim_term_dec:
-  lws: [32]
+  lws: [64, 32]
   layer_norm: True
   activation: "relu"
 
 abstr_mdl:
-  d_z: 10
+  d_z: 2
   d_h: 128
   d_a: 16
-  n_hidden_layers: 1
+  n_hidden_layers: 3
   hidden_dropout: 0.1
-  epsilon: 0.01
+  epsilon: 1.0
   z_prior_lws: [64, 64, 64]
   z_post_lws: [64, 64, 64]
   layer_norm: True
@@ -86,18 +87,18 @@ abstr_o_dec:
   lws: [32]
   layer_norm: True
   activation: "relu"
-  temperature: 1.0
+  temperature: 3.0
   temperature_min: 1.0  # choose larger than 0.01!
   temperature_decrease_steps: 5000
 
 abstr_r_dec:
-  lws: [32]
+  lws: [64, 32]
   layer_norm: True
   activation: "relu"
   epsilon: 0.0001
 
 abstr_term_dec:
-  lws: [32]
+  lws: [64, 32]
   layer_norm: True
   activation: "relu"
 
@@ -114,9 +115,9 @@ optim:
 trainer:
   n_train_steps: 15000
   eval_interval: 100
-  d_batch: 2048
+  d_batch: 1024
   pad_last_terminal_flag: False
 
 eval:
-  n_warmup_prim: 4
-  n_warmup_abstr: 2
+  n_warmup_prim: 2
+  n_warmup_abstr: 1

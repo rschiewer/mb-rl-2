@@ -27,6 +27,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                  beta_sched_rise: int = 1000,
                  n_warmup_prim: Union[int, Sequence[int]] = 1,
                  n_warmup_abstr: Union[int, Sequence[int]] = 1,
+                 latent_overshooting: bool = False,
                  detach_posteriors: bool = False):
         if not abstract_pred_target.startswith('prim_'):
             raise ValueError(f'Abstract model\'s prediciton target should be from primitive model and start ',
@@ -50,6 +51,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         self.beta_rise = beta_sched_rise
         self.n_warmup_prim = n_warmup_prim
         self.n_warmup_abstr = n_warmup_abstr
+        self.latent_overshooting = latent_overshooting
         self.detach_posteriors = detach_posteriors
         self._current_train_step = None
 
@@ -116,9 +118,11 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             prim_data = o[i_end - 1]
             mem['abstr_o_target'].append(prim_data)
             abstr_r_groundtruth = torch.stack(mem['prim_r'][i_start:i_end], dim=0)
-            abstr_r_groundtruth = self.calc_abstr_r_ground_truth(abstr_r_groundtruth)
+            abstr_r_groundtruth = self.calc_abstr_r_ground_truth(abstr_r_groundtruth).detach()
             abstr_term_groundtruth = torch.stack(mem['prim_term'][i_start:i_end], dim=0)
-            abstr_term_groundtruth = self.calc_abstr_term_ground_truth(abstr_term_groundtruth)
+            abstr_term_groundtruth = self.calc_abstr_term_ground_truth(abstr_term_groundtruth).detach()
+            abstr_r_groundtruth = abstr_r[i_chunk].unsqueeze(0)
+            abstr_term_groundtruth = abstr_term[i_chunk].unsqueeze(0)
 
             mem, abstr_current = self.rollout_abstract(a=add_time_dim(abstr_a), r=abstr_r_groundtruth,
                                                        term=abstr_term_groundtruth,
@@ -309,7 +313,6 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                   r_ground_truth: torch.Tensor,
                   term_ground_truth: torch.Tensor,
                   mask: torch.Tensor) -> Dict[str, torch.Tensor]:
-        n_steps = a_ground_truth.shape[0]
         abstr_steps = ceil(a_ground_truth.shape[0] / self.abstract_step_size)
 
         abstr_r_ground_truth = self.calc_abstr_r_ground_truth(r_ground_truth)
@@ -322,72 +325,43 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                               abstr_term_ground_truth, mask, beta)
         loss['beta'] = torch.tensor(beta)
 
-        for i_chunk in range(1, abstr_steps):
-            t = i_chunk * self.abstract_step_size
-            prim_z = pred_post['prim_z'][t]
-            prim_rnn_state = pred_post['prim_rnn_state'][t]
-            abstr_z = pred_post['abstr_z'][i_chunk]
-            abstr_rnn_state = pred_post['abstr_rnn_state'][i_chunk]
-            pred_latent = self(o_ground_truth[t:], a_ground_truth[t:], r_ground_truth[t:],
-                               term_ground_truth[t:], abstr_r_ground_truth[i_chunk:],
-                               abstr_term_ground_truth[i_chunk:], prim_z_start=prim_z,
-                               prim_rnn_state_start=prim_rnn_state,
-                               abstr_z_start=abstr_z, abstr_rnn_state_start=abstr_rnn_state,
-                               n_warmup_prim=self.abstract_step_size,
-                               n_warmup_abstr=1, sample=True)
-            mask_prim = 1 - mask[t:]
-            mask_abstr = bin_every_k_steps(mask_prim, self.abstract_step_size).max(dim=1).values
-            if self.detach_posteriors:
-                prim_kl_target = [detach_dist(d) for d in pred_post['prim_z_post'][t:]]
-                abstr_kl_target = [detach_dist(d) for d in pred_post['abstr_z_post'][i_chunk:]]
-            else:
-                prim_kl_target = pred_post['prim_z_post'][t:]
-                abstr_kl_target = pred_post['abstr_z_post'][i_chunk:]
-            kl_prim = self._kl_div(prim_kl_target, pred_latent['prim_z_prior'], mask_prim)
-            kl_abstr = self._kl_div(abstr_kl_target, pred_latent['abstr_z_prior'], mask_abstr)
-            loss['prim_kl_s'] += beta * self.beta_kl_prim * kl_prim
-            loss['abstr_kl_s'] += beta * self.beta_kl_abstr * kl_abstr
-            loss['monitoring_prim_kl'] += kl_prim
-            loss['monitoring_abstr_kl'] += kl_abstr
-            #pred_latent['prim_z_post'] = pred_post['prim_z_post'][t:]
-            #pred_latent['abstr_z_post'] = pred_post['abstr_z_post'][i_chunk:]
-            #loss_latent = self.calc_loss(pred_latent, o_ground_truth[t:], r_ground_truth[t:],
-            #                             term_ground_truth[t:], abstr_r_ground_truth[i_chunk:],
-            #                             abstr_term_ground_truth[i_chunk:],
-            #                             mask[t:], beta)
-            #for k, v in loss_latent.items():
-            #    loss[k] += v
-        # each of the loss terms below was calculated once for pred_post call and then abstr_steps - 1 times in the loop
-        normalizing_factor = max(abstr_steps, 1)
-        loss['prim_kl_s'] /= normalizing_factor
-        loss['abstr_kl_s'] /= normalizing_factor
-        loss['monitoring_prim_kl'] /= normalizing_factor
-        loss['monitoring_abstr_kl'] /= normalizing_factor
+        if self.latent_overshooting:
+            for i_chunk in range(1, abstr_steps):
+                t = i_chunk * self.abstract_step_size
+                prim_z = pred_post['prim_z'][t]
+                prim_rnn_state = pred_post['prim_rnn_state'][t]
+                abstr_z = pred_post['abstr_z'][i_chunk]
+                abstr_rnn_state = pred_post['abstr_rnn_state'][i_chunk]
+                pred_latent = self(o_ground_truth[t:], a_ground_truth[t:], r_ground_truth[t:],
+                                   term_ground_truth[t:], abstr_r_ground_truth[i_chunk:],
+                                   abstr_term_ground_truth[i_chunk:], prim_z_start=prim_z,
+                                   prim_rnn_state_start=prim_rnn_state,
+                                   abstr_z_start=abstr_z, abstr_rnn_state_start=abstr_rnn_state,
+                                   n_warmup_prim=self.abstract_step_size,
+                                   n_warmup_abstr=1, sample=True)
+                mask_prim = 1 - mask[t:]
+                mask_abstr = bin_every_k_steps(mask_prim, self.abstract_step_size).max(dim=1).values
+                if self.detach_posteriors:
+                    prim_kl_target = [detach_dist(d) for d in pred_post['prim_z_post'][t:]]
+                    abstr_kl_target = [detach_dist(d) for d in pred_post['abstr_z_post'][i_chunk:]]
+                else:
+                    prim_kl_target = pred_post['prim_z_post'][t:]
+                    abstr_kl_target = pred_post['abstr_z_post'][i_chunk:]
+                kl_prim = self._kl_div(prim_kl_target, pred_latent['prim_z_prior'], mask_prim)
+                kl_abstr = self._kl_div(abstr_kl_target, pred_latent['abstr_z_prior'], mask_abstr)
+                loss['prim_kl_s'] += beta * self.beta_kl_prim * kl_prim
+                loss['abstr_kl_s'] += beta * self.beta_kl_abstr * kl_abstr
+                loss['monitoring_prim_kl'] += kl_prim
+                loss['monitoring_abstr_kl'] += kl_abstr
+
+            # each of the loss terms below was calculated once for pred_post call and then abstr_steps - 1 times in the loop
+            normalizing_factor = max(abstr_steps, 1)
+            loss['prim_kl_s'] /= normalizing_factor
+            loss['abstr_kl_s'] /= normalizing_factor
+            loss['monitoring_prim_kl'] /= normalizing_factor
+            loss['monitoring_abstr_kl'] /= normalizing_factor
 
         return loss
-        #pred_mixed = self(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, abstr_r_ground_truth,
-        #                  abstr_term_ground_truth, self.n_warmup_prim, self.n_warmup_abstr, sample=True)
-
-
-        # primitive model loss
-        #loss_mixed = self.calc_loss(pred_mixed, o_ground_truth, r_ground_truth, term_ground_truth, abstr_r_ground_truth,
-        #                            abstr_term_ground_truth, mask, beta)
-        #loss_post = self._calc_loss(pred_post, o_ground_truth, term_ground_truth, abstr_r_ground_truth,
-        #                            abstr_term_ground_truth, r_ground_truth, beta)
-
-        #prim_s_prior = build_gaussian(pred_mixed['prim_z_prior'])
-        #prim_s_post = build_gaussian(pred_post['prim_z_post'])
-        #prim_consistency = self.beta_kl_prim * (torch.distributions.kl_divergence(prim_s_post, prim_s_prior).mean())
-
-        #abstr_s_prior = build_gaussian(pred_mixed['abstr_z_prior'])
-        #abstr_s_post = build_gaussian(pred_post['abstr_z_post'])
-        #abstr_consistency = self.beta_kl_abstr * (torch.distributions.kl_divergence(abstr_s_post, abstr_s_prior).mean())
-
-        #loss_mixed['total'] += loss_post['total'] + prim_consistency + abstr_consistency
-
-        #loss_mixed['beta'] = torch.tensor(beta)
-        #return loss_mixed
-        #return loss_post
 
     @staticmethod
     def _neg_log_prob(distributions: List[torch.distributions.Distribution],
@@ -456,7 +430,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         prim_rec_term = self._neg_log_prob(pred['prim_term_dist'], term_ground_truth, mask)
         prim_kl_z_unscaled = self._kl_div(pred['prim_z_post'], pred['prim_z_prior'], mask)
         prim_kl_z = beta * self.beta_kl_prim * prim_kl_z_unscaled
-        prim_kl_z_reg_unscaled = self._kl_reg(pred['prim_z_prior'], mask)
+        prim_kl_z_reg_unscaled = self._kl_reg(pred['prim_z_post'], mask)
         prim_kl_z_reg = beta * self.beta_reg_prim * prim_kl_z_reg_unscaled
 
         # TODO: Think about this, right now if the final chunk takes less than abstract_step_size steps,
@@ -469,7 +443,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         abstr_rec_term = self._neg_log_prob(pred['abstr_term_dist'], abstr_term_ground_truth, mask)
         abstr_kl_z_unscaled = self._kl_div(pred['abstr_z_post'], pred['abstr_z_prior'], mask)
         abstr_kl_z = beta * self.beta_kl_abstr * abstr_kl_z_unscaled
-        abstr_kl_z_reg_unscaled = self._kl_reg(pred['abstr_z_prior'], mask)
+        abstr_kl_z_reg_unscaled = self._kl_reg(pred['abstr_z_post'], mask)
         abstr_kl_z_reg = beta * self.beta_reg_abstr * abstr_kl_z_reg_unscaled
 
         # disable abstract model loss in case we only use the primitive level
