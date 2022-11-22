@@ -56,7 +56,7 @@ class GridworldTest(unittest.TestCase):
         self.assertEqual(world.grid[self.reward_pos], CellType.REWARD)
         self.assertEqual(world.grid[self.wall_pos], CellType.WALL)
 
-        s = world.reset()
+        s, info = world.reset()
         self.assertTrue((s == (2, 2)).all())
         self.assertEqual(world.grid[self.agent_start_pos], CellType.AGENT)
         self.assertEqual(world.grid[self.reward_pos], CellType.REWARD)
@@ -117,15 +117,15 @@ class GridworldTest(unittest.TestCase):
 
         actions = [0, 0, 0, 1, 1]
         rewards = [world.step_reward] * 4 + [world.reward + world.step_reward]
-        dones = [False, False, False, False, True]
+        terminals = [False, False, False, False, True]
+        truncateds = [False, False, False, False, False]
 
-        s = world.observation_space.sample()
-
-        for a, r_target, done_target in zip(actions, rewards, dones):
-            s, r, done, info = world.step(a)
+        for a, r_target, term_target, trunc_target in zip(actions, rewards, terminals, truncateds):
+            s, r, term, trunc, info = world.step(a)
             self.assertTrue((s == world.find_cell_type(CellType.AGENT)).all())
             self.assertEqual(r, r_target)
-            self.assertEqual(done, done_target)
+            self.assertEqual(term, term_target)
+            self.assertEqual(trunc, trunc_target)
             self.assertTrue(world.observation_space.contains(s))
 
     def test_step_reward(self):
@@ -134,15 +134,15 @@ class GridworldTest(unittest.TestCase):
 
         actions = [0, 0, 0, 1, 1]
         rewards = [-0.01, -0.01, -0.01, -0.01, 0.99]
-        dones = [False, False, False, False, True]
+        terminals = [False, False, False, False, True]
+        truncateds = [False, False, False, False, False]
 
-        s = world.observation_space.sample()
-
-        for a, r_target, done_target in zip(actions, rewards, dones):
-            s, r, done, info = world.step(a)
+        for a, r_target, term_target, trunc_target in zip(actions, rewards, terminals, truncateds):
+            s, r, term, trunc, info = world.step(a)
             self.assertTrue((s == world.find_cell_type(CellType.AGENT)).all())
             self.assertEqual(r, r_target)
-            self.assertEqual(done, done_target)
+            self.assertEqual(term, term_target)
+            self.assertEqual(trunc, trunc_target)
             self.assertTrue(world.observation_space.contains(s))
 
     def test_fully_random_start_pos(self):
@@ -179,40 +179,43 @@ class GridworldTest(unittest.TestCase):
     def test_enact_sequence(self):
         world = Gridworld.from_cleartext(here() / 'testmap_multi_start_pos.mapdata')
 
-        s_mem, a_mem, r_mem, terminal_mem = [], [], [], []
+        s_mem, a_mem, r_mem, truncated_mem, terminal_mem = [], [], [], [], []
 
-        s_mem.append(world.reset())
+        s, info = world.reset()
+        s_mem.append(s)
         done = False
         while not done:
             a = world.action_space.sample()
-            s_next, r, done, info = world.step(a)
+            s_next, r, term, trunc, info = world.step(a)
 
             s_mem.append(s_next)
             a_mem.append(a)
             r_mem.append(r)
-            terminal_mem.append(done)
+            terminal_mem.append(term)
+            truncated_mem.append(trunc)
+            done = term or trunc
 
         # correct sequence
-        world.enact_sequence(s_mem, a_mem, r_mem, terminal_mem, False, 0)
+        world.enact_sequence(s_mem, a_mem, r_mem, terminal_mem, truncated_mem, False, 0)
 
         # wrong sequences
         for i in range(len(s_mem)):
             s_mem_cp = deepcopy(s_mem)
             s_mem_cp[i] = s_mem_cp[i] + 1
             with self.assertRaises(RuntimeError):
-                world.enact_sequence(s_mem_cp, a_mem, r_mem, terminal_mem, False, 0)
+                world.enact_sequence(s_mem_cp, a_mem, r_mem, terminal_mem, truncated_mem, False, 0)
         # randomly changing action sequences could end up in the trajectory not changing at all
         # so this is not tested here
         for i in range(len(r_mem)):
             r_mem_cp = deepcopy(r_mem)
             r_mem_cp[i] = r_mem_cp[i] + 1
             with self.assertRaises(RuntimeError):
-                world.enact_sequence(s_mem, a_mem, r_mem_cp, terminal_mem, False, 0)
+                world.enact_sequence(s_mem, a_mem, r_mem_cp, terminal_mem, truncated_mem, False, 0)
         for i in range(len(terminal_mem)):
             terminal_mem_cp = deepcopy(terminal_mem)
             terminal_mem_cp[i] = not terminal_mem_cp[i]
             with self.assertRaises(RuntimeError):
-                world.enact_sequence(s_mem, a_mem, r_mem, terminal_mem_cp, False, 0)
+                world.enact_sequence(s_mem, a_mem, r_mem, terminal_mem_cp, truncated_mem, False, 0)
 
     def test_teleport_agent(self):
         world = Gridworld.from_cleartext(here() / 'testmap_multi_start_pos.mapdata')
@@ -232,28 +235,31 @@ class GridworldTest(unittest.TestCase):
         actions = [0, 0, 1, 1]
         rewards = [-0.01, -0.01, -0.01, 0.99]
         observations = [np.array([1, 2]), np.array([0, 2]), np.array([0, 3]), np.array([0, 4])]
-        dones = [False, False, False, True]
+        terminals = [False, False, False, True]
+        truncateds = [False, False, False, False]
 
         world.reset()
-        for a, gt_o, gt_r, gt_done in zip(actions,observations, rewards, dones):
-            o, r, done, info = world.step(a)
+        for a, gt_o, gt_r, gt_term, gt_trunc in zip(actions,observations, rewards, terminals, truncateds):
+            o, r, term, trunc, info = world.step(a)
 
             self.assertTrue(np.all(gt_o == o))
             self.assertEqual(gt_r, r)
-            self.assertEqual(gt_done, done)
+            self.assertEqual(gt_term, term)
+            self.assertEqual(gt_trunc, trunc)
 
     def test_fully_observable_gridworld_wrapper(self):
         fully_observable_world = FullyObservableGridworld(self.world)
-        o = fully_observable_world.reset()
+        o, info = fully_observable_world.reset()
         self.assertEqual(o.shape, np.prod(self.world.grid.shape))
 
         o_old = copy.deepcopy(o)
         o[:] = -o[:]
         self.assertTrue(np.isclose(np.sum(o_old - self.world.grid.ravel()), 0))
 
-        o, r, done, info = fully_observable_world.step(fully_observable_world.action_space.sample())
+        o, r, term, trunc, info = fully_observable_world.step(fully_observable_world.action_space.sample())
         self.assertGreater(np.sum(np.abs(o_old - o)), 0)
 
+    @unittest.skip
     def test_async_vector_gridworld(self):
         envs = gym.vector.AsyncVectorEnv([
             lambda: Gridworld.from_cleartext(Path(__file__).parent / 'testmap.mapdata'),
@@ -266,7 +272,8 @@ class GridworldTest(unittest.TestCase):
         done = [False]
         while not all(done):
             a = envs.action_space.sample()
-            o, r, done, info = envs.step(a)
+            o, r, term, trunc, info = envs.step(a)
+            done = [x or y for x, y in zip(term, trunc)]
 
 
     @unittest.skip
@@ -276,10 +283,10 @@ class GridworldTest(unittest.TestCase):
         world.reset()
         world.render()
         for t in range(10):
-            o, r, done, info = world.step(world.action_space.sample())
+            o, r, term, trunc, info = world.step(world.action_space.sample())
             world.render()
             sleep(1)
-            if done:
+            if term or trunc:
                 break
 
 

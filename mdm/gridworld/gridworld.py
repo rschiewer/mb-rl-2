@@ -118,7 +118,7 @@ class Gridworld(gym.Env):
         #print(f'dest_type: {dest_type}')
 
         reward = self.step_reward
-        done = False
+        terminated, truncated = False, False
         info = {}
 
         if dest_type == CellType.FREE or dest_type == CellType.REWARD:
@@ -126,15 +126,15 @@ class Gridworld(gym.Env):
             self._grid[tuple(dest_pos_clipped)] = CellType.AGENT
             if dest_type == CellType.REWARD:
                 reward += self.reward
-                done = True
+                terminated = True
 
         self._grid.flags.writeable = False
 
         self.current_ep_time += 1
         if self.current_ep_time == self.time_limit - 1:
-            done = True
+            truncated = True
 
-        return self.find_cell_type(CellType.AGENT), reward, done, info
+        return self.find_cell_type(CellType.AGENT), reward, terminated, truncated, info
 
     def teleport_agent(self, pos: Sequence[int]):
         if len(pos) != 2:
@@ -154,7 +154,7 @@ class Gridworld(gym.Env):
 
         return self.find_cell_type(CellType.AGENT)
 
-    def reset(self):
+    def reset(self, seed: int = None, options: dict = None):
         self._grid.flags.writeable = True
         self._grid[:] = self._init_grid[:]
 
@@ -172,7 +172,7 @@ class Gridworld(gym.Env):
 
         self._grid.flags.writeable = False
         self.current_ep_time = 0
-        return self.find_cell_type(CellType.AGENT)
+        return self.find_cell_type(CellType.AGENT), {}
 
     def render(self, mode="human"):
         if self.canvas is None:
@@ -202,6 +202,7 @@ class Gridworld(gym.Env):
                        actions: Sequence,
                        rewards: Sequence,
                        terminals: Sequence,
+                       truncateds: Sequence,
                        render: bool = True,
                        t_sleep: int = 0):
         # place agent at correct starting point
@@ -211,12 +212,13 @@ class Gridworld(gym.Env):
         self._grid[tuple(states[0])] = CellType.AGENT
         self._grid.flags.writeable = False
 
-        for i_t, (s_seq, a_seq, r_seq, done_seq) in enumerate(zip(states[1:], actions, rewards, terminals)):
+        for i_t, (s_seq, a_seq, r_seq, term_seq, trunc_seq) in enumerate(zip(states[1:], actions, rewards, terminals,
+                                                                             truncateds)):
             if render:
                 self.render()
             sleep(t_sleep)
 
-            s, r, done, info = self.step(a_seq)
+            s, r, term, trunc, info = self.step(a_seq)
 
             if s[0] != s_seq[0] or s[1] != s_seq[1]:
                 raise RuntimeError(f'State of provided sequence and generated state differ in step {i_t}, '
@@ -224,9 +226,12 @@ class Gridworld(gym.Env):
             if r != r_seq:
                 raise RuntimeError(f'Reward of provided sequence and generated reward differ in step {i_t}, '
                                    f'sequence reward: {r_seq}, generated reward: {r}.')
-            if done != done_seq:
+            if term != term_seq:
                 raise RuntimeError(f'Terminal flag of provided sequence and generated terminal flag differ in step '
-                                   f'{i_t}, sequence terminal flag: {r_seq}, generated terminal flag: {r}.')
+                                   f'{i_t}, sequence terminal flag: {term_seq}, generated terminal flag: {term}.')
+            if trunc != trunc_seq:
+                raise RuntimeError(f'Truncated flag of provided sequence and generated truncsted flag differ in step '
+                                   f'{i_t}, sequence truncated flag: {trunc_seq}, generated truncated flag: {trunc}.')
 
     def render_alternative(self, mode="human"):
         if self.canvas is None:
@@ -252,8 +257,8 @@ class FullyObservableGridworld(gym.ObservationWrapper):
     def __init__(self, env: Gridworld):
         super(FullyObservableGridworld, self).__init__(env)
 
-        low = min(CellType)
-        high = max(CellType)
+        low = int(min(CellType))
+        high = int(max(CellType))
         shape = (env.grid_h * env.grid_w, )
         self.observation_space = gym.spaces.Box(low, high, shape=shape, dtype=np.uint8)
 
