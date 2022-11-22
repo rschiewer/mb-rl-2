@@ -26,21 +26,24 @@ class TrajectoryMemoryTest(unittest.TestCase):
         init_a = np.zeros((1, *shapes['a']), dtype=dtype)
         init_r = np.zeros((1, *shapes['r']), dtype=dtype)
         init_term = np.zeros((1, *shapes['terminal']), dtype=dtype)
+        init_trunc = np.zeros((1, *shapes['truncated']), dtype=dtype)
 
         s = _rand_tens(shapes['s'], t_len, dtype)
         a = np.concatenate([init_a, _rand_tens(shapes['a'], t_len - 1, dtype)], axis=0)
         r = np.concatenate([init_r, _rand_tens(shapes['r'], t_len - 1, dtype)], axis=0)
         terminal = np.concatenate([init_term, _rand_tens(shapes['terminal'], t_len - 1, dtype)], axis=0)
-        return {'s': s, 'a': a, 'r': r, 'terminal': terminal}
+        truncated = np.concatenate([init_trunc, _rand_tens(shapes['truncated'], t_len - 1, dtype)], axis=0)
+        return {'s': s, 'a': a, 'r': r, 'terminal': terminal, 'truncated': truncated}
 
     def setUp(self) -> None:
         n_trajectories = 100
         min_len, longest = np.random.default_rng().integers(10, 50, 2)
-        s_shape, a_shape, r_shape, terminal_shape = [(32, 32, 3), (5,), (), ()]
+        s_shape, a_shape, r_shape, terminal_shape, truncated_shape = [(32, 32, 3), (5,), (), (), ()]
         t_lens = np.random.default_rng().integers(min_len, min_len + longest, n_trajectories)
 
         self.mem = TrajectoryMemory()
-        self.shapes = {'s': s_shape, 'a': a_shape, 'r': r_shape, 'terminal': terminal_shape}
+        self.shapes = {'s': s_shape, 'a': a_shape, 'r': r_shape, 'terminal': terminal_shape,
+                       'truncated': truncated_shape}
         self.n_trajectories = n_trajectories
         self.trajectories = [self._rand_traj(self.shapes, t_len) for t_len in t_lens]
 
@@ -52,7 +55,8 @@ class TrajectoryMemoryTest(unittest.TestCase):
                 self.assertTrue((traj_mem_elem == traj_orig_elem).all())
 
     def test_init_with_sequence(self):
-        traj_list_format = [[traj['s'], traj['a'], traj['r'], traj['terminal']] for traj in self.trajectories]
+        traj_list_format = [[traj['s'], traj['a'], traj['r'], traj['terminal'], traj['truncated']]
+                            for traj in self.trajectories]
         mem = TrajectoryMemory(traj_list_format)
 
         for traj_mem, traj_orig in zip(mem, self.trajectories):
@@ -96,7 +100,6 @@ class TrajectoryMemoryTest(unittest.TestCase):
         view = self.mem[:-1]
         self.assertEqual(view.longest_trajectory, longest_traj_len)
 
-
     def test_push_shape(self):
         for t in self.trajectories:
             self.mem.push(**t)
@@ -112,7 +115,7 @@ class TrajectoryMemoryTest(unittest.TestCase):
         for t in self.trajectories:
             self.mem.push(**t)
 
-        for k in ['s', 'a', 'r', 'terminal']:
+        for k in ['s', 'a', 'r', 'terminal', 'truncated']:
             for traj in self.mem:
                 t_malformed = copy.deepcopy(traj)
                 len_mismatch = np.random.default_rng().integers(1, 500)
@@ -139,17 +142,19 @@ class TrajectoryMemoryTest(unittest.TestCase):
             self.mem.push(**t)
 
         for fill_value in [0, 1, 42]:
-            ss_, as_, rs_, terminals_, w_ = self.mem.to_np_arrays(padding=fill_value, pad_last_terminal_flag=False)
+            ss_, as_, rs_, terminals_, truncateds_, w_ = self.mem.to_np_arrays(padding=fill_value,
+                                                                               pad_last_terminal_flag=False)
 
             for x in [ss_, as_, rs_, terminals_]:
                 self.assertEqual(x.shape[0], self.n_trajectories)
                 self.assertEqual(x.shape[1], self.mem.longest_trajectory)
 
-            for shp, x in zip(self.shapes.values(), [ss_, as_, rs_, terminals_]):
+            for shp, x in zip(self.shapes.values(), [ss_, as_, rs_, terminals_, truncateds_]):
                 self.assertEqual(x.shape[2:], shp)
 
             for i_t, traj in enumerate(self.trajectories):
-                for (name, traj_data), np_data in zip(traj.items(), [ss_[i_t], as_[i_t], rs_[i_t], terminals_[i_t]]):
+                for (name, traj_data), np_data in zip(traj.items(), [ss_[i_t], as_[i_t], rs_[i_t], terminals_[i_t],
+                                                                     truncateds_[i_t]]):
                     l_orig = len(traj_data)
                     l_diff = np_data.shape[0] - l_orig
                     dt_orig = self.mem.dtypes[name]
@@ -164,25 +169,27 @@ class TrajectoryMemoryTest(unittest.TestCase):
             self.mem.push(**t)
 
         for fill_value in [0, 1, 42]:
-            ss_, as_, rs_, terminals_, w_ = self.mem.to_np_arrays(padding=fill_value, pad_last_terminal_flag=True)
+            ss_, as_, rs_, terminals_, truncateds_, w_ = self.mem.to_np_arrays(padding=fill_value,
+                                                                               pad_last_terminal_flag=True)
             self.assertTrue(np.all(w_ == 1))
 
-            for x in [ss_, as_, rs_, terminals_]:
+            for x in [ss_, as_, rs_, terminals_, truncateds_]:
                 self.assertEqual(x.shape[0], self.n_trajectories)
                 self.assertEqual(x.shape[1], self.mem.longest_trajectory)
 
-            for shp, x in zip(self.shapes.values(), [ss_, as_, rs_, terminals_]):
+            for shp, x in zip(self.shapes.values(), [ss_, as_, rs_, terminals_, truncateds_]):
                 self.assertEqual(x.shape[2:], shp)
 
             for i_t, traj in enumerate(self.trajectories):
-                for (name, traj_data), np_data in zip(traj.items(), [ss_[i_t], as_[i_t], rs_[i_t], terminals_[i_t]]):
+                for (name, traj_data), np_data in zip(traj.items(), [ss_[i_t], as_[i_t], rs_[i_t], terminals_[i_t],
+                                                                     truncateds_[i_t]]):
                     l_orig = len(traj_data)
                     l_diff = np_data.shape[0] - l_orig
                     # non-padded part of current trajectory is the same as the original trajectory
                     self.assertTrue((np_data[:l_orig] == traj_data).all())
                     # padded part should all be the padding value
                     if l_diff > 0:
-                        cmp_val = traj_data[-1] if name == 'terminal' else fill_value
+                        cmp_val = traj_data[-1] if name in ('terminal', 'truncated') else fill_value
                         self.assertTrue((np_data[l_orig:].data == cmp_val).all())
 
     def test_getitem_slice(self):

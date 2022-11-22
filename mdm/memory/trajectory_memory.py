@@ -38,10 +38,10 @@ class TrajectoryMemory:
                         raise ValueError('Unknown content in init_mem, elements should have type dict, list or tuple '
                                          f'but are of type {type(elem)}')
                 except KeyError:
-                    raise ValueError('Expected dict keys of elements are "s", "a", "r" and "terminal", found: '
-                                     f'{elem.keys()}')
+                    raise ValueError('Expected dict keys of elements are "s", "a", "r" "terminal" and "truncated",'
+                                     f'found: {elem.keys()}')
                 except IndexError:
-                    raise ValueError(f'Expected length of elements is 5, found {len(elem)}')
+                    raise ValueError(f'Expected length of elements is 6, found {len(elem)}')
 
     @property
     def shapes(self):
@@ -115,18 +115,19 @@ class TrajectoryMemory:
         view._update_sampling_weights()
         return view
 
-    def push(self, s, a, r, terminal, w: float = 1.0) -> None:
+    def push(self, s, a, r, terminal, truncated, w: float = 1.0) -> None:
         if self._shapes is None:
-            self._shapes = self._detect_shapes(s, a, r, terminal)
-            self._dtypes = self._detect_dtypes(s, a, r, terminal)
+            self._shapes = self._detect_shapes(s, a, r, terminal, truncated)
+            self._dtypes = self._detect_dtypes(s, a, r, terminal, truncated)
         else:
-            data_shapes = self._detect_shapes(s, a, r, terminal)
-            data_lengths = self._detect_lengths(s, a, r, terminal)
-            data_dtypes = self._detect_dtypes(s, a, r, terminal)
+            data_shapes = self._detect_shapes(s, a, r, terminal, truncated)
+            data_lengths = self._detect_lengths(s, a, r, terminal, truncated)
+            data_dtypes = self._detect_dtypes(s, a, r, terminal, truncated)
             if not self._shapes_match(self._shapes, data_shapes):
                 raise ValueError(f'Input has incompatible shape, expected {self._shapes}, found {data_shapes}')
             if not self._lengths_match(data_lengths):
-                raise ValueError(f'Input has incompatible lengths, expected s, a, r, terminal to have equal lengths')
+                raise ValueError(f'Input has incompatible lengths, expected s, a, r, terminal, truncated to have equal '
+                                 f'lengths')
             if not self._dtypes_match(self._dtypes, data_dtypes):
                 raise ValueError(f'Input has different dtypes than previously added content, expected {self._dtypes}, '
                                  f'found {data_dtypes}')
@@ -137,16 +138,17 @@ class TrajectoryMemory:
             raise ValueError('Expected first reward to be zero by convention')
         if not np.all(terminal[0] == 0):
             raise ValueError('Expected first terminal flag to be zero by convention')
+        if not np.all(truncated[0] == 0):
+            raise ValueError('Expected first terminal flag to be zero by convention')
         if not np.ndim(w) == 0:
             raise ValueError(f'Weight must be a float, but has {np.ndim(w)} dimensions')
-        #if not type(w) is (int, float):
-        #    raise ValueError(f'Weight must be of dtype float but is: {np.array(w).dtype}')
         w = float(w)
 
         if len(s) > self._longest_trajectory:
             self._longest_trajectory = len(s)
 
-        self._mem.append({'s': np.array(s), 'a': np.array(a), 'r': np.array(r), 'terminal': np.array(terminal), 'w': w})
+        self._mem.append({'s': np.array(s), 'a': np.array(a), 'r': np.array(r), 'terminal': np.array(terminal),
+                          'truncated': truncated, 'w': w})
         self._recompute_weights = True
 
     def to_np_arrays(self,
@@ -164,8 +166,8 @@ class TrajectoryMemory:
         else:
             dtype = {name: dtype for name in [*self._dtypes.keys(), 'w']}
 
-        mem = {'s': [], 'a': [], 'r': [], 'terminal': [], 'w': []}
-        masks = {'s': [], 'a': [], 'r': [], 'terminal': [], 'w': []}
+        mem = {'s': [], 'a': [], 'r': [], 'terminal': [], 'truncated': [], 'w': []}
+        masks = {'s': [], 'a': [], 'r': [], 'terminal': [], 'truncated': [], 'w': []}
 
         for traj in self._mem:
             for name, data in traj.items():
@@ -177,7 +179,7 @@ class TrajectoryMemory:
                     if len(data) != self.longest_trajectory:
                         diff = self.longest_trajectory - len(data)
                         padding_shape = (diff, *self._shapes[name])
-                        if name == 'terminal' and pad_last_terminal_flag:
+                        if name in ('terminal', 'truncated') and pad_last_terminal_flag:
                             filler = np.full(padding_shape, fill_value=data[-1], dtype=dtype[name])
                         elif name == 'r' and pad_last_reward:
                             filler = np.full(padding_shape, fill_value=data[-1], dtype=dtype[name])
@@ -228,22 +230,24 @@ class TrajectoryMemory:
         return self[indices]
 
     def plot_stats(self, bins: int):
-        lengths, actions, rewards, terminals = [], [], [], []
+        lengths, actions, rewards, terminals, truncateds = [], [], [], [], []
 
         for t in self:
             lengths.append(len(t['s']))
             actions.extend([a.tolist() for a in t['a']])
             rewards.extend(t['r'])
             terminals.extend([t.astype(int) for t in t['terminal']])
+            terminals.extend([t.astype(int) for t in t['truncated']])
 
         a_bins = len(np.unique(actions)) if len(np.unique(actions)) < bins else bins
         r_bins = len(set(rewards)) if len(set(rewards)) < bins else bins
         term_bins = len(set(terminals)) if len(set(terminals)) < bins else bins
+        trunc_bins = len(set(truncateds)) if len(set(truncateds)) < bins else bins
         len_bins = len(set(lengths)) if len(set(lengths)) < bins else bins
 
         print('start plotting, this may take a while...')
 
-        fig, ax = plt.subplots(2, 2, figsize=(10, 10))
+        fig, ax = plt.subplots(2, 3, figsize=(10, 10))
         fig.suptitle(f'Statistics over {len(self)} Trajectories')
 
         ax.flat[0].hist(actions, bins=a_bins, rwidth=0.5)
@@ -252,8 +256,10 @@ class TrajectoryMemory:
         ax.flat[1].set_title('rewards')
         ax.flat[2].hist(terminals, bins=term_bins, rwidth=0.5)
         ax.flat[2].set_title('terminal flags')
-        ax.flat[3].hist(lengths, bins=len_bins, rwidth=0.5)
-        ax.flat[3].set_title('episode lengths')
+        ax.flat[3].hist(truncateds, bins=trunc_bins, rwidth=0.5)
+        ax.flat[3].set_title('truncated flags')
+        ax.flat[4].hist(lengths, bins=len_bins, rwidth=0.5)
+        ax.flat[4].set_title('episode lengths')
         plt.show()
 
     @staticmethod
@@ -279,19 +285,22 @@ class TrajectoryMemory:
         return mem
 
     @staticmethod
-    def _detect_dtypes(s, a, r, terminal) -> Dict:
-        data_dtypes = {k: np.array(x).dtype for k, x in zip(('s', 'a', 'r', 'terminal'), (s, a, r, terminal))}
+    def _detect_dtypes(s, a, r, terminal, truncated) -> Dict:
+        data_dtypes = {k: np.array(x).dtype for k, x in
+                       zip(('s', 'a', 'r', 'terminal', 'truncated'), (s, a, r, terminal, truncated))}
         return data_dtypes
 
     @staticmethod
-    def _detect_shapes(s, a, r, terminal) -> Dict:
-        data_shapes = {k: np.shape(x)[1:] for k, x in zip(('s', 'a', 'r', 'terminal'), (s, a, r, terminal))}
+    def _detect_shapes(s, a, r, terminal, truncated) -> Dict:
+        data_shapes = {k: np.shape(x)[1:] for k, x in
+                       zip(('s', 'a', 'r', 'terminal', 'truncated'), (s, a, r, terminal, truncated))}
         return data_shapes
 
 
     @staticmethod
-    def _detect_lengths(s, a, r, terminal) -> Dict:
-        data_lengths = {k: np.shape(x)[0] for k, x in zip(('s', 'a', 'r', 'terminal'), (s, a, r, terminal))}
+    def _detect_lengths(s, a, r, terminal, truncated) -> Dict:
+        data_lengths = {k: np.shape(x)[0] for k, x in
+                        zip(('s', 'a', 'r', 'terminal', 'truncated'), (s, a, r, terminal, truncated))}
         data_lengths['w'] = 0
         return data_lengths
 
@@ -313,7 +322,8 @@ class TrajectoryMemory:
 
     @staticmethod
     def _lengths_match(lengths) -> bool:
-        return lengths['a'] == lengths['r'] and lengths['a'] == lengths['terminal'] and lengths['a'] == lengths['s']
+        return lengths['a'] == lengths['r'] and lengths['a'] == lengths['terminal'] and lengths['a'] == lengths['s'] \
+            and lengths['a'] == lengths['truncated']
 
 
 def flatten_and_unsqueeze(*xs: Union[torch.Tensor, np.ndarray]) -> Union[Tuple[torch.Tensor], Tuple[np.ndarray],
