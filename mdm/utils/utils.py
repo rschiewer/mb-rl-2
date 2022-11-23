@@ -1,8 +1,9 @@
 from enum import Enum, auto
 from inspect import stack
 from pathlib import Path
-from typing import Union, Dict, Tuple, TypeVar, Sequence, Iterable
+from typing import Union, Dict, Tuple, TypeVar, Sequence, Iterable, List
 from itertools import product
+import pickle
 import sys
 import re
 import io
@@ -22,7 +23,8 @@ from mdm.memory.trajectory_memory import flatten_and_unsqueeze, TrajectoryMemory
 
 
 SliceType = TypeVar("SliceType", bound=Sequence)
-basic_dtype = TypeVar('basic_dtype', int, float, np.single, np.double, bool)
+BasicDtype = TypeVar('BasicDtype', int, float, np.single, np.double, bool)
+DataType = TypeVar('DataType', int, float, np.single, np.double, bool, np.ndarray)
 
 
 class DistributionType(Enum):
@@ -289,6 +291,19 @@ def to_np_arrays(mem: list, dtypes: Sequence = None, padding: Sequence = None):
     #trunc_np = ma.array(trunc_np, mask=mask)
 
     return o_np, a_np, r_np, term_np, trunc_np, mask
+
+
+def load_memory(path: Union[str, Path]) -> List[Dict[str, DataType]]:
+    with open(path, 'rb') as f:
+        mem = pickle.load(f)
+    return mem
+
+
+def store_memory(mem: List[Dict[str, DataType]],
+                 path: Union[str, Path]) -> bool:
+    with open(path, 'wb') as f:
+        pickle.dump(mem, f)
+    return True
 
 
 def compute_returns(mem: TrajectoryMemory, gamma: float = 0.99):

@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from mdm.training.gym_driver import GymEpisodeDriver
 from mdm.memory.trajectory_memory import TrajectoryMemory
 from mdm.gridworld.gridworld import Gridworld, CellType, FullyObservableGridworld
-from mdm.utils.utils import here, to_np_arrays
+from mdm.utils.utils import here, to_np_arrays, store_memory
 
 
 class TabularQLearningPolicy:
@@ -183,12 +183,9 @@ if __name__ == '__main__':
     train_mem = train_mem[n_episodes_test:]
     test_mem = train_mem[:n_episodes_test]
 
+    store_memory(train_mem, here() / f'gridworld_{map_version}_train.samples')
+    store_memory(test_mem, here() / f'gridworld_{map_version}_test.samples')
     #TrajectoryMemory.store(train_mem, here() / f'gridworld_{map_version}_train.samples')
     #TrajectoryMemory.store(test_mem, here() / f'gridworld_{map_version}_test.samples')
-    with open(here() / f'gridworld_{map_version}_train.samples', 'wb') as f:
-        pickle.dump(train_mem, f)
-
-    with open(here() / f'gridworld_{map_version}_test.samples', 'wb') as f:
-        pickle.dump(test_mem, f)
 
 

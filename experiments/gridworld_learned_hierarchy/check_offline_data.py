@@ -5,7 +5,7 @@ import numpy as np
 
 from mdm.gridworld.gridworld import Gridworld, FullyObservableGridworld
 from mdm.memory.trajectory_memory import TrajectoryMemory
-from mdm.utils.utils import here, load_yaml
+from mdm.utils.utils import here, load_yaml, load_memory
 from mdm.utils.analysis_tools import plot_trajectory_stats
 
 
@@ -16,10 +16,8 @@ if __name__ == '__main__':
     env = Gridworld.from_cleartext(here() / f'../../mdm/gridworld/8x8_{map_version}.mapdata')
     #env = FullyObservableGridworld(env)
 
-    with open(here() / cfg['train_samples'], 'rb') as f:
-        train_mem = pickle.load(f)
-    with open(here() / cfg['test_samples'], 'rb') as f:
-        test_mem = pickle.load(f)
+    train_mem = load_memory(here() / cfg['train_samples'])
+    test_mem = load_memory(here() / cfg['test_samples'])
 
     plot_trajectory_stats(train_mem, bins=20)
     plot_trajectory_stats(test_mem, bins=20)
