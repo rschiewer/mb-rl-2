@@ -237,7 +237,7 @@ class TrajectoryMemory:
             actions.extend([a.tolist() for a in t['a']])
             rewards.extend(t['r'])
             terminals.extend([t.astype(int) for t in t['terminal']])
-            terminals.extend([t.astype(int) for t in t['truncated']])
+            truncateds.extend([t.astype(int) for t in t['truncated']])
 
         a_bins = len(np.unique(actions)) if len(np.unique(actions)) < bins else bins
         r_bins = len(set(rewards)) if len(set(rewards)) < bins else bins
