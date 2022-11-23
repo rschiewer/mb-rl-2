@@ -183,6 +183,7 @@ def plot_plan(env: Gridworld, traj_history: Dict[str, torch.Tensor], n_plot_step
 
 def plot_trajectory_stats(mem, bins: int):
     lengths, actions, rewards, terminals, truncateds = [], [], [], [], []
+    successful = 0
 
     for t in mem:
         lengths.append(len(t['o']))
@@ -190,26 +191,36 @@ def plot_trajectory_stats(mem, bins: int):
         rewards.extend(t['r'])
         terminals.extend([t.astype(int) for t in t['terminal']])
         truncateds.extend([t.astype(int) for t in t['truncated']])
+        successful += t['terminal'][-1]
 
-    a_bins = len(np.unique(actions)) if len(np.unique(actions)) < bins else bins
-    r_bins = len(set(rewards)) if len(set(rewards)) < bins else bins
-    term_bins = len(set(terminals)) if len(set(terminals)) < bins else bins
-    trunc_bins = len(set(truncateds)) if len(set(truncateds)) < bins else bins
-    len_bins = len(set(lengths)) if len(set(lengths)) < bins else bins
+    terminal_false, terminal_true = np.bincount(terminals) / len(terminals)
+    truncated_false, truncated_true = np.bincount(truncateds) / len(truncateds)
+    successful_false, successful_true = 1 - successful/len(mem), successful/len(mem)
+
+    a_bins = min(len(np.unique(actions)), bins)
+    r_bins = min(len(set(rewards)), bins)
+    len_bins = min(len(set(lengths)), bins)
 
     print('start plotting, this may take a while...')
 
-    fig, ax = plt.subplots(2, 3, figsize=(10, 10))
+    fig, ax = plt.subplots(2, 3, figsize=(16, 10))
     fig.suptitle(f'Statistics over {len(mem)} Trajectories')
 
-    ax.flat[0].hist(actions, bins=a_bins, rwidth=0.5)
     ax.flat[0].set_title('actions')
-    ax.flat[1].hist(rewards, bins=r_bins, rwidth=0.5)
+    ax.flat[0].hist(actions, bins=a_bins, rwidth=0.5)
+
     ax.flat[1].set_title('rewards')
-    ax.flat[2].hist(terminals, bins=term_bins, rwidth=0.5)
+    ax.flat[1].hist(rewards, bins=r_bins, rwidth=0.5)
+
     ax.flat[2].set_title('terminal flags')
-    ax.flat[3].hist(truncateds, bins=trunc_bins, rwidth=0.5)
+    ax.flat[2].pie([terminal_true, terminal_false], labels=['true', 'false'], autopct='%1.1f%%')
+
     ax.flat[3].set_title('truncated flags')
-    ax.flat[4].hist(lengths, bins=len_bins, rwidth=0.5)
+    ax.flat[3].pie([truncated_true, truncated_false], labels=['true', 'false'], autopct='%1.1f%%')
+
     ax.flat[4].set_title('episode lengths')
+    ax.flat[4].hist(lengths, bins=len_bins, rwidth=0.5)
+
+    ax.flat[5].set_title('successful episodes')
+    ax.flat[5].pie([successful_true, successful_false], labels=['true', 'false'], autopct='%1.1f%%')
     plt.show()
