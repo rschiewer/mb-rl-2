@@ -1,4 +1,4 @@
-from typing import Union, Tuple, Sequence, Dict, TypeVar
+from typing import Union, Tuple, Sequence, Dict, TypeVar, List
 from itertools import product
 
 import gym
@@ -10,7 +10,7 @@ from mdm.models.building_blocks import RnnStateType
 from mdm.planning.cem_planner import CrossentropyPlanner, TensorData
 from mdm.utils.utils import SliceType, to_onehot, prepare_data, flatten_and_unsqueeze, sensitivity_analysis
 from mdm.utils.torch_tools import (extract_sub_distribution, bin_every_k_steps, pack_rnn_state, unpack_rnn_state,
-                                   TensorIndex)
+                                   TensorIndex, to_tensors)
 
 
 def update_history(history: Dict[str, torch.Tensor],
@@ -73,6 +73,39 @@ def plan_prim_free(model: MultiscaleDynamicsModelMK2,
     return a[i_win[0]], data
 
 
+def plan_prim_with_warmup(model: MultiscaleDynamicsModelMK2,
+                          planner_prim: object,
+                          env_data: Dict[str, List[torch.Tensor]],
+                          n_plan_steps: int,
+                          n_rollouts: int):
+    o_start_batch = torch.stack(env_data['prim_o']).repeat(1, n_rollouts, 1, 1)
+    a_start_batch = torch.stack(env_data['prim_a']).repeat(1, n_rollouts, 1)
+    r_start_batch = torch.stack(env_data['prim_r']).repeat(1, n_rollouts, 1)
+    term_start_batch = torch.stack(env_data['prim_term']).repeat(1, n_rollouts, 1)
+    n_posterior_steps = o_start_batch.shape[0]
+
+    def _rollout_fn(_a: torch.Tensor):
+        _a = to_onehot(_a, n_classes=model.primitive_model.d_action)
+        _a = _a.swapaxes(0, 1)
+        _a = torch.cat([a_start_batch, _a], dim=0)
+        _mem, _prim_final = model.rollout_primitive(a=_a, o=o_start_batch, r=r_start_batch, term=term_start_batch,
+                                                    n_posterior_steps=n_posterior_steps, sample=True)
+
+        _criterion = torch.stack(_mem['prim_r'], dim=1).squeeze(-1)
+        _confidence = torch.stack([d.scale for d in _mem['prim_r_dist']], dim=1).squeeze(-1)
+        _criterion -= _confidence
+        _discount = torch.stack(_mem['prim_term'], dim=1).squeeze(-1)
+        return _criterion, _discount, _mem
+
+    a, a_dist, i_win, R_win, data = planner_prim.plan(rollout_fn=_rollout_fn, n_rollouts=n_rollouts,
+                                                      n_plan_steps=n_plan_steps)
+
+    # select winner per per memory element per timestep
+    data = select_batch_items(data, i_win[0], keepdim=True)
+    # CAUTION: the actions from planner are without the already performed warmup acitons!
+    return a[i_win[0]], data
+
+
 def plan_prim_chunk(model: MultiscaleDynamicsModelMK2,
                     planner_prim: object,
                     prim_rnn_state: RnnStateType,
@@ -99,7 +132,7 @@ def plan_prim_chunk(model: MultiscaleDynamicsModelMK2,
         def _rollout_fn(_a: torch.Tensor):
             _a = to_onehot(_a, n_classes=model.d_action)
             _a = _a.swapaxes(0, 1)
-            _mem, _prim_final = model.rollout_primitive(a=_a, z=z_start, rnn_state=rnn_state_start, sample=False)
+            _mem, _prim_final = model.rollout_primitive(a=_a, z=z_start, rnn_state=rnn_state_start, sample=True)
 
             _abstr_r_rollout = model.calc_abstr_r_ground_truth(_mem['prim_r'])[:, -1]
             _abstr_term_rollout = model.calc_abstr_term_ground_truth(_mem['prim_term'])[:, -1]
@@ -135,7 +168,7 @@ def plan_abstr(model: MultiscaleDynamicsModelMK2,
         elif model.abstract_action_model.distribution_type == 'categorical':
             _a = to_onehot(_a, model.abstract_model.d_action)
         _mem, _abstr_final = model.rollout_abstract(a=_a, z=z_start, rnn_state=rnn_state_start,
-                                                    n_posterior_steps=0, sample=False)
+                                                    n_posterior_steps=0, sample=True)
         _mem = model.pack_mem(_mem)
 
         _criterion = _mem['abstr_r'].squeeze(-1)
@@ -156,19 +189,22 @@ def collect_groundtruth_data(model: MultiscaleDynamicsModelMK2,
                              predefined_actions: Sequence = ()):
     # prepare actions and first step's data (note: only the initial observation contains real environment info)
     n_a_required = n_steps - 1 - len(predefined_actions)
-    groundtruth_data = {'a': [], 'o': [], 'r': [], 'term': []}
+    groundtruth_data = {'a': [], 'o': [], 'r': [], 'term': [], 'trunc': []}
     groundtruth_data['a'] += [0] + list(predefined_actions) + [env.action_space.sample() for _ in range(n_a_required)]
-    groundtruth_data['o'].append(env.reset())
+    groundtruth_data['o'].append(env.reset()[0])
     groundtruth_data['r'].append(0.0)
     groundtruth_data['term'].append(0.0)
+    groundtruth_data['trunc'].append(0.0)
 
     # collect ground truth observations, rewards and terminal flags
     for a in groundtruth_data['a'][1:]:  # first action is placeholder by convention, don't execute it
-        o, r, term, _ = env.step(a)
+        o, r, term, trunc, _ = env.step(a)
         groundtruth_data['o'].append(o)
         groundtruth_data['r'].append(r)
         groundtruth_data['term'].append(term)
-        if term:
+        groundtruth_data['trunc'].append(trunc)
+
+        if term or trunc:
             raise RuntimeError('Environment terminated during warmup')
 
     # batch and convert groundtruth data
@@ -176,9 +212,11 @@ def collect_groundtruth_data(model: MultiscaleDynamicsModelMK2,
     a = torch.tensor(groundtruth_data['a'])
     r = torch.tensor(groundtruth_data['r'])
     term = torch.tensor(groundtruth_data['term'])
-    o, a, r, term = o.to(model.device), a.to(model.device), r.to(model.device), term.to(model.device)
-    o, a, r, term = o.unsqueeze(0), a.unsqueeze(0), r.unsqueeze(0), term.unsqueeze(0)  # need batch dim for preparation
-    o, a, r, term = prepare_data(o, a, r, term, env)
+    trunc = torch.tensor(groundtruth_data['trunc'])
+    mask = torch.zeros_like(r)
+    o, a, r, term, trunc, mask = [x.to(model.device) for x in (o, a, r, term, trunc, mask)]
+    o, a, r, term, trunc, mask = [x.unsqueeze(0) for x in (o, a, r, term, trunc, mask)]
+    o, a, r, term, trunc, mask = prepare_data(o, a, r, term, trunc, mask, env)
 
     # use lists instead of tensor objects to match new convention
     # this is ugly but works
@@ -203,7 +241,7 @@ def init_prim_s(model: MultiscaleDynamicsModelMK2,
     term_start_batch = torch.stack(history['prim_term'])
 
     mem, prim_current = model.rollout_primitive(a=a_start_batch, o=o_start_batch, r=r_start_batch,
-                                                term=term_start_batch, n_posterior_steps=-1, sample=False)
+                                                term=term_start_batch, n_posterior_steps=-1, sample=True)
 
     o_start_batch = o_start_batch.squeeze().argmax(-1)
     r_start_batch = r_start_batch.squeeze()
@@ -245,7 +283,7 @@ def init_abstr_s(model: MultiscaleDynamicsModelMK2,
         def _rollout_fn(_a: torch.Tensor):
             _a = to_onehot(_a, n_classes=model.d_action)
             _a = _a.swapaxes(0, 1)
-            _mem, _prim_final = model.rollout_primitive(a=_a, z=z_batch, rnn_state=rnn_state_batch, sample=False)
+            _mem, _prim_final = model.rollout_primitive(a=_a, z=z_batch, rnn_state=rnn_state_batch, sample=True)
 
             _criterion = torch.stack(_mem['prim_r'], dim=1).squeeze(-1)
             _discount = torch.stack(_mem['prim_term'], dim=1).squeeze(-1)
@@ -317,7 +355,7 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
     z_start = history['prim_z'][-1].repeat(n_rollouts, 1)
     rnn_state_start = unpack_rnn_state(pack_rnn_state(history['prim_rnn_state'][-1]).repeat(n_rollouts, 1, 1, 1))
     target = history['abstr_o'][i_section].repeat(n_rollouts, *[1 for _ in model.abstract_model.o_shape])
-    target = torch.flatten(target, start_dim=1)
+    #target = torch.flatten(target, start_dim=1)
     target_dist = history['abstr_o_dist'][i_section]
     target_dist = target_dist.expand((n_rollouts, *target_dist.batch_shape[1:]))
     r_goal = history['abstr_r'][i_section].repeat(n_rollouts, 1)
@@ -328,11 +366,13 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
         _mem, _prim_final = model.rollout_primitive(a=_a, z=z_start, rnn_state=rnn_state_start, sample=True)
 
         _targets_rollout = _mem[model.abstr_pred_target][-1]
-        _targets_rollout = torch.abs(_targets_rollout - 1e-5)
-        _targets_rollout /= _targets_rollout.sum(axis=-1, keepdims=True)
+        _criterion = - torch.flatten((target - _targets_rollout) ** 2, start_dim=1).sum(dim=1, keepdim=True)
+        #_targets_rollout = torch.abs(_targets_rollout - 1e-5)
+        #_targets_rollout /= _targets_rollout.sum(axis=-1, keepdims=True)
 
-        _criterion = target_dist.log_prob(_targets_rollout).sum(axis=-1, keepdims=True)
-        #_rollout_r = model.calc_abstr_r_ground_truth(torch.stack(_mem['prim_r']))[0]
+        #_criterion = target_dist.log_prob(_targets_rollout).sum(axis=-1, keepdims=True)
+        _rollout_r = model.calc_abstr_r_ground_truth(torch.stack(_mem['prim_r']))[0]
+        #_criterion -= torch.mean((r_goal - _rollout_r) ** 2, dim=0)
         #_rollout_goal = torch.flatten(_mem[model.abstr_pred_target][-1], start_dim=1)
         # TODO: test KL divergence between distributions
         #_criterion = - torch.mean((_rollout_goal - target) ** 2, dim=1, keepdim=True)

@@ -22,7 +22,6 @@ from mdm.logging.not_logger import NotLogger
 from mdm.logging.logger import Scope
 
 
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Provide neptune run_id for loading the correct model')
     parser.add_argument('id', type=str, nargs=1)
@@ -62,28 +61,32 @@ if __name__ == '__main__':
 
         trajectory_history = mdl.gen_mem()
         trajectory_history = collect_groundtruth_data(mdl, trajectory_history, env, planning_cfg['n_warmup_prim'])
-        trajectory_history = init_prim_s(mdl, trajectory_history)
-        rnn_state = trajectory_history['prim_rnn_state'][-1]
-        z = trajectory_history['prim_z'][-1]
-        a, i_win = plan_prim_free(mdl, planner_prim, rnn_state, z, planning_cfg['n_plan_steps_prim'],
-                                  planning_cfg['n_rollouts'])
+        #trajectory_history = init_prim_s(mdl, trajectory_history)
+        #rnn_state = trajectory_history['prim_rnn_state'][-1]
+        #z = trajectory_history['prim_z'][-1]
+        #a, i_win = plan_prim_free(mdl, planner_prim, rnn_state, z, planning_cfg['n_plan_steps_prim'],
+        #                          planning_cfg['n_rollouts'])
+        a, i_win = plan_prim_with_warmup(mdl, planner_prim, trajectory_history, planning_cfg['n_plan_steps_prim'],
+                                         planning_cfg['n_rollouts'])
 
         action_iter = iter(a.detach().cpu().numpy())
 
         #plot_plan(env, trajectory_history, 20)
         i_step = planning_cfg['n_warmup_prim']
-        terminal = False
-        while not terminal:
+        done = False
+        while not done:
             if args.render:
                 env.render()
             i_step += 1
             try:
                 a = next(action_iter)
-                s_, r, terminal, info = env.step(a)
+                s_, r, terminal, truncated, info = env.step(a)
 
                 action_stats[a] += 1
-                if terminal and r > 0:
+                if terminal:
                     succeeded += 1
+
+                done = terminal or truncated
             except StopIteration:
                 break
 

@@ -112,18 +112,20 @@ if __name__ == '__main__':
         plan_checkpoints = (trajectory_history['abstr_o'][0].detach().cpu().numpy() + 0.5) * 7
         #plot_plan(env, trajectory_history, 20)
         i_step = planning_cfg['n_warmup_prim']
-        terminal = False
-        while not terminal:
+        done = False
+        while not done:
             if args.render:
                 env.render()
             i_step += 1
             try:
                 a = next(action_iter)
-                s_, r, terminal, info = env.step(a)
+                s_, r, terminal, truncated, info = env.step(a)
 
                 action_stats[a] += 1
-                if terminal and r > 0:
+                if terminal:
                     succeeded += 1
+
+                done = terminal or truncated
             except StopIteration:
                 break
 
