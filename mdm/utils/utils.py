@@ -1,26 +1,25 @@
+import io
+import pickle
+import re
+import sys
 from enum import Enum, auto
 from inspect import stack
-from pathlib import Path
-from typing import Union, Dict, Tuple, TypeVar, Sequence, Iterable, List
 from itertools import product
-import pickle
-import sys
-import re
-import io
+from pathlib import Path
+from typing import Union, Dict, Tuple, TypeVar, Sequence, List
 
 import gym
+import matplotlib.animation as animation
+import matplotlib.pyplot as plt
 import numpy as np
 import numpy.ma as ma
-import yaml
-import torch
-import matplotlib.pyplot as plt
-import matplotlib.animation as animation
 import pandas as pd
+import torch
+import yaml
 from PIL import Image
 
 from mdm.gridworld.gridworld import Gridworld, CellType
 from mdm.memory.trajectory_memory import flatten_and_unsqueeze, TrajectoryMemory
-
 
 SliceType = TypeVar("SliceType", bound=Sequence)
 BasicDtype = TypeVar('BasicDtype', int, float, np.single, np.double, bool)
@@ -225,9 +224,12 @@ def prepare_data(s: Union[np.ndarray, torch.Tensor],
                  a: Union[np.ndarray, torch.Tensor],
                  r: Union[np.ndarray, torch.Tensor],
                  terminal: Union[np.ndarray, torch.Tensor],
+                 truncated: Union[np.ndarray, torch.Tensor],
+                 mask: Union[np.ndarray, torch.Tensor],
                  env: Gridworld) -> Tuple[Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
+                                          Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
                                           Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray]]:
-    s, a, r, terminal = flatten_and_unsqueeze(s, a, r, terminal)
+    s, a, r, terminal, truncated, mask = flatten_and_unsqueeze(s, a, r, terminal, truncated, mask)
     s = to_onehot(s, max(env.grid_w, env.grid_h))
     #s = normalize_obs(s, env)
     a = to_onehot(a, env.action_space.n)  # don't care about the action being [1, 0, ... ] if it's always this way
@@ -236,11 +238,13 @@ def prepare_data(s: Union[np.ndarray, torch.Tensor],
     a = a.swapaxes(0, 1)
     r = r.swapaxes(0, 1)
     terminal = terminal.swapaxes(0, 1)
+    truncated = truncated.swapaxes(0, 1)
+    mask = mask.swapaxes(0, 1)
 
-    return s, a, r, terminal
+    return s, a, r, terminal, truncated, mask
 
 
-def to_np_arrays(mem: list, dtypes: Sequence = None, padding: Sequence = None):
+def to_np_arrays(mem: List[Dict[str, DataType]], dtypes: Sequence = None, padding: Sequence = None):
     if dtypes is None:
         dtypes = (float, float, float, float, float)
     if padding is None:

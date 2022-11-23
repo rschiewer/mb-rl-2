@@ -1,4 +1,4 @@
-from typing import Tuple, Union, Iterable, List, Sequence, TypeVar
+from typing import Tuple, Union, Iterable, List, Sequence, TypeVar, Dict
 from enum import Enum
 from collections import namedtuple, OrderedDict
 from functools import reduce, wraps
@@ -7,7 +7,7 @@ from math import ceil
 import torch
 import torch.jit as jit
 
-from mdm.utils.utils import SliceType
+from mdm.utils.utils import SliceType, DataType
 
 
 RnnStateType = TypeVar('RnnStateType', torch.Tensor, Tuple[torch.Tensor, torch.Tensor])
@@ -537,3 +537,49 @@ def pack_rnn_state(rnn_state: RnnStateType):
         return torch.stack([rnn_state[0].transpose(0, 1), rnn_state[1].transpose(0, 1)], dim=-2)
     else:
         return torch.stack([rnn_state.transpose(0, 1)], dim=-2)
+
+
+def to_tensors(mem: List[Dict[str, DataType]],
+               device: torch.device,
+               dtypes: Sequence = None,
+               padding: Sequence = None):
+    if dtypes is None:
+        dtypes = (torch.float32, torch.float32, torch.float32, torch.float32, torch.float32)
+    if padding is None:
+        padding = (0.0, 0.0, 0.0, 0.0, 0.0)
+    n_trajectories = len(mem)
+
+    # find out shapes
+    s_o = mem[0]['o'].shape[1:]
+    s_a = mem[0]['a'].shape[1:]
+
+    # collect data
+    o, a, r, term, trunc, lengths = [], [], [], [], [], []
+    for traj in mem:
+        o.append(torch.from_numpy(traj['o']))
+        a.append(torch.from_numpy(traj['a']))
+        r.append(torch.from_numpy(traj['r']))
+        term.append(torch.from_numpy(traj['terminal']))
+        trunc.append(torch.from_numpy(traj['truncated']))
+        lengths.append(len(traj['o']))
+    longest = max(lengths)
+
+    # prepare memory containers
+    o_torch = torch.full((n_trajectories, longest, *s_o), fill_value=padding[0], dtype=dtypes[0], device=device)
+    a_torch = torch.full((n_trajectories, longest, *s_a), fill_value=padding[1], dtype=dtypes[1], device=device)
+    r_torch = torch.full((n_trajectories, longest), fill_value=padding[1], dtype=dtypes[2], device=device)
+    term_torch = torch.full((n_trajectories, longest), fill_value=padding[1], dtype=dtypes[3], device=device)
+    trunc_torch = torch.full((n_trajectories, longest), fill_value=padding[1], dtype=dtypes[4], device=device)
+    mask = torch.full_like(r_torch, True)
+
+    # copy data
+    for i in range(n_trajectories):
+        o_torch[i, 0:lengths[i]] = o[i]
+        a_torch[i, 0:lengths[i]] = a[i]
+        r_torch[i, 0:lengths[i]] = r[i]
+        term_torch[i, 0:lengths[i]] = term[i]
+        trunc_torch[i, 0:lengths[i]] = trunc[i]
+        mask[i, 0:lengths[i]] = False
+
+    return o_torch, a_torch, r_torch, term_torch, trunc_torch, mask
+

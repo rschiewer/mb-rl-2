@@ -1,6 +1,7 @@
 from pathlib import Path
 import io
 import argparse
+import pickle
 
 import matplotlib.pyplot as plt
 import torch
@@ -8,8 +9,8 @@ import numpy as np
 from PIL import Image
 
 from mdm.gridworld.gridworld import Gridworld, FullyObservableGridworld
-from mdm.utils.utils import here, load_yaml, prepare_data, discrete_stats, compute_returns, fig_to_img
-from mdm.utils.torch_tools import get_mu, get_sigma, bin_every_k_steps
+from mdm.utils.utils import here, load_yaml, prepare_data, discrete_stats, compute_returns, fig_to_img, load_memory
+from mdm.utils.torch_tools import get_mu, get_sigma, bin_every_k_steps, to_tensors
 from mdm.models.building_blocks import RSSM, AbstractActionModel, OneHotDecoder, OneHotEncoder, GaussianDecoder, BinomialDecoder
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.training.dynamics_model_trainer import DynamicsModelTrainer
@@ -146,11 +147,12 @@ if __name__ == '__main__':
     #                        replan_interval_abstr=3, n_warmup_prim=3, n_warmup_abstr=1)
     # planning_driver = GymEpisodeDriver(env, policy)
 
-    train_mem = TrajectoryMemory.load(here() / cfg['train_samples'])
-    compute_returns(train_mem)
+    # TODO: implement list memory here
+    train_mem = load_memory(here() / cfg['train_samples'])
+    #train_mem = TrajectoryMemory.load(here() / cfg['train_samples'])
     train_driver = OfflineRLDriver(train_mem, sampling_type=SamplingType.RANDOM)
-    test_mem = TrajectoryMemory.load(here() / cfg['test_samples'])
-    compute_returns(test_mem)
+    #test_mem = TrajectoryMemory.load(here() / cfg['test_samples'])
+    test_mem = load_memory(here() / cfg['test_samples'])
     test_driver = OfflineRLDriver(test_mem, sampling_type=SamplingType.RANDOM)
 
     if args.log:
@@ -163,11 +165,13 @@ if __name__ == '__main__':
     d_batch, pad = cfg['trainer']['d_batch'], cfg['trainer']['pad_last_terminal_flag']
 
     def get_batch_train(i_step):
-        s, a, r, terminal, w = train_driver.interact(d_batch).to_np_arrays(dtype=np.float32,
-                                                                           pad_last_terminal_flag=pad,
-                                                                           pad_last_reward=pad)
-        s, a, r, terminal = prepare_data(s, a, r, terminal, env)
-        return s, a, r, terminal
+        batch = train_driver.interact(d_batch)
+        s, a, r, terminal, truncated, mask = to_tensors(batch, model.device)
+        #s, a, r, terminal, w = train_driver.interact(d_batch).to_np_arrays(dtype=np.float32,
+        #                                                                   pad_last_terminal_flag=pad,
+        #                                                                   pad_last_reward=pad)
+        s, a, r, terminal, truncated, mask = prepare_data(s, a, r, terminal, truncated, mask, env)
+        return s, a, r, terminal, truncated, mask
 
 
     #def get_batch_train(i_step):
@@ -185,15 +189,17 @@ if __name__ == '__main__':
 
 
     def get_batch_test(i_step):
-        s, a, r, terminal, w = test_driver.interact(d_batch).to_np_arrays(dtype=np.float32,
-                                                                          pad_last_terminal_flag=pad,
-                                                                          pad_last_reward=pad)
+        #s, a, r, terminal, w = test_driver.interact(d_batch).to_np_arrays(dtype=np.float32,
+        #                                                                  pad_last_terminal_flag=pad,
+        #                                                                  pad_last_reward=pad)
+        batch = test_driver.interact(d_batch)
+        s, a, r, terminal, truncated, mask = to_tensors(batch, model.device)
         #experience = planning_driver.interact(1)
         #total_reward = experience[0]['r'].sum()
         #logger.log({'planning_r': total_reward}, Scope.TEST() / 'planning_reward', i_step)
         #s, a, r, terminal, w, = experience.to_np_arrays(dtype=np.float32, pad_last_terminal_flag=pad)
-        s, a, r, terminal = prepare_data(s, a, r, terminal, env)
-        return s, a, r, terminal
+        s, a, r, terminal, truncated, mask = prepare_data(s, a, r, terminal, truncated, mask, env)
+        return s, a, r, terminal, truncated, mask
 
     model_path = f'{cfg["final_model_path"]}_{cfg["mdm"]["abstract_step_size"]}.ptmdl'
 

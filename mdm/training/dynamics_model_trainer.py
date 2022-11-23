@@ -16,8 +16,8 @@ class DynamicsModelTrainer(ABC):
     def __init__(self,
                  model: DynamicsModel,
                  optimizer: torch.optim.Optimizer,
-                 get_batch_train: Callable[..., Tuple[np.array, np.array, np.array, np.array]],
-                 get_batch_test: Callable[..., Tuple[np.array, np.array, np.array, np.array]],
+                 get_batch_train: Callable[..., Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]],
+                 get_batch_test: Callable[..., Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]],
                  eval_interval: int = None,
                  scheduler: object = None,
                  logger: Logger = None,
@@ -51,9 +51,7 @@ class DynamicsModelTrainer(ABC):
 
         self.model.prepare_for_training()
         for i_step in step_iter:
-            s, a, r, term = self.get_batch_train(i_step)
-            s, a, r, term, mask = [torch.from_numpy(x).to(device=device, dtype=torch.float32) for x
-                                   in (s, a, r, term, r.mask)]
+            s, a, r, term, trunc, mask = self.get_batch_train(i_step)
 
             #with profile(activities=[ProfilerActivity.CPU], record_shapes=True) as prof:
             #    with record_function("model_training"):
@@ -64,17 +62,15 @@ class DynamicsModelTrainer(ABC):
                 self._update_progressbar_descr(last_eval_losses, train_losses, step_iter)
 
             if self.logger:
-                r_stats = {'r_raw': r, 'r_sum_ep': r.sum(axis=1), 'r_sum': r.sum(), 'r_mean': r.mean()}
-                #self.logger.log(self._to_np(r_stats), Scope.TRAIN, i_step)
                 self.logger.log(self._to_np(train_losses), Scope.TRAIN(), i_step)
 
             if self.scheduler:
                 self.scheduler.step()
 
             if self.eval_interval is not None and i_step % self.eval_interval == 0:
-                s, a, r, term = self.get_batch_test(i_step)
-                s, a, r, term, mask = [torch.from_numpy(x).to(device=device, dtype=torch.float32) for x in
-                                       (s, a, r, term, r.mask)]
+                s, a, r, term, trunc, mask = self.get_batch_test(i_step)
+                #s, a, r, term, mask = [torch.from_numpy(x).to(device=device, dtype=torch.float32) for x in
+                #                       (s, a, r, term, r.mask)]
 
                 self.model.eval()
                 eval_losses = self.model.eval_step(s, a, r, term, mask)
