@@ -179,3 +179,37 @@ def plot_plan(env: Gridworld, traj_history: Dict[str, torch.Tensor], n_plot_step
 
     plt.legend()
     plt.show()
+
+
+def plot_trajectory_stats(mem, bins: int):
+    lengths, actions, rewards, terminals, truncateds = [], [], [], [], []
+
+    for t in mem:
+        lengths.append(len(t['o']))
+        actions.extend([a.tolist() for a in t['a']])
+        rewards.extend(t['r'])
+        terminals.extend([t.astype(int) for t in t['terminal']])
+        truncateds.extend([t.astype(int) for t in t['truncated']])
+
+    a_bins = len(np.unique(actions)) if len(np.unique(actions)) < bins else bins
+    r_bins = len(set(rewards)) if len(set(rewards)) < bins else bins
+    term_bins = len(set(terminals)) if len(set(terminals)) < bins else bins
+    trunc_bins = len(set(truncateds)) if len(set(truncateds)) < bins else bins
+    len_bins = len(set(lengths)) if len(set(lengths)) < bins else bins
+
+    print('start plotting, this may take a while...')
+
+    fig, ax = plt.subplots(2, 3, figsize=(10, 10))
+    fig.suptitle(f'Statistics over {len(mem)} Trajectories')
+
+    ax.flat[0].hist(actions, bins=a_bins, rwidth=0.5)
+    ax.flat[0].set_title('actions')
+    ax.flat[1].hist(rewards, bins=r_bins, rwidth=0.5)
+    ax.flat[1].set_title('rewards')
+    ax.flat[2].hist(terminals, bins=term_bins, rwidth=0.5)
+    ax.flat[2].set_title('terminal flags')
+    ax.flat[3].hist(truncateds, bins=trunc_bins, rwidth=0.5)
+    ax.flat[3].set_title('truncated flags')
+    ax.flat[4].hist(lengths, bins=len_bins, rwidth=0.5)
+    ax.flat[4].set_title('episode lengths')
+    plt.show()

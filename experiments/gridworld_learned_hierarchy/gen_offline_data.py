@@ -1,3 +1,5 @@
+import random
+import pickle
 from multiprocessing import Pool
 
 from tqdm import tqdm
@@ -7,7 +9,7 @@ import matplotlib.pyplot as plt
 from mdm.training.gym_driver import GymEpisodeDriver
 from mdm.memory.trajectory_memory import TrajectoryMemory
 from mdm.gridworld.gridworld import Gridworld, CellType, FullyObservableGridworld
-from mdm.utils.utils import here
+from mdm.utils.utils import here, to_np_arrays
 
 
 class TabularQLearningPolicy:
@@ -48,12 +50,14 @@ class TabularQLearningPolicy:
         self.q[s_t[:, 0], s_t[:, 1], a_t] = new_q
         return diff
 
-    def train(self, mem: TrajectoryMemory, d_batch: int):
-        if len(mem) == 0: return
+    def train(self, mem: list, d_batch: int):
+        if len(mem) < d_batch: return
         if self._current_patience == 0: return
 
-        batch = mem.sample(d_batch, False)
-        s, a, r, terminal, w = batch.to_np_arrays(dtype=(int, int, float, bool, float))
+        batch = random.sample(mem, d_batch)
+        s, a, r, terminal, truncated, _ = to_np_arrays(batch, dtypes=(int, int, float, bool, bool))
+        #batch = mem.sample(d_batch, False)
+        #s, a, r, terminal, w = batch.to_np_arrays(dtype=(int, int, float, bool, float))
         delta = 0
 
         for s_t, a_t, r_t, term_t, s_tt in zip(s[:, :-1], a[:, 1:], r[:, 1:], terminal[:, 1:], s[:, 1:]):
@@ -137,7 +141,7 @@ if __name__ == '__main__':
     disjunct_train_test = False
     expert_trajectories = 0.80
 
-    train_mem = TrajectoryMemory()
+    train_mem = []#TrajectoryMemory()
     if expert_trajectories > 0:
         agent = TabularQLearningPolicy(env.grid_h, env.grid_w, env.action_space.n, 0.1, 0.99, 0.1,
                                        improvement_bound=1e-4, patience=10)
@@ -175,11 +179,16 @@ if __name__ == '__main__':
         #print(f'Removed {len(train_mem) - len(train_mem_cleaned_2)} duplicate trajectories from sample memory.')
 
     n_episodes_test = round(len(train_mem) * perc_test)
-    trai_mem = train_mem.shuffle()
+    random.shuffle(train_mem)
     train_mem = train_mem[n_episodes_test:]
     test_mem = train_mem[:n_episodes_test]
 
-    TrajectoryMemory.store(train_mem, here() / f'gridworld_{map_version}_train.samples')
-    TrajectoryMemory.store(test_mem, here() / f'gridworld_{map_version}_test.samples')
+    #TrajectoryMemory.store(train_mem, here() / f'gridworld_{map_version}_train.samples')
+    #TrajectoryMemory.store(test_mem, here() / f'gridworld_{map_version}_test.samples')
+    with open(here() / f'gridworld_{map_version}_train.samples', 'wb') as f:
+        pickle.dump(train_mem, f)
+
+    with open(here() / f'gridworld_{map_version}_test.samples', 'wb') as f:
+        pickle.dump(test_mem, f)
 
 

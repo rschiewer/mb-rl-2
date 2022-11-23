@@ -1,7 +1,7 @@
 from enum import Enum, auto
 from inspect import stack
 from pathlib import Path
-from typing import Union, Dict, Tuple, TypeVar, Sequence
+from typing import Union, Dict, Tuple, TypeVar, Sequence, Iterable
 from itertools import product
 import sys
 import re
@@ -22,6 +22,7 @@ from mdm.memory.trajectory_memory import flatten_and_unsqueeze, TrajectoryMemory
 
 
 SliceType = TypeVar("SliceType", bound=Sequence)
+basic_dtype = TypeVar('basic_dtype', int, float, np.single, np.double, bool)
 
 
 class DistributionType(Enum):
@@ -235,6 +236,59 @@ def prepare_data(s: Union[np.ndarray, torch.Tensor],
     terminal = terminal.swapaxes(0, 1)
 
     return s, a, r, terminal
+
+
+def to_np_arrays(mem: list, dtypes: Sequence = None, padding: Sequence = None):
+    if dtypes is None:
+        dtypes = (float, float, float, float, float)
+    if padding is None:
+        padding = (0.0, 0.0, 0.0, 0.0, 0.0)
+    n_trajectories = len(mem)
+
+    # find out shapes
+    s_o = mem[0]['o'].shape[1:]
+    s_a = mem[0]['a'].shape[1:]
+
+    # collect data
+    o, a, r, term, trunc, lengths = [], [], [], [], [], []
+    for traj in mem:
+        o.append(traj['o'])
+        a.append(traj['a'])
+        r.append(traj['r'])
+        term.append(traj['terminal'])
+        trunc.append(traj['truncated'])
+        lengths.append(len(traj['o']))
+    longest = max(lengths)
+
+    # prepare memory containers
+    o_np = np.full((n_trajectories, longest, *s_o), fill_value=padding[0], dtype=dtypes[0])
+    a_np = np.full((n_trajectories, longest, *s_a), fill_value=padding[1], dtype=dtypes[1])
+    r_np = np.full((n_trajectories, longest), fill_value=padding[1], dtype=dtypes[2])
+    term_np = np.full((n_trajectories, longest), fill_value=padding[1], dtype=dtypes[3])
+    trunc_np = np.full((n_trajectories, longest), fill_value=padding[1], dtype=dtypes[4])
+    #o_mask = np.full_like(o_np, True)
+    #a_mask = np.full_like(a_np, True)
+    mask = np.full_like(r_np, True)
+
+    # copy data
+    for i in range(n_trajectories):
+        o_np[i, 0:lengths[i]] = o[i]
+        a_np[i, 0:lengths[i]] = a[i]
+        r_np[i, 0:lengths[i]] = r[i]
+        term_np[i, 0:lengths[i]] = term[i]
+        trunc_np[i, 0:lengths[i]] = trunc[i]
+        #o_mask[i, 0:lengths[i]] = False
+        #a_mask[i, 0:lengths[i]] = False
+        mask[i, 0:lengths[i]] = False
+
+    # generate masked arrays
+    #o_np = ma.array(o_np, mask=o_mask)
+    #a_np = ma.array(a_np, mask=a_mask)
+    #r_np = ma.array(r_np, mask=mask)
+    #term_np = ma.array(term_np, mask=mask)
+    #trunc_np = ma.array(trunc_np, mask=mask)
+
+    return o_np, a_np, r_np, term_np, trunc_np, mask
 
 
 def compute_returns(mem: TrajectoryMemory, gamma: float = 0.99):
