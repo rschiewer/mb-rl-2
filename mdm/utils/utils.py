@@ -2,6 +2,7 @@ import io
 import pickle
 import re
 import sys
+import random
 from enum import Enum, auto
 from inspect import stack
 from itertools import product
@@ -226,13 +227,16 @@ def prepare_data(s: Union[np.ndarray, torch.Tensor],
                  terminal: Union[np.ndarray, torch.Tensor],
                  truncated: Union[np.ndarray, torch.Tensor],
                  mask: Union[np.ndarray, torch.Tensor],
-                 env: Gridworld) -> Tuple[Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
-                                          Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
-                                          Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray]]:
+                 env: Gridworld,
+                 subtrajectories: bool = False
+                 ) -> Tuple[Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
+                            Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
+                            Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray]]:
     s, a, r, terminal, truncated, mask = flatten_and_unsqueeze(s, a, r, terminal, truncated, mask)
     s = to_onehot(s, max(env.grid_w, env.grid_h))
     #s = normalize_obs(s, env)
     a = to_onehot(a, env.action_space.n)  # don't care about the action being [1, 0, ... ] if it's always this way
+
     # swap batch and time axis
     s = s.swapaxes(0, 1)
     a = a.swapaxes(0, 1)
@@ -240,6 +244,26 @@ def prepare_data(s: Union[np.ndarray, torch.Tensor],
     terminal = terminal.swapaxes(0, 1)
     truncated = truncated.swapaxes(0, 1)
     mask = mask.swapaxes(0, 1)
+
+    #s.masked_fill(~mask.to(torch.bool).unsqueeze(-1), 0)
+    #a.masked_fill(~mask.to(torch.bool), 0)
+    #r.masked_fill(~mask.to(torch.bool), 0)
+    #terminal.masked_fill(~mask.to(torch.bool), 0)
+    #truncated.masked_fill(~mask.to(torch.bool), 0)
+    mask[:] = 0
+
+    if subtrajectories:
+        # select a block of l_segment timesteps out of all trajectories
+        l_segment = 10
+        l_data = r.shape[0]
+        t_start = random.randint(0, l_data - l_segment)
+        t_end = t_start + l_segment
+        s = s[t_start:t_end]
+        a = a[t_start:t_end]
+        r = r[t_start:t_end]
+        terminal = terminal[t_start:t_end]
+        truncated = truncated[t_start:t_end]
+        mask = mask[t_start:t_end]
 
     return s, a, r, terminal, truncated, mask
 
