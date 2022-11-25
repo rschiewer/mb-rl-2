@@ -79,7 +79,7 @@ class CrossentropyMethodPlanner(unittest.TestCase):
     def test_planning_with_groundtruth(self):
         d_batch = 128
         n_opt_steps = 10
-        n_plan_steps = 100
+        n_plan_steps = 50
         winning_perc = 0.25
         discount = 0.99
         act_noise = 0.000
@@ -93,10 +93,10 @@ class CrossentropyMethodPlanner(unittest.TestCase):
             for i_env, env in enumerate(batched_envs):
                 env.reset()
                 for i_a, a in enumerate(actions[i_env]):
-                    s, r, done, info = env.step(a.detach().cpu().numpy())
+                    s, r, term, trunc, info = env.step(a.detach().cpu().numpy())
                     rewards[i_env, i_a] = r
-                    terminal_flags[i_env, i_a] = done
-                    if done:
+                    terminal_flags[i_env, i_a] = term
+                    if term or trunc:
                         break
             #terminal_flags = None
             return rewards, terminal_flags, {}
@@ -112,11 +112,10 @@ class CrossentropyMethodPlanner(unittest.TestCase):
         eval_env.reset()
         for a in actions:
             eval_env.render()
-            a, r, done, info = eval_env.step(a.detach().cpu().numpy())
+            a, r, term, trunc, info = eval_env.step(a.detach().cpu().numpy())
             time.sleep(0.5)
-            if done:
+            if term or trunc:
                 break
-
 
 
 if __name__ == '__main__':
