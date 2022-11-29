@@ -163,7 +163,7 @@ if __name__ == '__main__':
         logger = NotLogger()
 
     d_batch, pad = cfg['trainer']['d_batch'], cfg['trainer']['pad_last_terminal_flag']
-    train_with_subtrajectories = cfg['trainer']['use_subtrajectories']
+    train_with_subtrajectories = cfg['trainer']['subtrajectory_len']
 
     def get_batch_train(i_step):
         batch = train_driver.interact(d_batch)
@@ -172,7 +172,7 @@ if __name__ == '__main__':
         #                                                                   pad_last_terminal_flag=pad,
         #                                                                   pad_last_reward=pad)
         s, a, r, terminal, truncated, mask = prepare_data(s, a, r, terminal, truncated, mask, env,
-                                                          subtrajectories=train_with_subtrajectories)
+                                                          subtrajectory_len=train_with_subtrajectories)
         return s, a, r, terminal, truncated, mask
 
 

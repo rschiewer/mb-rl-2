@@ -26,9 +26,9 @@ mdm:
 prim_mdl:
   d_z: 3
   d_h: 64
-  n_hidden_layers: 3
+  n_hidden_layers: 1
   hidden_dropout: 0.1
-  epsilon: 0.1
+  epsilon: 0.01
   z_prior_lws: [64, 64, 64]
   z_post_lws: [64, 64, 64]
   layer_norm: True
@@ -66,9 +66,9 @@ abstr_mdl:
   d_z: 3
   d_h: 128
   d_a: 16
-  n_hidden_layers: 3
+  n_hidden_layers: 1
   hidden_dropout: 0.1
-  epsilon: 0.1
+  epsilon: 0.01
   z_prior_lws: [64, 64, 64]
   z_post_lws: [64, 64, 64]
   layer_norm: True
@@ -117,7 +117,7 @@ trainer:
   eval_interval: 100
   d_batch: 1024
   pad_last_terminal_flag: False
-  use_subtrajectories: True
+  subtrajectory_len: 10
 
 eval:
   n_warmup_prim: 2

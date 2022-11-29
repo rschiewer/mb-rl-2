@@ -228,7 +228,7 @@ def prepare_data(s: Union[np.ndarray, torch.Tensor],
                  truncated: Union[np.ndarray, torch.Tensor],
                  mask: Union[np.ndarray, torch.Tensor],
                  env: Gridworld,
-                 subtrajectories: bool = False
+                 subtrajectory_len: int = 0,
                  ) -> Tuple[Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
                             Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
                             Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray]]:
@@ -252,12 +252,11 @@ def prepare_data(s: Union[np.ndarray, torch.Tensor],
     #truncated.masked_fill(~mask.to(torch.bool), 0)
     #mask[:] = 0
 
-    if subtrajectories:
+    if subtrajectory_len > 0:
         # select a block of l_segment timesteps out of all trajectories
-        l_segment = 10
         l_data = r.shape[0]
-        t_start = random.randint(0, l_data - l_segment)
-        t_end = t_start + l_segment
+        t_start = random.randint(0, l_data - subtrajectory_len)
+        t_end = t_start + subtrajectory_len
         s = s[t_start:t_end]
         a = a[t_start:t_end]
         r = r[t_start:t_end]
@@ -293,6 +292,23 @@ def trajectory_uncertainty(mem: [Dict[str, List[torch.Tensor]]]):
     ax[1].plot(r_var, label='avg r variance')
     plt.legend()
     plt.show()
+
+
+def augment_train_data_random(o: torch.Tensor,
+                              a: torch.Tensor,
+                              r: torch.Tensor,
+                              term: torch.Tensor,
+                              trunc: torch.Tensor,
+                              mask: torch.Tensor):
+    n_trajectories = o.shape[1]
+
+    t_end = mask.sum(dim=0)
+    t_start_aug = []
+    for t in t_end:
+        t_start_aug.append(random.randint(0, t-1))
+
+    for i_traj, t in enumerate(t_start_aug):
+        o[:, i_traj, t_start_aug:] = 0
 
 
 def to_np_arrays(mem: List[Dict[str, DataType]], dtypes: Sequence = None, padding: Sequence = None):
