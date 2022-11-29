@@ -250,7 +250,7 @@ def prepare_data(s: Union[np.ndarray, torch.Tensor],
     #r.masked_fill(~mask.to(torch.bool), 0)
     #terminal.masked_fill(~mask.to(torch.bool), 0)
     #truncated.masked_fill(~mask.to(torch.bool), 0)
-    mask[:] = 0
+    #mask[:] = 0
 
     if subtrajectories:
         # select a block of l_segment timesteps out of all trajectories
@@ -266,6 +266,33 @@ def prepare_data(s: Union[np.ndarray, torch.Tensor],
         mask = mask[t_start:t_end]
 
     return s, a, r, terminal, truncated, mask
+
+
+def trajectory_uncertainty(mem: [Dict[str, List[torch.Tensor]]]):
+    # get distributions
+    z_dists = []
+    for z_prior, z_post in zip(mem['prim_z_prior'], mem['prim_z_post']):
+        z_dist = z_prior if z_post is None else z_post
+        z_dists.append(z_dist)
+    r_dists = mem['prim_r_dist']
+
+    # get variances
+    z_var = [d.scale for d in z_dists]
+    z_var = torch.stack(z_var)
+    #z_var = z_var.mean(axis=1)
+    r_var = [d.scale for d in r_dists]
+    r_var = torch.stack(r_var)
+    #r_var = r_var.mean(axis=1)
+
+    return z_var, r_var
+    #return z_var.max(), z_var.std(), r_var.max(), r_var.std()
+
+    fig, ax = plt.subplots(1, 2, figsize=(16, 10))
+    for i in range(z_var.shape[-1]):
+        ax[0].plot(z_var[:, i], label=f'avg z variance dim {i + 1}')
+    ax[1].plot(r_var, label='avg r variance')
+    plt.legend()
+    plt.show()
 
 
 def to_np_arrays(mem: List[Dict[str, DataType]], dtypes: Sequence = None, padding: Sequence = None):
