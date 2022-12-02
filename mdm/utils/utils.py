@@ -299,16 +299,52 @@ def augment_train_data_random(o: torch.Tensor,
                               r: torch.Tensor,
                               term: torch.Tensor,
                               trunc: torch.Tensor,
-                              mask: torch.Tensor):
+                              mask: torch.Tensor,
+                              n_augment: int,
+                              r_pessimistic: float = -10):
+    o_aug = torch.randint(o.shape[-1], o[:, :n_augment].shape[:-1]).to(o.device)
+    o_aug = torch.nn.functional.one_hot(o_aug, o.shape[-1])
+    a_aug = torch.randint(a.shape[-1], a[:, :n_augment].shape[:-1]).to(a.device)
+    a_aug = torch.nn.functional.one_hot(a_aug, a.shape[-1])
+    r_aug = torch.full_like(r[:, :n_augment], r_pessimistic)
+    term_aug = torch.randint_like(term[:, :n_augment], 0, 2).to(torch.float32)
+    trunc_aug = torch.randint_like(trunc[:, :n_augment], 0, 2).to(torch.float32)
+    mask_aug = torch.ones_like(mask[:, :n_augment])
+
+    o = torch.concat([o, o_aug], dim=1)
+    a = torch.concat([a, a_aug], dim=1)
+    r = torch.concat([r, r_aug], dim=1)
+    term = torch.concat([term, term_aug], dim=1)
+    trunc = torch.concat([trunc, trunc_aug], dim=1)
+    mask = torch.concat([mask, mask_aug], dim=1)
+
+    return o, a, r, term, trunc, mask
+
+
+def augment_data_trajectory_ends(o: torch.Tensor,
+                                 a: torch.Tensor,
+                                 r: torch.Tensor,
+                                 term: torch.Tensor,
+                                 trunc: torch.Tensor,
+                                 mask: torch.Tensor,
+                                 n_augment: int):
+    raise NotImplementedError('not yet done')
     n_trajectories = o.shape[1]
 
-    t_end = mask.sum(dim=0)
+    o_aug = torch.clone(o)
+    a_aug = torch.clone(a)
+    r_aug = torch.clone(r)
+    term_aug = torch.clone(term)
+    trunc_aug = torch.clone(trunc)
+    mask_aug = torch.clone(mask)
+
+    t_end = mask_aug.sum(dim=0)
     t_start_aug = []
     for t in t_end:
         t_start_aug.append(random.randint(0, t-1))
 
     for i_traj, t in enumerate(t_start_aug):
-        o[:, i_traj, t_start_aug:] = 0
+        o_aug[:, i_traj, t_start_aug:] = 0
 
 
 def to_np_arrays(mem: List[Dict[str, DataType]], dtypes: Sequence = None, padding: Sequence = None):

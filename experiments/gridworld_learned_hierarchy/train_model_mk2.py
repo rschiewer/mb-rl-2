@@ -9,7 +9,7 @@ import numpy as np
 from PIL import Image
 
 from mdm.gridworld.gridworld import Gridworld, FullyObservableGridworld
-from mdm.utils.utils import here, load_yaml, prepare_data, discrete_stats, compute_returns, fig_to_img, load_memory
+from mdm.utils.utils import *
 from mdm.utils.torch_tools import get_mu, get_sigma, bin_every_k_steps, to_tensors
 from mdm.models.building_blocks import RSSM, AbstractActionModel, OneHotDecoder, OneHotEncoder, GaussianDecoder, BinomialDecoder
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
@@ -173,6 +173,7 @@ if __name__ == '__main__':
         #                                                                   pad_last_reward=pad)
         s, a, r, terminal, truncated, mask = prepare_data(s, a, r, terminal, truncated, mask, env,
                                                           subtrajectory_len=train_with_subtrajectories)
+        s, a, r, terminal, truncated, mask = augment_train_data_random(s, a, r, terminal, truncated, mask, d_batch//4)
         return s, a, r, terminal, truncated, mask
 
 
