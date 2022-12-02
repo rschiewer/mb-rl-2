@@ -61,7 +61,7 @@ if __name__ == '__main__':
     abstract_terminals = []
     section_lengths = []
     for i_ep in tqdm(range(planning_cfg['n_episodes'])):
-        if mdl.abstract_action_model.distribution_type in (None, 'normal'):
+        if mdl.abstract_action_model.model_type in ('det_tanh', 'prob_normal'):
             abstr_dist_type = DistributionType.NORMAL
         else:
             abstr_dist_type = DistributionType.CATEGORICAL

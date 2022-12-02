@@ -106,7 +106,7 @@ abstr_act_mdl:
   lws: []
   activation: "relu"
   layer_norm: True
-  distribution_type: "categorical"
+  model_type: "det_mapping"
 
 optim:
   type: 'adam'  #'adamW'
@@ -117,7 +117,7 @@ trainer:
   eval_interval: 100
   d_batch: 1024
   pad_last_terminal_flag: False
-  subtrajectory_len: 10
+  subtrajectory_len: 0
 
 eval:
   n_warmup_prim: 2
