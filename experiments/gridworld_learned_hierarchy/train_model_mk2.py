@@ -147,7 +147,6 @@ if __name__ == '__main__':
     #                        replan_interval_abstr=3, n_warmup_prim=3, n_warmup_abstr=1)
     # planning_driver = GymEpisodeDriver(env, policy)
 
-    # TODO: implement list memory here
     train_mem = load_memory(here() / cfg['train_samples'])
     #train_mem = TrajectoryMemory.load(here() / cfg['train_samples'])
     train_driver = OfflineRLDriver(train_mem, sampling_type=SamplingType.RANDOM)
@@ -168,9 +167,6 @@ if __name__ == '__main__':
     def get_batch_train(i_step):
         batch = train_driver.interact(d_batch)
         s, a, r, terminal, truncated, mask = to_tensors(batch, model.device)
-        #s, a, r, terminal, w = train_driver.interact(d_batch).to_np_arrays(dtype=np.float32,
-        #                                                                   pad_last_terminal_flag=pad,
-        #                                                                   pad_last_reward=pad)
         s, a, r, terminal, truncated, mask = prepare_data(s, a, r, terminal, truncated, mask, env,
                                                           subtrajectory_len=train_with_subtrajectories)
         s, a, r, terminal, truncated, mask = augment_train_data_random(s, a, r, terminal, truncated, mask, d_batch//4)
