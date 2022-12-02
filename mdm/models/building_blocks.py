@@ -20,35 +20,44 @@ class AbstractActionModel(torch.nn.Module):
                  lws: tuple = (64, 64),
                  layer_norm: bool = False,
                  activation: str = 'relu',
-                 distribution_type: str = None):
+                 model_type: str = None):
         super(AbstractActionModel, self).__init__()
 
         self.d_a = d_a
         self.d_abstract_action = d_a_abstract
-        self.distribution_type = distribution_type
+        self.distribution_type = model_type
         self.abstract_step_size = abstract_step_size
 
-        self.flatten_layer = torch.nn.Flatten(start_dim=1)
-        if distribution_type is None:
+        if model_type == 'det_mapping':
+            lws = (1, 1)
+            self._pipeline = self._det_mapping
+        elif model_type == 'prob_tanh':
             lws = (d_a * abstract_step_size, *lws, d_a_abstract)
-            self.prob_mdl = self._prob_mdl_none
-        elif distribution_type == 'normal':
+            self._pipeline = self._point_estimate
+        elif model_type == 'prob_normal':
             lws = (d_a * abstract_step_size, *lws, d_a_abstract * 2)
-            self.prob_mdl = self._prob_mdl_normal
-        elif distribution_type == 'categorical':
+            self._pipeline = self._prob_mdl_normal
+        elif model_type == 'prob_categorical':
             lws = (d_a * abstract_step_size, *lws, d_a_abstract)
-            self.prob_mdl = self._prob_mdl_categorical
+            self._pipeline = self._prob_mdl_categorical
         else:
-            raise ValueError(f'Unsupported distribution type: {distribution_type}')
+            raise ValueError(f'Unsupported model type: {model_type}')
+        self._mdl = torch.nn.Sequential(*lwa(lws, activation, layer_norm=layer_norm))
 
-        self.det_mdl = torch.nn.Sequential(*lwa(lws, activation, layer_norm=layer_norm))
+    def _point_estimate(self,
+                        x: torch.Tensor,
+                        sample: bool) -> torch.Tensor:
+        x = torch.flatten(x, start_dim=1)
+        x = self._mdl(x)
 
-    @staticmethod
-    def _prob_mdl_none(x: torch.Tensor, sample: bool):
         return torch.tanh(x)
 
-    @staticmethod
-    def _prob_mdl_normal(x: torch.Tensor, sample: bool):
+    def _prob_mdl_normal(self,
+                         x: torch.Tensor,
+                         sample: bool) -> torch.Tensor:
+        x = torch.flatten(x, start_dim=1)
+        x = self._mdl(x)
+
         x = make_gaussian_params(x, 0.1)
 
         # restrict mean of Gaussians to (-1, 1)
@@ -62,17 +71,21 @@ class AbstractActionModel(torch.nn.Module):
             x = mu
         return x
 
-    @staticmethod
-    def _prob_mdl_categorical(x: torch.Tensor, sample: bool):
+    def _prob_mdl_categorical(self,
+                              x: torch.Tensor,
+                              sample: bool) -> torch.Tensor:
+        x = torch.flatten(x, start_dim=1)
+        x = self._mdl(x)
+
         if sample:
             x = sample_from_categorical(x)
         else:
             x = torch.nn.functional.one_hot(torch.argmax(x, dim=-1), num_classes=x.shape[-1]).to(torch.float32)
         return x
 
-    def forward(self,
-                actions: torch.Tensor,
-                sample: bool = True) -> torch.Tensor:
+    def _det_mapping(self,
+                     actions: torch.Tensor,
+                     sample: bool = None) -> torch.Tensor:
         x2 = actions.argmax(dim=-1)
         exp_mat = torch.full_like(x2, actions.shape[-1])
         exp_mat = torch.cumprod(exp_mat, dim=1)
@@ -83,11 +96,10 @@ class AbstractActionModel(torch.nn.Module):
         x2 = torch.nn.functional.one_hot(x2, num_classes=self.d_abstract_action).to(torch.float32)
         return x2
 
-        # actions.shape = (d_batch, n_abstract_steps, d_action)
-        x = self.flatten_layer(actions)
-        x = self.det_mdl(x)
-        x = self.prob_mdl(x, sample)
-        return x
+    def forward(self,
+                actions: torch.Tensor,
+                sample: bool = True) -> torch.Tensor:
+        return self._pipeline(actions, sample)
 
 
 class RSSM(torch.nn.Module):
