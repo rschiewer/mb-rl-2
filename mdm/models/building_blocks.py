@@ -146,6 +146,7 @@ class RSSM(torch.nn.Module):
         self.d_x_posterior = self.d_o_encoded + 2  # observation + reward + terminal
 
         z_prior_lws = (d_h, *z_prior_lws, d_z_final)
+        #z_prior_lws = (d_z + d_a, *z_prior_lws, d_z_final)
         z_post_lws = (d_z_post_in + self.d_x_posterior, *z_post_lws, d_z_final)
 
         if rnn_type == 'lstm':
@@ -227,6 +228,7 @@ class RSSM(torch.nn.Module):
                   ctx_high_level: torch.Tensor):
         inp = torch.concat([z, a, ctx_high_level], dim=-1)
         inp = inp.unsqueeze(0)  # add time dim
+        #rnn_state = self.zero_rnn_state(inp.shape[1], inp.device)
         x_det, next_rnn_state = self._rnn(inp, rnn_state)
         x_det = x_det.squeeze(0)  # remove time dim
         return x_det, next_rnn_state
