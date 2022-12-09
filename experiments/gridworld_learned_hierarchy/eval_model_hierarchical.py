@@ -74,12 +74,17 @@ if __name__ == '__main__':
         trajectory_history = collect_groundtruth_data(mdl, trajectory_history, env, planning_cfg['n_warmup_prim'])
         trajectory_history = init_prim_s(mdl, trajectory_history)
         trajectory_history = init_abstr_s(mdl, trajectory_history, planner_prim, planning_cfg['n_warmup_abstr'],
-                                          planning_cfg['n_rollouts'], allow_prim_imagination=True)
+                                          planning_cfg['n_rollouts'], allow_prim_imagination=False)
         trajectory_history = plan_abstract(mdl, trajectory_history, planner_abstr, planning_cfg['n_plan_steps_abstr'],
                                            planning_cfg['n_rollouts'])
 
+        # necessary to align the start of section planning with the amount of real steps that have already been done
+        assert mdl.abstract_step_size % planning_cfg['n_warmup_prim'] == 0
+
+        i_sec_start = planning_cfg['n_warmup_prim'] // mdl.abstract_step_size
+        i_sec_end = planning_cfg['n_plan_steps_abstr'] - 1
         current_section_lengths = []
-        for i_sec in range(planning_cfg['n_plan_steps_abstr']):
+        for i_sec in range(i_sec_start, i_sec_end):
             trajectory_history, sec_len = plan_section(mdl, trajectory_history, planner_prim, i_sec,
                                                        planning_cfg['n_rollouts'])
             current_section_lengths.append(sec_len)

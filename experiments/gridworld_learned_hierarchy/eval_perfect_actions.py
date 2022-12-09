@@ -1,6 +1,6 @@
 import argparse
 from math import ceil
-import time
+import random
 
 import matplotlib.pyplot as plt
 import torch
@@ -50,7 +50,11 @@ if __name__ == '__main__':
     else:
         logger = NotLogger()
 
-    perfect_actions = [0] + [0, 0, 1, 1, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1]  # first one is default zero action
+    #perfect_actions = [0] + [0, 0, 1, 1, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1]  # first one is default zero action
+    perfect_actions = [0] + [0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 1, 0, 1, 1]  # first one is default zero action
+    perfect_actions = [0] + [0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 1, 0] + [random.randint(0, 3)] * 50
+    perfect_actions = [0] +[0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 0, 1, 0, 1, 0, 0, 1, 1, 1, 1, 0, 1, 1, 0, 1, 0, 0, 2, 1, 0, 1, 3, 0, 0, 0, 1, 1, 1 ,3 ,0 ,0 ,0 ,0 ,1, 0, 1, 1, 1, 3, 1, 3, 3]
+    perfect_actions =[1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 0, 1, 1, 1, 1, 3, 3, 0, 0,3 ,0 ,3 ,1 ,1 ,1 ,2 ,0 ,2 ,3 ,0 ,2 ,1]
 
     trajectory_history = mdl.gen_mem()
     n_warmup = planning_cfg['n_warmup_prim']
@@ -74,13 +78,22 @@ if __name__ == '__main__':
     #print(rnn_state)
 
     rewards = []
-    rollout_rewards = mem["prim_r"].detach().cpu().numpy().squeeze()
+    rollout_rewards = mem['prim_r'].detach().cpu().numpy().squeeze()
+    rollout_terminals = mem['prim_term'].detach().cpu().numpy().squeeze()
     for a in perfect_actions[1:]:
         o, r, term, _ = env.step(a)
         rewards.append(r)
-    print(f'Rollout reward: {rollout_rewards.sum()}, real reward: {np.sum(rewards)}')
-    print(rewards)
-    print(rollout_rewards)
+        if term: break
+    discount = (1 - np.roll(rollout_terminals, 1, axis=0))
+    discount[0] = 1
+    discount = np.cumprod(discount)
+    ep_return = (rollout_rewards * discount).sum()
+    sum_rewards = rollout_rewards.sum()
+    print(f'Rollout return: {ep_return}, rollout sum rewards: {sum_rewards}, real return: {np.sum(rewards)}')
+    print('real rewards', rewards)
+    print('rollout rewards', rollout_rewards)
+    print('rollout terminals', rollout_terminals)
+    print(len(rewards))
     quit()
 
 

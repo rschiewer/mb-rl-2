@@ -57,7 +57,7 @@ if __name__ == '__main__':
     n_steps = []
     for i_ep in tqdm(range(planning_cfg['n_episodes'])):
         planner_prim = CrossentropyPlanner(DistributionType.CATEGORICAL, d_dist=mdl.primitive_model.d_action,
-                                           device=mdl.device, **planning_cfg['pln_prim'])
+                                           device=mdl.device, debug_env=env, **planning_cfg['pln_prim'])
 
         trajectory_history = mdl.gen_mem()
         trajectory_history = collect_groundtruth_data(mdl, trajectory_history, env, planning_cfg['n_warmup_prim'])
