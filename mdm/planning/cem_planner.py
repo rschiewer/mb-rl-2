@@ -1,8 +1,11 @@
+import copy
 from typing import Callable, Union, Tuple, Optional, Dict
 from math import ceil
 
 import torch
 import numpy as np
+import gym
+import matplotlib.pyplot as plt
 
 
 from mdm.utils.torch_tools import TensorData
@@ -43,6 +46,7 @@ class CrossentropyPlanner:
                  act_noise: float = 0,
                  alpha: float = 1.0,
                  device: torch.device = 'cpu',
+                 debug_env: gym.Env = None,
                  **dist_args):
         self.type = type
         self.d_dist = d_dist
@@ -53,6 +57,7 @@ class CrossentropyPlanner:
         self.device = device
         self.dist_args = dist_args
         self.alpha = alpha
+        self._debug_env = copy.deepcopy(debug_env)
         if type is DistributionType.NORMAL:
             self._init_dist = self._init_normal
             self._update_dist = self._update_normal
@@ -61,6 +66,39 @@ class CrossentropyPlanner:
             self._init_dist = self._init_categorical
             self._update_dist = self._update_categorical
             self._build_dist = self._build_categorical
+
+    def _maybe_get_real_reward(self, actions: torch.Tensor, i_winners: torch.Tensor, average: bool = True):
+        if self._debug_env:
+            if average:
+                actions = actions[i_winners.tolist()].to(torch.float32).mean(dim=0).detach().cpu().numpy()
+            else:
+                actions = actions[i_winners[0]].detach().cpu().numpy()
+            if self.type == DistributionType.CATEGORICAL:
+                actions = actions.round().astype(int)
+
+            rewards = [0.0]
+            self._debug_env.reset()
+            for a in actions:
+                o, r, term, trunc, info = self._debug_env.step(a)
+                rewards.append(r)
+            rewards = np.array(rewards)
+            disc_mat = np.cumprod(np.full_like(rewards, self.discount, dtype=float))
+            disc_mat = np.roll(disc_mat, 1, axis=0)
+            disc_mat[0] = 1
+            R = np.sum(disc_mat * rewards)
+            return R
+
+    def _maybe_compare(self,
+                       r_real: torch.Tensor,
+                       r_winners: torch.Tensor,
+                       average: bool = True):
+        if r_real:
+            if average:
+                r_winners = r_winners.mean(dim=0)
+            else:
+                r_winners = r_winners[0]
+            diff = (r_real - r_winners).detach().cpu().numpy()
+            print(diff.sum())
 
     def plan(self,
              rollout_fn: Callable[[torch.Tensor], Tuple[torch.Tensor, Optional[torch.Tensor], Dict[str, TensorData]]],
@@ -77,10 +115,14 @@ class CrossentropyPlanner:
         #    disc_mat = None
 
         actions, i_winners, R_winners, rollout_data = None, None, None, None
+        R_real_evolution, R_winners_evolution = [], []
+        if self._debug_env:
+            self._debug_env.reset()
         for i_ev in range(self.n_evolution_steps):
             actions = self._build_dist(act_dist_params).sample()
             criterion, terminal_flag_mat, rollout_data = rollout_fn(actions)
 
+            assert criterion.shape[0] == n_rollouts
             assert criterion.ndim == 2
 
             disc_mat = torch.cumprod(torch.full_like(criterion, fill_value=self.discount), dim=1)
@@ -96,6 +138,10 @@ class CrossentropyPlanner:
 
             i_winners, R_winners = disc_ret_sorted.indices[:n_winners], disc_ret_sorted.values[:n_winners]
 
+            R_real = self._maybe_get_real_reward(actions, i_winners, average=True)
+            R_real_evolution.append(R_real)
+            R_winners_evolution.append(R_winners.mean(dim=0).detach().cpu().numpy())
+
             if i_ev == self.n_evolution_steps - 1:  # disable action noise for the last update
                 act_noise = 0
             else:
@@ -105,6 +151,10 @@ class CrossentropyPlanner:
             act_dist_params = self._update_dist(actions, act_dist_params, i_winners, act_noise)
 
         #print(disc_ret_sorted.values[:n_winners])
+        #plt.plot(R_real_evolution, label='R real')
+        #plt.plot(R_winners_evolution, label='R rollout')
+        #plt.legend()
+        #plt.show()
 
         return actions, self._build_dist(act_dist_params), i_winners.tolist(), R_winners.tolist(), rollout_data
 
