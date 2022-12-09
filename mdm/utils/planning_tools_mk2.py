@@ -1,4 +1,5 @@
 from typing import Union, Tuple, Sequence, Dict, TypeVar, List
+import copy
 import matplotlib.pyplot as plt
 from itertools import product
 
@@ -8,7 +9,7 @@ import numpy as np
 
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.models.building_blocks import RnnStateType
-from mdm.planning.cem_planner import CrossentropyPlanner, TensorData
+from mdm.planning.cem_planner import CrossentropyPlanner, TensorData, DistributionType
 from mdm.utils.utils import SliceType, to_onehot, prepare_data, flatten_and_unsqueeze, sensitivity_analysis, trajectory_uncertainty
 from mdm.utils.torch_tools import (extract_sub_distribution, bin_every_k_steps, pack_rnn_state, unpack_rnn_state,
                                    TensorIndex, to_tensors)
@@ -75,7 +76,7 @@ def plan_prim_free(model: MultiscaleDynamicsModelMK2,
 
 
 def plan_prim_with_warmup(model: MultiscaleDynamicsModelMK2,
-                          planner_prim: object,
+                          planner_prim: CrossentropyPlanner,
                           env_data: Dict[str, List[torch.Tensor]],
                           n_plan_steps: int,
                           n_rollouts: int):
@@ -113,6 +114,7 @@ def plan_prim_with_warmup(model: MultiscaleDynamicsModelMK2,
         #_uncertainty = torch.stack([d.scale for d in _mem['prim_r_dist']], dim=1).squeeze(-1)
         #_criterion -= _uncertainty
         _discount = torch.stack(_mem['prim_term'], dim=1).squeeze(-1)
+
         return _criterion, _discount, _mem
 
     a, a_dist, i_win, R_win, data = planner_prim.plan(rollout_fn=_rollout_fn, n_rollouts=n_rollouts,
@@ -136,10 +138,54 @@ def plan_prim_with_warmup(model: MultiscaleDynamicsModelMK2,
     plt.show()
     """
 
-    # select winner per per memory element per timestep
+    # select winner batch item per per memory timestep
     data = select_batch_items(data, i_win[0], keepdim=True)
     # CAUTION: the actions from planner are without the already performed warmup acitons!
-    return a[i_win[1]], data
+    if planner_prim.type == DistributionType.NORMAL:
+        a_win = a_dist.mode[0]
+    elif planner_prim.type == DistributionType.CATEGORICAL:
+        a_win = a_dist.probs[0].argmax(-1)
+    else:
+        a_win = a[i_win[0]]
+        raise ValueError(f'Unknown planner distribution type: {planner_prim.type}')
+    return a_win, data
+
+
+def plan_abstr_with_warmup(model: MultiscaleDynamicsModelMK2,
+                           planner_abstr: object,
+                           prim_data: Dict[str, List[torch.Tensor]],
+                           n_plan_steps: int,
+                           n_rollouts: int):
+    o_start_batch = torch.stack(prim_data[model.abstr_pred_target][::model.abstract_step_size]).repeat(1, n_rollouts, 1, 1)
+    a_start_batch = model.calc_abstr_a(torch.stack(prim_data['prim_a']).repeat(1, n_rollouts, 1))
+    r_start_batch = model.calc_abstr_r_ground_truth(torch.stack(prim_data['prim_r']).repeat(1, n_rollouts, 1))
+    term_start_batch = model.calc_abstr_term_ground_truth(torch.stack(prim_data['prim_term']).repeat(1, n_rollouts, 1))
+    n_posterior_steps = o_start_batch.shape[0]
+
+    def _rollout_fn(_a: torch.Tensor):
+        if model.abstract_action_model.model_type in ('det_tanh', 'prob_normal'):
+            _a = torch.clamp(_a, -0.99, 0.99)  # limit action range to allowed values
+        elif model.abstract_action_model.model_type in ('prob_categorical', 'det_mapping'):
+            _a = to_onehot(_a, model.abstract_model.d_action)
+        _a = _a.swapaxes(0, 1)
+        _a = torch.cat([a_start_batch, _a], dim=0)
+        _mem, _abstr_final = model.rollout_abstract(prim_data=o_start_batch, a=_a, r=r_start_batch,
+                                                    term=term_start_batch, n_posterior_steps=0, sample=True)
+        _mem = model.pack_mem(_mem)
+
+        _criterion = torch.stack(_mem['abstr_r'], dim=1).squeeze(-1)
+        #_criterion -= diff.swapaxes(0, 1)
+        #_uncertainty = torch.stack([d.scale for d in _mem['prim_r_dist']], dim=1).squeeze(-1)
+        #_criterion -= _uncertainty
+        _discount = torch.stack(_mem['abstr_term'], dim=1).squeeze(-1)
+        return _criterion, _discount, _mem
+
+    a, a_dist, i_win, R_win, data = planner_abstr.plan(rollout_fn=_rollout_fn, n_rollouts=n_rollouts,
+                                                       n_plan_steps=n_plan_steps)
+
+    data = {k: v[i_win[0], None] if len(v) > 0 else v for k, v in data.items()}
+    a_win = a_dist.sample()[0] # a[i_win[0]]
+    return a_win, data
 
 
 def plan_prim_chunk(model: MultiscaleDynamicsModelMK2,
@@ -388,8 +434,9 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
     assert n_steps_done % model.abstract_step_size == 0, ('Warmup step count should be evenly divisible by the section '
                                                           f'length, but they are {n_steps_done} and '
                                                           f'{model.abstract_step_size}')
-    z_start = history['prim_z'][-1].repeat(n_rollouts, 1)
-    rnn_state_start = unpack_rnn_state(pack_rnn_state(history['prim_rnn_state'][-1]).repeat(n_rollouts, 1, 1, 1))
+    i_t = i_section * model.abstract_step_size - 1
+    z_start = history['prim_z'][i_t].repeat(n_rollouts, 1)
+    rnn_state_start = unpack_rnn_state(pack_rnn_state(history['prim_rnn_state'][i_t]).repeat(n_rollouts, 1, 1, 1))
     target = history['abstr_o'][i_section].repeat(n_rollouts, *[1 for _ in model.abstract_model.o_shape])
     #target = torch.flatten(target, start_dim=1)
     target_dist = history['abstr_o_dist'][i_section]
