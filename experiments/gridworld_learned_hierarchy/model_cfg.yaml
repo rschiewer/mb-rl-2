@@ -24,7 +24,7 @@ mdm:
   abstract_pred_target: "prim_o"
 
 prim_mdl:
-  d_z: 3
+  d_z: 16
   d_h: 64
   n_hidden_layers: 1
   hidden_dropout: 0.1
@@ -63,8 +63,8 @@ prim_term_dec:
   activation: "relu"
 
 abstr_mdl:
-  d_z: 3
-  d_h: 128
+  d_z: 16
+  d_h: 64
   d_a: 16
   n_hidden_layers: 1
   hidden_dropout: 0.1
@@ -84,7 +84,7 @@ abstr_o_enc:
   d_x_encoded: 32
 
 abstr_o_dec:
-  lws: [32]
+  lws: [64, 32]
   layer_norm: True
   activation: "relu"
   temperature: 3.0
@@ -110,12 +110,12 @@ abstr_act_mdl:
 
 optim:
   type: 'adam'  #'adamW'
-  lr: 0.0005 #0.0002
+  lr: 0.001 #0.0002
 
 trainer:
-  n_train_steps: 15000
+  n_train_steps: 20000
   eval_interval: 100
-  d_batch: 1024
+  d_batch: 2048
   pad_last_terminal_flag: False
   subtrajectory_len: 0
 
