@@ -15,23 +15,21 @@ from mdm.utils.utils import DistributionType
 def compute_episode_returns(step_rewards: torch.Tensor,
                             disc_mat: Union[None, torch.Tensor]):
     # in case of multi-dim rewards, sum reward dimension to one scalar
-    if step_rewards.ndim > 2 and step_rewards.shape[-1] > 1:
+    if step_rewards.ndim > 3 and step_rewards.shape[-1] > 1:
         step_rewards = step_rewards.sum(dim=(-1), keepdim=True)
-    elif step_rewards.ndim == 1:
-        step_rewards = step_rewards.unsqueeze(-1)
     # if disc_mat is None, no discounting is necessary, just sum rewards per run
     if disc_mat is None:
-        discounted_returns = step_rewards.sum(dim=1)
+        discounted_returns = step_rewards.sum(dim=2)
     else:
-        discounted_returns = torch.sum(step_rewards * disc_mat, dim=1)
+        discounted_returns = torch.sum(step_rewards * disc_mat, dim=2)
     return discounted_returns
 
 
 def process_terminal_flag_mat(terminal_flags: torch.Tensor):
     # shift terminal flags matrix one to the right to not zero out final reward
-    terminal_flags = torch.roll(terminal_flags, shifts=1, dims=1)
-    terminal_flags[:, 0] = 0
-    disc_mat = torch.cumprod(1 - terminal_flags, dim=1)
+    terminal_flags = torch.roll(terminal_flags, shifts=1, dims=2)
+    terminal_flags[:, :, 0] = 0
+    disc_mat = torch.cumprod(1 - terminal_flags, dim=2)
     return disc_mat
 
 
@@ -88,25 +86,14 @@ class CrossentropyPlanner:
             R = np.sum(disc_mat * rewards)
             return R
 
-    def _maybe_compare(self,
-                       r_real: torch.Tensor,
-                       r_winners: torch.Tensor,
-                       average: bool = True):
-        if r_real:
-            if average:
-                r_winners = r_winners.mean(dim=0)
-            else:
-                r_winners = r_winners[0]
-            diff = (r_real - r_winners).detach().cpu().numpy()
-            print(diff.sum())
-
     def plan(self,
              rollout_fn: Callable[[torch.Tensor], Tuple[torch.Tensor, Optional[torch.Tensor], Dict[str, TensorData]]],
              n_rollouts: int,
              n_plan_steps: int,
+             n_envs: int = 1,
              init_act_params: Union[torch.Tensor, np.ndarray] = None):
         n_winners = ceil(n_rollouts * self.winning_perc)
-        act_dist_params = self._init_params(n_rollouts, n_plan_steps, self.d_dist, init_act_params)
+        act_dist_params = self._init_params(n_envs, n_rollouts, n_plan_steps, self.d_dist, init_act_params)
 
         #exponents = torch.arange(n_plan_steps, device=self.device)
         #if discount != 0:
@@ -119,28 +106,29 @@ class CrossentropyPlanner:
         if self._debug_env:
             self._debug_env.reset()
         for i_ev in range(self.n_evolution_steps):
-            actions = self._build_dist(act_dist_params).sample()
+            actions = self._build_dist(act_dist_params).sample()  # shape: (n_envs, n_rollouts, n_plan_steps, d_dist)
             criterion, terminal_flag_mat, rollout_data = rollout_fn(actions)
 
-            assert criterion.shape[0] == n_rollouts
-            assert criterion.ndim == 2
+            assert criterion.shape[0] == n_envs
+            assert criterion.shape[1] == n_rollouts
+            assert criterion.ndim == 3
 
-            disc_mat = torch.cumprod(torch.full_like(criterion, fill_value=self.discount), dim=1)
-            disc_mat = torch.roll(disc_mat, 1, dims=1)
-            disc_mat[:, 0] = 1
+            disc_mat = torch.cumprod(torch.full_like(criterion, fill_value=self.discount), dim=2)
+            disc_mat = torch.roll(disc_mat, 1, dims=2)
+            disc_mat[:, :, 0] = 1
 
             if terminal_flag_mat is not None:
                 final_disc_mat = process_terminal_flag_mat(terminal_flag_mat) * disc_mat
             else:
                 final_disc_mat = disc_mat
             disc_ret = compute_episode_returns(criterion, final_disc_mat)
-            disc_ret_sorted = torch.sort(disc_ret, dim=0, descending=True)
+            disc_ret_sorted = torch.sort(disc_ret, dim=1, descending=True)
 
-            i_winners, R_winners = disc_ret_sorted.indices[:n_winners], disc_ret_sorted.values[:n_winners]
+            i_winners, R_winners = disc_ret_sorted.indices[:, :n_winners], disc_ret_sorted.values[:, :n_winners]
 
-            R_real = self._maybe_get_real_reward(actions, i_winners, average=True)
-            R_real_evolution.append(R_real)
-            R_winners_evolution.append(R_winners.mean(dim=0).detach().cpu().numpy())
+            #R_real = self._maybe_get_real_reward(actions, i_winners, average=True)
+            #R_real_evolution.append(R_real)
+            #R_winners_evolution.append(R_winners.mean(dim=0).detach().cpu().numpy())
 
             if i_ev == self.n_evolution_steps - 1:  # disable action noise for the last update
                 act_noise = 0
@@ -156,16 +144,17 @@ class CrossentropyPlanner:
         #plt.legend()
         #plt.show()
 
-        return actions, self._build_dist(act_dist_params), i_winners.tolist(), R_winners.tolist(), rollout_data
+        return actions, self._build_dist(act_dist_params), i_winners, R_winners, rollout_data
 
     def _init_normal(self,
+                     n_envs: int,
                      d_batch: int,
                      n_time_steps: int,
                      d_dist: int):
         mu_spread = self.dist_args.get('mu_init_spread', 2.0)
         sigma_min = self.dist_args.get('sigma_init_min', 1.0)
-        mu = mu_spread * torch.rand(d_batch, n_time_steps, d_dist, device=self.device) - mu_spread / 2
-        sigma = torch.rand(d_batch, n_time_steps, d_dist, device=self.device) + sigma_min
+        mu = mu_spread * torch.rand(n_envs, d_batch, n_time_steps, d_dist, device=self.device) - mu_spread / 2
+        sigma = torch.rand(n_envs, d_batch, n_time_steps, d_dist, device=self.device) + sigma_min
         return torch.stack([mu, sigma], dim=0)
 
     def _build_normal(self,
@@ -178,22 +167,25 @@ class CrossentropyPlanner:
                        dist_params: torch.Tensor,
                        i_winners: torch.Tensor,
                        noise: float):
-        winner_actions = actions[i_winners.tolist()]
+        # actions before:         (n_rollouts, n_time_steps, d_dist)
+        # actions new:    (n_envs, n_rollouts, n_time_steps, d_dist)
+        n_envs, n_batch = dist_params.shape[1:3]
+        # broadcasting taken from https://discuss.pytorch.org/t/how-to-select-particular-elements-of-a-3d-tensor-based-on-indices-along-dim-1-in-pytorch/129632/9
+        winner_actions = actions[torch.arange(n_envs).unsqueeze(1), i_winners]
         noise = torch.tensor(noise, device=self.device)
-        n_batch = dist_params.shape[1]
         lower_bound = torch.tensor(0.0001, device=actions.device)
 
         # compute prototype mu and sigma
-        mu_ml = winner_actions.mean(dim=0)
-        sigma_ml = torch.sqrt(torch.mean((winner_actions - mu_ml.unsqueeze(0)) ** 2, dim=0)) + 0.001
+        mu_ml = winner_actions.mean(dim=1)
+        sigma_ml = torch.sqrt(torch.mean((winner_actions - mu_ml.unsqueeze(1)) ** 2, dim=1)) + 0.001
 
         # just copy prototype values along batch axis
-        mu_ml = torch.tile(mu_ml, dims=(n_batch, 1, 1))
-        sigma_ml = torch.tile(sigma_ml, dims=(n_batch, 1, 1))
+        mu_ml = torch.tile(mu_ml.unsqueeze(1), dims=(1, n_batch, 1, 1))
+        sigma_ml = torch.tile(sigma_ml.unsqueeze(1), dims=(1, n_batch, 1, 1))
 
         # add noise to diversify half of distributions
-        mu_ml[n_batch//2:] += (2 * torch.rand_like(mu_ml[n_batch//2:], device=self.device) - 1) * noise
-        sigma_ml[n_batch//2:] += (2 * torch.rand_like(sigma_ml[n_batch//2:], device=self.device) - 1) * noise
+        mu_ml[:, n_batch//2:] += (2 * torch.rand_like(mu_ml[:, n_batch//2:], device=self.device) - 1) * noise
+        sigma_ml[:, n_batch//2:] += (2 * torch.rand_like(sigma_ml[:, n_batch//2:], device=self.device) - 1) * noise
         sigma_ml = torch.where(sigma_ml <= lower_bound, lower_bound, sigma_ml)  # don't accidentally make sigma < 0
 
         mu_old, sigma_old = torch.unbind(dist_params, dim=0)
@@ -203,10 +195,11 @@ class CrossentropyPlanner:
         return torch.stack([mu_new, sigma_new], dim=0)
 
     def _init_categorical(self,
+                          n_envs: int,
                           d_batch: int,
                           n_time_steps: int,
                           d_dist: int):
-        params = torch.rand(d_batch, n_time_steps, d_dist, device=self.device)
+        params = torch.rand(n_envs, d_batch, n_time_steps, d_dist, device=self.device)
         params /= params.sum(dim=-1, keepdim=True)
         return params
 
@@ -219,28 +212,30 @@ class CrossentropyPlanner:
                             dist_params: torch.Tensor,
                             i_winners: torch.Tensor,
                             noise: float):
-        winner_actions = actions[i_winners.tolist()]
-        noise = torch.tensor(noise, device=self.device)
-        n_batch = dist_params.shape[0]
+        n_envs, d_batch = dist_params.shape[:2]
         n_actions = dist_params.shape[-1]
+        # broadcasting taken from https://discuss.pytorch.org/t/how-to-select-particular-elements-of-a-3d-tensor-based-on-indices-along-dim-1-in-pytorch/129632/9
+        winner_actions = actions[torch.arange(n_envs).unsqueeze(1), i_winners]
+        noise = torch.tensor(noise, device=self.device)
 
         actions_onehot = torch.nn.functional.one_hot(winner_actions, num_classes=n_actions)
-        dist_params_new = torch.mean(actions_onehot.float(), dim=(0))  # yields one list of distributions, one per time step
-        dist_params_new = torch.tile(dist_params_new, dims=(n_batch, 1, 1))  # this copies the list to all batch indices
+        dist_params_new = torch.mean(actions_onehot.float(), dim=1)  # yields one list of distributions, one per time step
+        dist_params_new = torch.tile(dist_params_new.unsqueeze(1), dims=(1, d_batch, 1, 1))  # this copies the list to all batch indices
         # add noise to diversify
-        dist_params_new[n_batch//2:] += (2 * torch.rand_like(dist_params_new[n_batch//2:], device=self.device) - 1) * noise
-        dist_params_new[n_batch//2:] = torch.clamp(dist_params_new[n_batch//2:], torch.tensor(0.0, device=self.device), torch.tensor(1.0, device=self.device))
+        dist_params_new[:, d_batch//2:] += (2 * torch.rand_like(dist_params_new[:, d_batch//2:], device=self.device) - 1) * noise
+        dist_params_new[:, d_batch//2:] = torch.clamp(dist_params_new[:, d_batch//2:], torch.tensor(0.0, device=self.device), torch.tensor(1.0, device=self.device))
         dist_params_new /= dist_params_new.sum(dim=-1, keepdim=True)
         dist_params = (1 - self.alpha) * dist_params + self.alpha * dist_params_new
         return dist_params
 
     def _init_params(self,
-                     d_batch: int,
+                     n_envs: int,
+                     n_rollouts: int,
                      n_time_steps: int,
                      d_dist: int,
                      init_act_params: Union[torch.Tensor, np.ndarray]):
         if init_act_params is None:
-            act_params = self._init_dist(d_batch, n_time_steps, d_dist)
+            act_params = self._init_dist(n_envs, n_rollouts, n_time_steps, d_dist)
         else:
             #if init_act_params.shape != (d_batch, n_time_steps, d_dist):
             #    raise ValueError(f'Initial action parameters argument shape mismatch, found: {init_act_params.shape}, '
@@ -250,3 +245,17 @@ class CrossentropyPlanner:
             else:
                 act_params = init_act_params.to(self.device)
         return act_params
+
+    @staticmethod
+    def get_winner_actions(final_actions: torch.Tensor,
+                           final_act_dist: torch.distributions.Distribution,
+                           i_winners: torch.Tensor,
+                           resample: bool = True):
+        n_envs, n_rollouts = final_actions.shape[:2]
+        if resample:
+            actions = final_act_dist.sample()
+        else:
+            actions = final_actions
+        winner_actions = actions[torch.arange(n_envs), i_winners[:, 0]]
+        return winner_actions
+

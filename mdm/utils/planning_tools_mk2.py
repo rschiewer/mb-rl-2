@@ -94,6 +94,7 @@ def plan_prim_with_warmup(model: MultiscaleDynamicsModelMK2,
     init_uncertainty = None
     def _rollout_fn(_a: torch.Tensor):
         nonlocal init_uncertainty
+        _a = _a[0]  # remove redundant env dimension
         _a = to_onehot(_a, n_classes=model.primitive_model.d_action)
         _a = _a.swapaxes(0, 1)
         _a = torch.cat([a_start_batch, _a], dim=0)
@@ -115,6 +116,8 @@ def plan_prim_with_warmup(model: MultiscaleDynamicsModelMK2,
         #_criterion -= _uncertainty
         _discount = torch.stack(_mem['prim_term'], dim=1).squeeze(-1)
 
+        _criterion = _criterion.unsqueeze(0)  # add "env" dimension
+        _discount = _discount.unsqueeze(0)
         return _criterion, _discount, _mem
 
     a, a_dist, i_win, R_win, data = planner_prim.plan(rollout_fn=_rollout_fn, n_rollouts=n_rollouts,
@@ -139,15 +142,17 @@ def plan_prim_with_warmup(model: MultiscaleDynamicsModelMK2,
     """
 
     # select winner batch item per per memory timestep
-    data = select_batch_items(data, i_win[0], keepdim=True)
+    data = select_batch_items(data, i_win[0, 0], keepdim=True)
     # CAUTION: the actions from planner are without the already performed warmup acitons!
-    if planner_prim.type == DistributionType.NORMAL:
-        a_win = a_dist.mode[0]
-    elif planner_prim.type == DistributionType.CATEGORICAL:
-        a_win = a_dist.probs[0].argmax(-1)
-    else:
-        a_win = a[i_win[0]]
-        raise ValueError(f'Unknown planner distribution type: {planner_prim.type}')
+    a_win = planner_prim.get_winner_actions(a, a_dist, i_win, resample=True)
+    a_win = a_win[0]  # remove redundant "env" dimension
+    #if planner_prim.type == DistributionType.NORMAL:
+    #    a_win = a_dist.mode[0]
+    #elif planner_prim.type == DistributionType.CATEGORICAL:
+    #    a_win = a_dist.probs[0].argmax(-1)
+    #else:
+    #    a_win = a[i_win[0]]
+    #    raise ValueError(f'Unknown planner distribution type: {planner_prim.type}')
     return a_win, data
 
 
