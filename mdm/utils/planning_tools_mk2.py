@@ -146,18 +146,11 @@ def plan_prim_with_warmup(model: MultiscaleDynamicsModelMK2,
     # CAUTION: the actions from planner are without the already performed warmup acitons!
     a_win = planner_prim.get_winner_actions(a, a_dist, i_win, resample=True)
     a_win = a_win[0]  # remove redundant "env" dimension
-    #if planner_prim.type == DistributionType.NORMAL:
-    #    a_win = a_dist.mode[0]
-    #elif planner_prim.type == DistributionType.CATEGORICAL:
-    #    a_win = a_dist.probs[0].argmax(-1)
-    #else:
-    #    a_win = a[i_win[0]]
-    #    raise ValueError(f'Unknown planner distribution type: {planner_prim.type}')
     return a_win, data
 
 
 def plan_abstr_with_warmup(model: MultiscaleDynamicsModelMK2,
-                           planner_abstr: object,
+                           planner_abstr: CrossentropyPlanner,
                            prim_data: Dict[str, List[torch.Tensor]],
                            n_plan_steps: int,
                            n_rollouts: int):
@@ -188,8 +181,9 @@ def plan_abstr_with_warmup(model: MultiscaleDynamicsModelMK2,
     a, a_dist, i_win, R_win, data = planner_abstr.plan(rollout_fn=_rollout_fn, n_rollouts=n_rollouts,
                                                        n_plan_steps=n_plan_steps)
 
-    data = {k: v[i_win[0], None] if len(v) > 0 else v for k, v in data.items()}
-    a_win = a_dist.sample()[0] # a[i_win[0]]
+    data = select_batch_items(data, i_win[0, 0], keepdim=True)
+    a_win = planner_abstr.get_winner_actions(a, a_dist, i_win, resample=True)
+    a_win = a_win[0]  # remove redundant "env" dimension
     return a_win, data
 
 
