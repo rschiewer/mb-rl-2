@@ -333,7 +333,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         loss['beta'] = torch.tensor(beta)
 
         if self.latent_overshooting:
-            for i_chunk in range(1, abstr_steps, 4):
+            for i_chunk in range(1, abstr_steps, 2):
                 t = i_chunk * self.abstract_step_size
                 prim_z = pred_post['prim_z'][t]
                 prim_rnn_state = pred_post['prim_rnn_state'][t]
@@ -438,12 +438,12 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         mask = 1 - mask
         mask_abstr = bin_every_k_steps(mask, self.abstract_step_size).max(dim=1).values
 
-        prim_rec_o = self._neg_log_prob(pred['prim_o_dist'], o_ground_truth, mask)
-        prim_rec_r = self._neg_log_prob(pred['prim_r_dist'], r_ground_truth, mask)
-        prim_rec_term = self._neg_log_prob(pred['prim_term_dist'], term_ground_truth, mask)
-        prim_kl_z_unscaled = self._kl_div(pred['prim_z_post'], pred['prim_z_prior'], mask)
+        prim_rec_o = self._neg_log_prob(pred['prim_o_dist'][:-1], o_ground_truth[1:], mask[1:])
+        prim_rec_r = self._neg_log_prob(pred['prim_r_dist'][:-1], r_ground_truth[1:], mask[1:])
+        prim_rec_term = self._neg_log_prob(pred['prim_term_dist'][:-1], term_ground_truth[1:], mask[1:])
+        prim_kl_z_unscaled = self._kl_div(pred['prim_z_post'][:-1], pred['prim_z_prior'][:-1], mask[:-1])
         prim_kl_z = beta * self.beta_kl_prim * prim_kl_z_unscaled
-        prim_kl_z_reg_unscaled = self._kl_reg(pred['prim_z_post'], mask)
+        prim_kl_z_reg_unscaled = self._kl_reg(pred['prim_z_post'][:-1], mask[:-1])
         prim_kl_z_reg = beta * self.beta_reg_prim * prim_kl_z_reg_unscaled
 
         # TODO: Think about this, right now if the final chunk takes less than abstract_step_size steps,
@@ -451,12 +451,12 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         # This predicts the correct prim_s, but is inconsistent with the rest of the training procedure.
 
         abstr_o_target = torch.stack(pred['abstr_o_target'], dim=0)
-        abstr_rec_o = self._neg_log_prob(pred['abstr_o_dist'], abstr_o_target, mask)
-        abstr_rec_r = self._neg_log_prob(pred['abstr_r_dist'], abstr_r_ground_truth, mask)
-        abstr_rec_term = self._neg_log_prob(pred['abstr_term_dist'], abstr_term_ground_truth, mask)
-        abstr_kl_z_unscaled = self._kl_div(pred['abstr_z_post'], pred['abstr_z_prior'], mask)
+        abstr_rec_o = self._neg_log_prob(pred['abstr_o_dist'][:-1], abstr_o_target[1:], mask_abstr[1:])
+        abstr_rec_r = self._neg_log_prob(pred['abstr_r_dist'][:-1], abstr_r_ground_truth[1:], mask_abstr[1:])
+        abstr_rec_term = self._neg_log_prob(pred['abstr_term_dist'][:-1], abstr_term_ground_truth[1:], mask_abstr[1:])
+        abstr_kl_z_unscaled = self._kl_div(pred['abstr_z_post'][:-1], pred['abstr_z_prior'][:-1], mask_abstr[:-1])
         abstr_kl_z = beta * self.beta_kl_abstr * abstr_kl_z_unscaled
-        abstr_kl_z_reg_unscaled = self._kl_reg(pred['abstr_z_post'], mask)
+        abstr_kl_z_reg_unscaled = self._kl_reg(pred['abstr_z_post'][:-1], mask_abstr[:-1])
         abstr_kl_z_reg = beta * self.beta_reg_abstr * abstr_kl_z_reg_unscaled
 
         # disable abstract model loss in case we only use the primitive level
@@ -464,12 +464,12 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
         total = prim_rec_o + prim_rec_r + prim_rec_term + prim_kl_z + prim_kl_z_reg
         total += abstr_factor * (abstr_rec_o + abstr_rec_r + abstr_rec_term + abstr_kl_z + abstr_kl_z_reg)
-        prim_o_mae = self._mae(pred['prim_o'], o_ground_truth, mask)
-        prim_r_mae = self._mae(pred['prim_r'], r_ground_truth, mask)
-        prim_term_mae = self._mae(pred['prim_term'], term_ground_truth, mask)
-        abstr_o_mae = self._mae(pred['abstr_o'], abstr_o_target, mask_abstr)
-        abstr_r_mae = self._mae(pred['abstr_r'], abstr_r_ground_truth, mask_abstr)
-        abstr_term_mae = self._mae(pred['abstr_term'], abstr_term_ground_truth, mask_abstr)
+        prim_o_mae = self._mae(pred['prim_o'][:-1], o_ground_truth[1:], mask[1:])
+        prim_r_mae = self._mae(pred['prim_r'][:-1], r_ground_truth[1:], mask[1:])
+        prim_term_mae = self._mae(pred['prim_term'][:-1], term_ground_truth[1:], mask[1:])
+        abstr_o_mae = self._mae(pred['abstr_o'][:-1], abstr_o_target[1:], mask_abstr[1:])
+        abstr_r_mae = self._mae(pred['abstr_r'][:-1], abstr_r_ground_truth[1:], mask_abstr[1:])
+        abstr_term_mae = self._mae(pred['abstr_term'][:-1], abstr_term_ground_truth[1:], mask_abstr[1:])
 
         return {'total': total, 'prim_o': prim_rec_o, 'prim_r': prim_rec_r, 'prim_term': prim_rec_term,
                 'prim_kl_s': prim_kl_z, 'prim_kl_s_reg': prim_kl_z_reg, 'abstr_o': abstr_rec_o,
