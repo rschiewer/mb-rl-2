@@ -18,7 +18,7 @@ mdm:
   n_warmup_prim: -1
   n_warmup_abstr: -1
   detach_posteriors: False
-  latent_overshooting: True
+  latent_overshooting: False
   beta_abstract_action: 0.0
   beta_abstract_model: 1.0
   abstract_pred_target: "prim_o"
@@ -109,11 +109,11 @@ abstr_act_mdl:
   model_type: "det_mapping"
 
 optim:
-  type: 'adam'  #'adamW'
-  lr: 0.001 #0.0002
+  type: 'adamW'  #'adamW'
+  lr: 0.0005 #0.0002
 
 trainer:
-  n_train_steps: 20000
+  n_train_steps: 10000
   eval_interval: 100
   d_batch: 2048
   pad_last_terminal_flag: False

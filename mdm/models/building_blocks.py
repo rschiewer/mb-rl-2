@@ -158,7 +158,6 @@ class RSSM(torch.nn.Module):
         self.d_x_posterior = self.d_o_encoded + 2  # observation + reward + terminal
 
         z_prior_lws = (d_h, *z_prior_lws, d_z_final)
-        #z_prior_lws = (d_z + d_a, *z_prior_lws, d_z_final)
         z_post_lws = (d_z_post_in + self.d_x_posterior, *z_post_lws, d_z_final)
 
         if rnn_type == 'lstm':
