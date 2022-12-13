@@ -167,7 +167,7 @@ class RSSM(torch.nn.Module):
         else:
             raise ValueError(f'Unsupported rnn type: {rnn_type}')
 
-        d_det_core = d_z_smpl + d_a
+        d_det_core = d_z_final + d_a
         self._rnn = rnn_constr(d_det_core, hidden_size=d_h, num_layers=n_hidden_layers, batch_first=False,
                                dropout=hidden_dropout)
         self._z_prior = torch.nn.Sequential(lwa(z_prior_lws, activation, layer_norm=layer_norm, name='z_prior'))
@@ -195,8 +195,14 @@ class RSSM(torch.nn.Module):
 
     def zero_z(self,
                d_batch: int,
-               device: torch.device) -> torch.Tensor:
-        return torch.zeros(d_batch, self.d_z_smpl, device=device)
+               device: torch.device) -> torch.distributions.Distribution:
+        #return torch.zeros(d_batch, self.d_z_smpl, device=device)
+        if self.latent_dist == 'normal':
+            loc = torch.zeros(d_batch, self.d_z, device=device)
+            scale = torch.full_like(loc, 1e-5)
+            return torch.distributions.Normal(loc, scale)
+        else:
+            raise NotImplementedError('implement other distribution types')
 
     def zero_o(self,
                d_batch: int,
@@ -233,11 +239,12 @@ class RSSM(torch.nn.Module):
         return torch.zeros(d_batch, 0, device=device)
 
     def _det_core(self,
-                  z: torch.Tensor,
+                  z: torch.distributions.Distribution,
                   rnn_state: torch.Tensor,
                   a: torch.Tensor,
                   ctx_high_level: torch.Tensor):
-        inp = torch.concat([z, a, ctx_high_level], dim=-1)
+        z_params = torch.concat(get_dist_params(z), dim=-1)
+        inp = torch.concat([z_params, a, ctx_high_level], dim=-1)
         inp = inp.unsqueeze(0)  # add time dim
         #rnn_state = self.zero_rnn_state(inp.shape[1], inp.device)
         x_det, next_rnn_state = self._rnn(inp, rnn_state)
@@ -245,7 +252,7 @@ class RSSM(torch.nn.Module):
         return x_det, next_rnn_state
 
     def imagine(self,
-                z: torch.Tensor,
+                z: torch.distributions.Distribution,
                 rnn_state: RnnStateType,
                 ctx_high_level: torch.Tensor,
                 a: torch.Tensor,
@@ -253,10 +260,10 @@ class RSSM(torch.nn.Module):
         h, next_rnn_state = self._det_core(z, rnn_state, a, ctx_high_level)
         z_prior, z_smpl = self.build_z_prior(h, sample)
 
-        return {'z': z_smpl, 'z_prior': z_prior, 'h': h, 'rnn_state': next_rnn_state}
+        return {'z': z_prior, 'z_prior': z_prior, 'h': h, 'rnn_state': next_rnn_state}
 
     def observe(self,
-                z: torch.Tensor,
+                z: torch.distributions.Distribution,
                 rnn_state: RnnStateType,
                 a: torch.Tensor,
                 o_current: torch.Tensor,
@@ -268,15 +275,15 @@ class RSSM(torch.nn.Module):
         x_current_groundtruth = torch.concat([self.obs_encoder(o_current), r_current, term_current], dim=-1)
         z_post, z_smpl = self.build_z_post(imagination['h'], imagination['z_prior'], x_current_groundtruth, sample)
 
-        imagination['z'] = z_smpl  # overwrite with posterior sample
+        imagination['z'] = z_post  # overwrite with posterior sample
         imagination['z_post'] = z_post
         return imagination
 
     def reconstruct(self,
-                    z: torch.Tensor,
+                    z: torch.distributions.Distribution,
                     h: torch.Tensor,
                     sample: bool = True):
-        s = torch.concat([h, z], dim=-1)
+        s = torch.concat([h, z.rsample()], dim=-1)
         o_dist, o_smpl = self.obs_decoder(s, sample)
         r_dist, r_smpl = self.r_decoder(s, sample)
         term_dist, term_smpl = self.term_decoder(s, sample)
@@ -285,7 +292,7 @@ class RSSM(torch.nn.Module):
                 'term': term_smpl}
 
     def forward(self,
-                z: torch.Tensor,
+                z: torch.distributions.Distribution,
                 rnn_state: RnnStateType,
                 a: torch.Tensor,
                 o_current: torch.Tensor,
