@@ -451,12 +451,12 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         # This predicts the correct prim_s, but is inconsistent with the rest of the training procedure.
 
         abstr_o_target = torch.stack(pred['abstr_o_target'], dim=0)
-        abstr_rec_o = self._neg_log_prob(pred['abstr_o_dist'], abstr_o_target, mask)
-        abstr_rec_r = self._neg_log_prob(pred['abstr_r_dist'], abstr_r_ground_truth, mask)
-        abstr_rec_term = self._neg_log_prob(pred['abstr_term_dist'], abstr_term_ground_truth, mask)
-        abstr_kl_z_unscaled = self._kl_div(pred['abstr_z_post'], pred['abstr_z_prior'], mask)
+        abstr_rec_o = self._neg_log_prob(pred['abstr_o_dist'], abstr_o_target, mask_abstr)
+        abstr_rec_r = self._neg_log_prob(pred['abstr_r_dist'], abstr_r_ground_truth, mask_abstr)
+        abstr_rec_term = self._neg_log_prob(pred['abstr_term_dist'], abstr_term_ground_truth, mask_abstr)
+        abstr_kl_z_unscaled = self._kl_div(pred['abstr_z_post'], pred['abstr_z_prior'], mask_abstr)
         abstr_kl_z = beta * self.beta_kl_abstr * abstr_kl_z_unscaled
-        abstr_kl_z_reg_unscaled = self._kl_reg(pred['abstr_z_post'], mask)
+        abstr_kl_z_reg_unscaled = self._kl_reg(pred['abstr_z_post'], mask_abstr)
         abstr_kl_z_reg = beta * self.beta_reg_abstr * abstr_kl_z_reg_unscaled
 
         # disable abstract model loss in case we only use the primitive level
