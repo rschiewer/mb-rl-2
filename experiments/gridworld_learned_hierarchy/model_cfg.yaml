@@ -4,7 +4,7 @@ neptune_cfg: "../neptune_settings.yaml"
 train_samples: "gridworld_v0_train.samples"#"gridworld_v0_good_trajectories.samples"
 test_samples: "gridworld_v0_good_trajectories.samples"
 checkpoint_path: "checkpoints"
-final_model_path: "model"
+final_model_path: "trained_models/model"
 
 # model in general
 mdm:

@@ -1,3 +1,4 @@
+import os.path
 from pathlib import Path
 import io
 import argparse
@@ -268,11 +269,18 @@ if __name__ == '__main__':
     trainer.train(n_train_steps=cfg['trainer']['n_train_steps'], progress_bar=True,
                   checkpoint_path=here() / cfg['checkpoint_path'])
 
+    # check if output folder exists, if not create it
+    p = here() / cfg['final_model_path'][:cfg['final_model_path'].rindex('/')]
+    if not os.path.exists(p):
+        os.makedirs(p)
+
+    # query the run id from logger if neptune log is running
     if logger:
         model_path = f'{cfg["final_model_path"]}_{logger.run_id}.ptmdl'
     else:
         model_path = f'{cfg["final_model_path"]}.ptmdl'
 
+    # store model and output run id if logger was active
     torch.save(model, here() / model_path)
     logger.start_session()
     logger.log_file(here() / model_path, Scope.DATA() / 'final_weights')
