@@ -189,6 +189,7 @@ class Gridworld(gym.Env):
 
         self._cell_h, self._cell_w = round(self._canvas_h / self.grid_h), round(self._canvas_w / self.grid_w)
 
+        self.canvas.delete('all')
         for y in range(self.grid_h):
             for x in range(self.grid_w):
                 x0, y0 = self._cell_w * x, self._cell_h * y
