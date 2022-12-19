@@ -199,8 +199,8 @@ def plot_trajectory_stats(mem, bins: int):
     terminals = np.array(terminals)
     truncateds = np.array(truncateds)
 
-    terminal_false, terminal_true = np.bincount(terminals) / len(terminals)
-    truncated_false, truncated_true = np.bincount(truncateds) / len(truncateds)
+    terminal_false, terminal_true = np.bincount(terminals, minlength=2) / len(terminals)
+    truncated_false, truncated_true = np.bincount(truncateds, minlength=2) / len(truncateds)
     successful_false, successful_true = 1 - successful/len(mem), successful/len(mem)
 
     a_bins = min(len(np.unique(actions)), bins)
