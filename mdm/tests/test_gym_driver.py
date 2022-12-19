@@ -5,16 +5,21 @@ import gym
 import numpy as np
 
 from mdm.training.gym_driver import GymEpisodeDriver
+from mdm.utils.step_count_environment import StepCountEnv
 
 
 class GymEpisodeDriverTest(unittest.TestCase):
 
     @staticmethod
-    def _run_env(env: gym.Env, actions: Iterable = None):
-        trajectory = {'s': [], 'a': [], 'r': [], 'terminal': []}
+    def _run_env(env: gym.Env, actions: Iterable = None, seed: int = None):
+        trajectory = {'o': [], 'a': [], 'r': [], 'terminal': [], 'truncated': []}
 
-        observation = env.reset()
-        trajectory['s'].append(observation)
+        observation, _ = env.reset(seed=seed)
+        trajectory['o'].append(observation)
+        trajectory['a'].append(np.zeros_like(env.action_space.sample()))
+        trajectory['r'].append(0.0)
+        trajectory['terminal'].append(False)
+        trajectory['truncated'].append(False)
 
         if actions is None:
             def get_act():
@@ -27,12 +32,13 @@ class GymEpisodeDriverTest(unittest.TestCase):
 
         while True:
             action = get_act()
-            observation, reward, done, info = env.step(action)
-            trajectory['s'].append(observation)
+            observation, reward, term, trunc, info = env.step(action)
+            trajectory['o'].append(observation)
             trajectory['a'].append(action)
             trajectory['r'].append(reward)
-            trajectory['terminal'].append(done)
-            if done:
+            trajectory['terminal'].append(term)
+            trajectory['truncated'].append(trunc)
+            if term or trunc:
                 break
 
         return {k: np.array(v) for k, v in trajectory.items()}
@@ -41,25 +47,23 @@ class GymEpisodeDriverTest(unittest.TestCase):
         self.rand_seed = 42
         self.batch_sizes = [1, 10]
         self.num_batches = 3
-        self.envs = [gym.make('CartPole-v0'), gym.make('MountainCar-v0')]
+        self.envs = [StepCountEnv(gym.make('CartPole-v1')), StepCountEnv(gym.make('MountainCar-v0'))]
 
     def test_get_batch(self):
         for batch_size in self.batch_sizes:
             for env in self.envs:
-                env.seed(self.rand_seed + batch_size)
                 np.random.seed(self.rand_seed + batch_size)
                 collector = GymEpisodeDriver(env, lambda s, r, term, i_ep: env.action_space.sample())
 
                 trajectories = []
                 for _ in range(self.num_batches):
-                    trajectories.extend(list(collector.interact(batch_size)))
+                    trajectories.extend(collector.interact(batch_size, seed=self.rand_seed + batch_size))
                 self.assertEqual(len(trajectories), batch_size * self.num_batches)
 
                 # now reproduce samples with real environment (only test deterministic envs)
-                env.seed(self.rand_seed + batch_size)
                 np.random.seed(self.rand_seed + batch_size)
                 for traj in trajectories:
-                    rerun_traj = self._run_env(env, traj['a'])
+                    rerun_traj = self._run_env(env, traj['a'][1:], self.rand_seed + batch_size)
                     for orig, rerun in zip(traj.values(), rerun_traj.values()):
                         diff = np.sum(np.abs(orig.astype(np.float32) - rerun.astype(np.float32)))
                         self.assertTrue(np.isclose(diff, 0))
