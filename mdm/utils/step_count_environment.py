@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, Optional
 
 import gym
 from gym.core import ObsType, ActType
@@ -11,10 +11,9 @@ class StepCountEnv(gym.Wrapper):
         super(StepCountEnv, self).__init__(env)
         self.current_step = 0
 
-    def reset(self,
-              **kwargs) -> Tuple[ObsType, dict]:
+    def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None) -> Tuple[ObsType, dict]:
         self.current_step = 0
-        return super(StepCountEnv, self).reset(**kwargs)
+        return super(StepCountEnv, self).reset(seed=seed, options=options)
 
     def step(self,
              action: ActType) -> Tuple[ObsType, float, bool, bool, dict]:
