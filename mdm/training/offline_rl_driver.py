@@ -40,7 +40,6 @@ class OfflineRLDriver(Driver):
             sub_memory = self.memory[i_start: i_end]
         else:
             sub_memory = random.choices(self.memory, k=n_episodes)
-            #sub_memory = [self.memory[random.randint(0, len(self.memory))] for _ in range(n_episodes)]
 
         return sub_memory
 
