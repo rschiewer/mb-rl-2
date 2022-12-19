@@ -15,7 +15,7 @@ class ManagedEnv(gym.Wrapper):
         return self._curr_timestep == 0
 
     def step(self, a):
-        if self._curr_timestep == 0:  # by convention, make (a_0, r_0, t_0) = 0
+        if self._curr_timestep == 0:  # by convention, make (a_0, r_0, term_0, trunc_0) = 0
             o = self.env.reset()
             a = np.zeros_like(self.env.action_space.sample())
             r = 0.0
