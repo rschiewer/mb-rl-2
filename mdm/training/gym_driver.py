@@ -63,7 +63,7 @@ def act_in_env(env: StepCountEnv,
     if n_steps == -1:
         n_steps = sys.maxsize.real
 
-    if env.current_step is None:
+    if env.current_step == 0:
         o, _ = env.reset(seed=seed)
         traj_o.append(o)
         traj_a.append(np.zeros_like(env.action_space.sample()))  # by convention, make (a_0, r_0, t_0) = 0
