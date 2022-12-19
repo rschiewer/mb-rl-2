@@ -259,7 +259,7 @@ class GridworldTest(unittest.TestCase):
         o, r, term, trunc, info = fully_observable_world.step(fully_observable_world.action_space.sample())
         self.assertGreater(np.sum(np.abs(o_old - o)), 0)
 
-    #@unittest.skip
+    @unittest.skip
     def test_async_vector_gridworld(self):
         envs = gym.vector.AsyncVectorEnv([
             lambda: Gridworld.from_cleartext(Path(__file__).parent / 'testmap.mapdata'),
@@ -275,7 +275,7 @@ class GridworldTest(unittest.TestCase):
             o, r, term, trunc, info = envs.step(a)
             done = [x or y for x, y in zip(term, trunc)]
 
-    @unittest.skip
+    #@unittest.skip
     def test_render(self):
         world = self.world
 
