@@ -447,7 +447,15 @@ def extract_sub_distribution(d: torch.distributions.Distribution,
         raise ValueError(f'Batch size of distribution should be smaller or equal to number of specified indices ',
                          f'but found {len(d.batch_shape)} and {len(idx)}')
     if keepdim:  # make single int indices to slices of length 1 to prevent loss of dimension
-        idx = [slice(i, i+1) if type(i) is int else i for i in idx]
+        tmp = []
+        for i in idx:
+            if type(i) is int:
+                tmp.append(slice(i, i+1))
+            elif isinstance(i, torch.Tensor):
+                tmp.append(slice(i.detach().cpu().numpy().item(), i.detach().cpu().numpy().item() + 1))
+            else:
+                tmp.append(i)
+        idx = tmp
     if isinstance(d, torch.distributions.Normal):
         d_extracted = torch.distributions.Normal(loc=d.loc[idx], scale=d.scale[idx])
     elif isinstance(d, torch.distributions.OneHotCategorical):
@@ -459,6 +467,23 @@ def extract_sub_distribution(d: torch.distributions.Distribution,
     else:
         raise ValueError(f'Distribution class not supported: {type(d)}')
     return d_extracted
+
+
+def repeat_distribution(d: torch.distributions.Distribution,
+                        repeats: Sequence):
+    if len(d.batch_shape) != len(repeats):
+        raise ValueError(f'repeats argument should have the same length as distributions batch_shape')
+    if isinstance(d, torch.distributions.Normal):
+        d_repeated = torch.distributions.Normal(loc=d.loc.repeat(*repeats), scale=d.scale.repeat(*repeats))
+    elif isinstance(d, torch.distributions.OneHotCategorical):
+        d_repeated = torch.distributions.OneHotCategorical(logits=d.logits.repeat(*repeats))
+    elif isinstance(d, torch.distributions.RelaxedOneHotCategorical):
+        d_repeated = torch.distributions.RelaxedOneHotCategorical(d.temperature, logits=d.logits.repeat(*repeats))
+    elif isinstance(d, torch.distributions.ContinuousBernoulli):
+        d_repeated = torch.distributions.ContinuousBernoulli(logits=d.logits.repeat(*repeats))
+    else:
+        raise ValueError(f'Distribution class not supported: {type(d)}')
+    return d_repeated
 
 
 def reconstruction_loss(y_hat: torch.Tensor, y_true: torch.Tensor):
