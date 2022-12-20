@@ -20,6 +20,8 @@ class GymEpisodeDriver(Driver):
                  env: StepCountEnv,
                  policy: Callable):
         super(GymEpisodeDriver, self).__init__()
+        if not isinstance(env, StepCountEnv):
+            raise ValueError(f'Provided environment needs to be wrapped in {StepCountEnv.__class__.__name__}')
         self.env = env
         self.policy = policy
 
