@@ -392,6 +392,24 @@ class OneHotEncoder(InputEncoder):
         return self._mdl(o)
 
 
+class MLPEncoder(InputEncoder):
+
+    def __init__(self,
+                 s_x_orig: Union[int, Sequence[int]],
+                 d_x_encoded: int,
+                 lws: Sequence[int],
+                 activation: str,
+                 layer_norm: bool,
+                 **kwargs):
+        super(MLPEncoder, self).__init__(s_x_orig, d_x_encoded)
+        lws = (np.prod(s_x_orig), *lws, d_x_encoded)
+        self._mdl = torch.nn.Sequential(*lwa(lws, activation, layer_norm=layer_norm))
+
+    def forward(self,
+                o: torch.Tensor):
+        return self._mdl(o)
+
+
 class OutputDecoder(torch.nn.Module, ABC):
 
     def __init__(self, s_x_orig: Union[int, Sequence[int]], d_x_encoded: int):
@@ -426,8 +444,8 @@ class GaussianDecoder(OutputDecoder):
 
     def forward(self, x_enc: torch.Tensor, sample: bool = True):
         params = self._mdl(x_enc)
-        if self.s_x_orig != (1,):
-            params = params.reshape(*params.shape[:-1], *self.s_x_orig, 2)
+        #if self.s_x_orig != (1,):
+        #    params = params.reshape(*params.shape[:-1], *self.s_x_orig, 2)
         mu, logvar = torch.tensor_split(params, 2, dim=-1)
         sigma = torch.exp(0.5 * logvar) + self.epsilon
         d = torch.distributions.Normal(loc=mu, scale=sigma)
