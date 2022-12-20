@@ -4,6 +4,7 @@ from typing import List, Dict
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
+import seaborn as sns
 from numpy import ma as ma
 
 from mdm.gridworld.gridworld import Gridworld, CellType
@@ -187,7 +188,7 @@ def plot_trajectory_stats(mem, bins: int):
 
     for t in mem:
         lengths.append(len(t['o']))
-        actions.extend([a.tolist() for a in t['a']])
+        actions.extend(t['a'])
         rewards.extend(t['r'])
         terminals.extend([t.astype(int) for t in t['terminal']])
         truncateds.extend([t.astype(int) for t in t['truncated']])
@@ -203,29 +204,25 @@ def plot_trajectory_stats(mem, bins: int):
     truncated_false, truncated_true = np.bincount(truncateds, minlength=2) / len(truncateds)
     successful_false, successful_true = 1 - successful/len(mem), successful/len(mem)
 
-    a_bins = min(len(np.unique(actions)), bins)
-    r_bins = min(len(set(rewards)), bins)
-    len_bins = min(len(set(lengths)), bins)
-
     print('start plotting, this may take a while...')
 
     fig, ax = plt.subplots(2, 3, figsize=(16, 10))
-    fig.suptitle(f'Statistics over {len(mem)} Trajectories')
+    fig.suptitle(f'Per Timestep Statistics over {len(mem)} Trajectories')
 
     ax.flat[0].set_title('actions')
-    ax.flat[0].hist(actions, bins=a_bins, rwidth=0.5)
+    sns.histplot(actions, ax=ax.flat[0])
 
     ax.flat[1].set_title('rewards')
-    ax.flat[1].hist(rewards, bins=r_bins, rwidth=0.5)
+    sns.histplot(rewards, ax=ax.flat[1])
 
-    ax.flat[2].set_title('terminal flags')
-    ax.flat[2].pie([terminal_true, terminal_false], labels=['true', 'false'], autopct='%1.1f%%')
+    ax.flat[2].set_title('episode lengths')
+    sns.histplot(lengths, ax=ax.flat[2])
 
     ax.flat[3].set_title('truncated flags')
     ax.flat[3].pie([truncated_true, truncated_false], labels=['true', 'false'], autopct='%1.1f%%')
 
-    ax.flat[4].set_title('episode lengths')
-    ax.flat[4].hist(lengths, bins=len_bins, rwidth=0.5)
+    ax.flat[4].set_title('terminal flags')
+    ax.flat[4].pie([terminal_true, terminal_false], labels=['true', 'false'], autopct='%1.1f%%')
 
     ax.flat[5].set_title('successful episodes')
     ax.flat[5].pie([successful_true, successful_false], labels=['true', 'false'], autopct='%1.1f%%')
