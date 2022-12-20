@@ -28,6 +28,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                  n_warmup_prim: Union[int, Sequence[int]] = 1,
                  n_warmup_abstr: Union[int, Sequence[int]] = 1,
                  latent_overshooting: bool = False,
+                 overshooting_stride: int = 1,
                  detach_posteriors: bool = False):
         if not abstract_pred_target.startswith('prim_'):
             raise ValueError(f'Abstract model\'s prediciton target should be from primitive model and start ',
@@ -52,6 +53,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         self.n_warmup_prim = n_warmup_prim
         self.n_warmup_abstr = n_warmup_abstr
         self.latent_overshooting = latent_overshooting
+        self.overshooting_stride = overshooting_stride
         self.detach_posteriors = detach_posteriors
         self._current_train_step = None
 
@@ -277,7 +279,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         optimizer.zero_grad(set_to_none=True)
         losses = self.eval_step(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, mask)
         losses['total'].backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
+        #torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
         optimizer.step()
 
         self._current_train_step += 1
@@ -333,7 +335,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         loss['beta'] = torch.tensor(beta)
 
         if self.latent_overshooting:
-            for i_chunk in range(1, abstr_steps, 4):
+            for i_chunk in range(1, abstr_steps, self.abstract_step_size * self.overshooting_stride):
                 t = i_chunk * self.abstract_step_size
                 prim_z = pred_post['prim_z'][t]
                 prim_rnn_state = pred_post['prim_rnn_state'][t]
@@ -362,11 +364,11 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                 loss['monitoring_abstr_kl'] += kl_abstr
 
             # each of the loss terms below was calculated once for pred_post call and then abstr_steps - 1 times in the loop
-            normalizing_factor = max(abstr_steps, 1)
-            loss['prim_kl_s'] /= normalizing_factor
-            loss['abstr_kl_s'] /= normalizing_factor
-            loss['monitoring_prim_kl'] /= normalizing_factor
-            loss['monitoring_abstr_kl'] /= normalizing_factor
+            #normalizing_factor = max(abstr_steps, 1)
+            #loss['prim_kl_s'] /= normalizing_factor
+            #loss['abstr_kl_s'] /= normalizing_factor
+            #loss['monitoring_prim_kl'] /= normalizing_factor
+            #loss['monitoring_abstr_kl'] /= normalizing_factor
 
         return loss
 
@@ -398,8 +400,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             kl_div = kl_div[1:].mean()  # ignore first prior since it's totally uninformed
         else:
             kl_div = torch.tensor(0, dtype=torch.float32)
-        if torch.isnan(kl_div):
-            print('!!!')
+        #if torch.isnan(kl_div):
+        #    print('!!!')
         return kl_div
 
     @staticmethod
@@ -461,6 +463,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
 
         # disable abstract model loss in case we only use the primitive level
         abstr_factor = 1 if len(pred['abstr_o']) > 1 else 0
+        abstr_factor *= self.beta_abstract_model
 
         total = prim_rec_o + prim_rec_r + prim_rec_term + prim_kl_z + prim_kl_z_reg
         total += abstr_factor * (abstr_rec_o + abstr_rec_r + abstr_rec_term + abstr_kl_z + abstr_kl_z_reg)
