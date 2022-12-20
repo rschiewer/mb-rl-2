@@ -221,15 +221,74 @@ def fig_to_img(fig, clear_fig: bool = True):
     return Image.open(buffer)
 
 
-def prepare_data(s: Union[np.ndarray, torch.Tensor],
+def prepare_data(o: Union[np.ndarray, torch.Tensor],
                  a: Union[np.ndarray, torch.Tensor],
                  r: Union[np.ndarray, torch.Tensor],
                  terminal: Union[np.ndarray, torch.Tensor],
                  truncated: Union[np.ndarray, torch.Tensor],
                  mask: Union[np.ndarray, torch.Tensor],
-                 env: Gridworld,
                  subtrajectory_len: int = 0,
+                 a_discrete: bool = False,
+                 a_max: int = 0,
+                 o_discrete: bool = False,
+                 o_max: int = 0,
+                 swap_batch_time_dim: bool = False
                  ) -> Tuple[Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
+                            Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
+                            Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray]]:
+    assert o.ndim >= 2, f'Observation dim is {o.ndim}, but needs to be at least 2'
+    assert a.ndim >= 2, f'Action dim is {a.ndim}, but needs to be at least 2'
+    assert 2 <= r.ndim <= 3, f'Reward dim is {r.ndim}, but needs to be 2 or 3'
+    assert 2 <= terminal.ndim <= 3, f'Terminal dim is {terminal.ndim}, but needs to be 2 or 3'
+    assert 2 <= truncated.ndim <= 3, f'Truncated dim is {truncated.ndim}, but needs to be 2 or 3'
+    assert 2 <= mask.ndim <= 3, f'Mask dim is {mask.ndim}, but needs to be 2 or 3'
+
+    # expand data dimensions to at least one, so e.g. rewards have shape (batch, time, 1)
+    if o.ndim == 2: o = o.unsqueeze(-1)
+    if a.ndim == 2: a = a.unsqueeze(-1)
+    if r.ndim == 2: r = r.unsqueeze(-1)
+    if terminal.ndim == 2: terminal = terminal.unsqueeze(-1)
+    if truncated.ndim == 2: truncated = truncated.unsqueeze(-1)
+    if mask.ndim == 2: mask = mask.unsqueeze(-1)
+
+    if o_discrete:
+        o = to_onehot(o, o_max)
+    if a_discrete:
+        a = to_onehot(a, a_max)
+
+    # swap batch and time axis
+    if swap_batch_time_dim:
+        o = o.swapaxes(0, 1)
+        a = a.swapaxes(0, 1)
+        r = r.swapaxes(0, 1)
+        terminal = terminal.swapaxes(0, 1)
+        truncated = truncated.swapaxes(0, 1)
+        mask = mask.swapaxes(0, 1)
+
+    if subtrajectory_len > 0:
+        # select a block of l_segment timesteps out of all trajectories
+        l_data = r.shape[0]
+        t_start = random.randint(0, l_data - subtrajectory_len)
+        t_end = t_start + subtrajectory_len
+        o = o[t_start:t_end]
+        a = a[t_start:t_end]
+        r = r[t_start:t_end]
+        terminal = terminal[t_start:t_end]
+        truncated = truncated[t_start:t_end]
+        mask = mask[t_start:t_end]
+
+    return o, a, r, terminal, truncated, mask
+
+
+def prepare_data_gridworld(s: Union[np.ndarray, torch.Tensor],
+                           a: Union[np.ndarray, torch.Tensor],
+                           r: Union[np.ndarray, torch.Tensor],
+                           terminal: Union[np.ndarray, torch.Tensor],
+                           truncated: Union[np.ndarray, torch.Tensor],
+                           mask: Union[np.ndarray, torch.Tensor],
+                           env: Gridworld,
+                           subtrajectory_len: int = 0,
+                           ) -> Tuple[Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
                             Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
                             Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray]]:
     s, a, r, terminal, truncated, mask = flatten_and_unsqueeze(s, a, r, terminal, truncated, mask)
@@ -492,4 +551,32 @@ def sensitivity_analysis(module: torch.nn.Module,
         ret_std = torch.std(output, dim=0, unbiased=False)
 
     return ret_mean, ret_std
+
+
+def random_walk_success_rate(env: gym.Env,
+                             n_steps: int,
+                             n_tries: int):
+    success = 0
+    ep_returns = []
+    ep_lens = []
+    for i_run in range(n_tries):
+        env.reset()
+        r_ep, l_ep = 0, 0
+        for i_step in range(n_steps):
+            a = env.action_space.sample()
+            o, r, term, trunc, info = env.step(a)
+            l_ep += 1
+            r_ep += r
+            if term:
+                success += 1
+                break
+            if trunc:
+                break
+        ep_returns.append(r_ep)
+        ep_lens.append(l_ep)
+    success /= n_tries
+    ep_returns = np.array(ep_returns)
+    ep_lens = np.array(ep_lens)
+    return success, ep_returns, ep_lens
+
 

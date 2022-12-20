@@ -168,8 +168,8 @@ if __name__ == '__main__':
     def get_batch_train(i_step):
         batch = train_driver.interact(d_batch)
         s, a, r, terminal, truncated, mask = to_tensors(batch, model.device)
-        s, a, r, terminal, truncated, mask = prepare_data(s, a, r, terminal, truncated, mask, env,
-                                                          subtrajectory_len=train_with_subtrajectories)
+        s, a, r, terminal, truncated, mask = prepare_data_gridworld(s, a, r, terminal, truncated, mask, env,
+                                                                    subtrajectory_len=train_with_subtrajectories)
         s, a, r, terminal, truncated, mask = augment_train_data_random(s, a, r, terminal, truncated, mask, d_batch//4)
         return s, a, r, terminal, truncated, mask
 
@@ -198,7 +198,7 @@ if __name__ == '__main__':
         #total_reward = experience[0]['r'].sum()
         #logger.log({'planning_r': total_reward}, Scope.TEST() / 'planning_reward', i_step)
         #s, a, r, terminal, w, = experience.to_np_arrays(dtype=np.float32, pad_last_terminal_flag=pad)
-        s, a, r, terminal, truncated, mask = prepare_data(s, a, r, terminal, truncated, mask, env)
+        s, a, r, terminal, truncated, mask = prepare_data_gridworld(s, a, r, terminal, truncated, mask, env)
         return s, a, r, terminal, truncated, mask
 
     model_path = f'{cfg["final_model_path"]}_{cfg["mdm"]["abstract_step_size"]}.ptmdl'
