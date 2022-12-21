@@ -359,7 +359,8 @@ def bin_every_k_steps(data: torch.Tensor,
     return binned
 
 
-def layers_with_activation(lws: Sequence[int], activation: str = 'relu', layer_norm: bool = False, name: str = None):
+def layers_with_activation(lws: Sequence[int], activation: str = 'relu', layer_norm: bool = False, name: str = None,
+                           final_activation_function: bool = False):
     if activation == 'relu':
         act_constr = torch.nn.ReLU
     elif activation == 'gelu':
@@ -380,6 +381,9 @@ def layers_with_activation(lws: Sequence[int], activation: str = 'relu', layer_n
         else:
             layers += [torch.nn.Linear(w_in, w_out), act_constr()]
     layers.append(torch.nn.Linear(lws[-2], lws[-1]))
+
+    if final_activation_function:
+        layers.append(act_constr())
 
     if name:
         layers = OrderedDict([(f'{name}_{i}', l) for i, l in enumerate(layers)])
