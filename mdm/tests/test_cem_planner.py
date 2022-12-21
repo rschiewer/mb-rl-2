@@ -2,6 +2,7 @@ import time
 import unittest
 
 import torch
+import gym
 
 from mdm.planning.cem_planner import CrossentropyPlanner
 from mdm.gridworld.gridworld import Gridworld
@@ -119,11 +120,63 @@ class CrossentropyMethodPlanner(unittest.TestCase):
         eval_env.reset()
         for a in actions:
             eval_env.render()
-            a, r, term, trunc, info = eval_env.step(a.detach().cpu().numpy())
+            o, r, term, trunc, info = eval_env.step(a.detach().cpu().numpy())
             time.sleep(0.1)
             if term or trunc:
                 break
 
+    def test_planning_with_groundtruth_2(self):
+        d_batch = 128
+        n_opt_steps = 20
+        n_plan_steps = 30
+        winning_perc = 0.25
+        discount = 0.99
+        act_noise = 0.000
+        dist_type = DistributionType.NORMAL
+        a_min = -1.0
+        a_max = 1.0
+
+        batch_env = [gym.make('gym_nav2d:nav2dVeryEasy-v0') for _ in range(d_batch)]
+
+        def rollout_fn(actions: torch.Tensor):
+            actions = actions[0]  # remove "envs" dimension since we've only one environment
+            rewards = torch.zeros(d_batch, n_plan_steps)
+            terminal_flags = torch.ones(d_batch, n_plan_steps)
+            for i_env, env in enumerate(batch_env):
+                env.reset()
+                for i_a, a in enumerate(actions[i_env]):
+                    s, r, term, trunc, info = env.step(a.detach().cpu().numpy())
+                    rewards[i_env, i_a] = r
+                    terminal_flags[i_env, i_a] = term
+                    if term or trunc:
+                        break
+            # add "envs" dimension to rewards and terminal flags
+            rewards = rewards.unsqueeze(0)
+            terminal_flags = terminal_flags.unsqueeze(0)
+            return rewards, terminal_flags, {}
+
+        ce_planner = CrossentropyPlanner(type=dist_type, d_dist=batch_env[0].action_space.shape[0],
+                                         n_evolution_steps=n_opt_steps, winning_perc=winning_perc, discount=discount,
+                                         act_noise=act_noise, a_min=a_min, a_max=a_max)
+
+        actions, dist, i_winners, R_winners, rollout_data = ce_planner.plan(rollout_fn=rollout_fn, n_rollouts=d_batch,
+                                                                            n_plan_steps=n_plan_steps, n_envs=1)
+        actions = ce_planner.get_winner_actions(actions, dist, i_winners, resample=False)
+        actions = actions[0]  # remove redundant "envs" dimension
+        eval_env = batch_env[0]
+        eval_env.reset()
+        success = False
+        for a in actions:
+            eval_env.render()
+            o, r, term, trunc, info = eval_env.step(a.detach().cpu().numpy())
+            time.sleep(1)
+            if term or trunc:
+                eval_env.render()
+                success = term
+                break
+        self.assertTrue(success)
+
+    #@unittest.skip
     def test_planning_with_groundtruth_multi_env(self):
         n_envs = 2
         d_batch = 128
@@ -170,7 +223,7 @@ class CrossentropyMethodPlanner(unittest.TestCase):
             eval_env.reset()
             for a in cur_env_actions:
                 eval_env.render()
-                a, r, term, trunc, info = eval_env.step(a.detach().cpu().numpy())
+                o, r, term, trunc, info = eval_env.step(a.detach().cpu().numpy())
                 time.sleep(0.1)
                 if term or trunc:
                     break

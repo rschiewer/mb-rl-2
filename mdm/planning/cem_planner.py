@@ -45,6 +45,8 @@ class CrossentropyPlanner:
                  alpha: float = 1.0,
                  device: torch.device = 'cpu',
                  debug_env: gym.Env = None,
+                 a_min: float = None,
+                 a_max: float = None,
                  **dist_args):
         self.type = type
         self.d_dist = d_dist
@@ -56,6 +58,8 @@ class CrossentropyPlanner:
         self.dist_args = dist_args
         self.alpha = alpha
         self._debug_env = copy.deepcopy(debug_env)
+        self.a_min = torch.tensor(a_min, device=device) if a_min is not None else None
+        self.a_max = torch.tensor(a_max, device=device) if a_max is not None else None
         if type is DistributionType.NORMAL:
             self._init_dist = self._init_normal
             self._update_dist = self._update_normal
@@ -107,6 +111,10 @@ class CrossentropyPlanner:
             self._debug_env.reset()
         for i_ev in range(self.n_evolution_steps):
             actions = self._build_dist(act_dist_params).sample()  # shape: (n_envs, n_rollouts, n_plan_steps, d_dist)
+            if self.a_min is not None:
+                actions = torch.max(actions, self.a_min)
+            if self.a_max is not None:
+                actions = torch.min(actions, self.a_max)
             criterion, terminal_flag_mat, rollout_data = rollout_fn(actions)
 
             assert criterion.shape[0] == n_envs
