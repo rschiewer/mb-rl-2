@@ -74,7 +74,7 @@ def act_in_env(env: StepCountEnv,
         traj_trunc.append(False)
 
     for t in range(n_steps):
-        a = policy(traj_o[-1], traj_r[-1], traj_term[-1], traj_trunc[-1])
+        a = policy(traj_o[-1], traj_r[-1], traj_term[-1], traj_trunc[-1], env.current_step == 0)
         o_, r, terminal, truncated, info = env.step(a)
 
         traj_o.append(o_)
