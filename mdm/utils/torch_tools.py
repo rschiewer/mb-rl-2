@@ -360,19 +360,25 @@ def bin_every_k_steps(data: torch.Tensor,
 
 
 def layers_with_activation(lws: Sequence[int], activation: str = 'relu', layer_norm: bool = False, name: str = None,
-                           final_activation_function: bool = False):
-    if activation == 'relu':
-        act_constr = torch.nn.ReLU
-    elif activation == 'gelu':
-        act_constr = torch.nn.GELU
-    elif activation == 'elu':
-        act_constr = torch.nn.ELU
-    elif activation == 'tanh':
-        act_constr = torch.nn.Tanh
-    elif activation == 'sigmoid':
-        act_constr = torch.nn.Sigmoid
-    else:
-        raise ValueError(f'Unkown activation function: {activation}')
+                           final_activation_function: str = None):
+    assert len(lws) >= 2, f'Need at least w_in and w_out for one layer, but lws contains less than 2 elements'
+
+    def get_act_fn(descr: str):
+        if descr == 'relu':
+            act_constr = torch.nn.ReLU
+        elif descr == 'gelu':
+            act_constr = torch.nn.GELU
+        elif descr == 'elu':
+            act_constr = torch.nn.ELU
+        elif descr == 'tanh':
+            act_constr = torch.nn.Tanh
+        elif descr == 'sigmoid':
+            act_constr = torch.nn.Sigmoid
+        else:
+            raise ValueError(f'Unkown descr function: {descr}')
+        return act_constr
+
+    act_constr = get_act_fn(activation)
 
     layers = []
     for w_in, w_out in zip(lws[:-1], lws[1:-1]):
@@ -383,7 +389,8 @@ def layers_with_activation(lws: Sequence[int], activation: str = 'relu', layer_n
     layers.append(torch.nn.Linear(lws[-2], lws[-1]))
 
     if final_activation_function:
-        layers.append(act_constr())
+        final_act_constr = get_act_fn(final_activation_function)
+        layers.append(final_act_constr())
 
     if name:
         layers = OrderedDict([(f'{name}_{i}', l) for i, l in enumerate(layers)])
