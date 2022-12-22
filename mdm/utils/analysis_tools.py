@@ -10,14 +10,14 @@ from numpy import ma as ma
 from mdm.gridworld.gridworld import Gridworld, CellType
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.utils.torch_tools import add_time_dim, unpack_rnn_state, get_mu
-from mdm.utils.utils import to_onehot, normalize_obs, exhaustive_traversion, prepare_data, gen_video
+from mdm.utils.utils import to_onehot, normalize_obs, exhaustive_traversion, prepare_data_gridworld, gen_video
 
 
 def gen_prim_rnn_state_map(env: Gridworld,
                            mdl: MultiscaleDynamicsModelMK2,
                            walk_distance: int):
     traj_a, traj_o, traj_r, traj_term = exhaustive_traversion(env, mdl, walk_distance)
-    o_start, a_start, r_start, term_start = prepare_data(traj_o, traj_a, traj_r, traj_term, env)
+    o_start, a_start, r_start, term_start = prepare_data_gridworld(traj_o, traj_a, traj_r, traj_term, env)
     mem, prim_current = mdl.rollout_primitive(a=a_start, o=o_start, r=r_start, term=term_start,
                                               n_posterior_steps=-1, sample=False)
     mem = mdl.pack_mem(mem)
@@ -47,7 +47,7 @@ def gen_value_map_prim(env: Gridworld,
                        posterior_steps: int = -1,
                        quantity: str = 's'):
     traj_a, traj_o, traj_r, traj_term = exhaustive_traversion(env, mdl, walk_distance)
-    o_start, a_start, r_start, term_start = prepare_data(traj_o, traj_a, traj_r, traj_term, env)
+    o_start, a_start, r_start, term_start = prepare_data_gridworld(traj_o, traj_a, traj_r, traj_term, env)
     mem, prim_current = mdl.rollout_primitive(a=a_start, o=o_start, r=r_start, term=term_start,
                                               n_posterior_steps=posterior_steps, sample=False)
     mem = mdl.pack_mem(mem)
@@ -204,19 +204,19 @@ def plot_trajectory_stats(mem, bins: int):
     truncated_false, truncated_true = np.bincount(truncateds, minlength=2) / len(truncateds)
     successful_false, successful_true = 1 - successful/len(mem), successful/len(mem)
 
-    print('start plotting, this may take a while...')
+    print('start plotting...')
 
     fig, ax = plt.subplots(2, 3, figsize=(16, 10))
     fig.suptitle(f'Per Timestep Statistics over {len(mem)} Trajectories')
 
     ax.flat[0].set_title('actions')
-    sns.histplot(actions, ax=ax.flat[0])
+    sns.histplot(actions, ax=ax.flat[0], bins=bins)
 
     ax.flat[1].set_title('rewards')
-    sns.histplot(rewards, ax=ax.flat[1])
+    sns.histplot(rewards, ax=ax.flat[1], bins=bins)
 
     ax.flat[2].set_title('episode lengths')
-    sns.histplot(lengths, ax=ax.flat[2])
+    sns.histplot(lengths, ax=ax.flat[2], bins=bins)
 
     ax.flat[3].set_title('truncated flags')
     ax.flat[3].pie([truncated_true, truncated_false], labels=['true', 'false'], autopct='%1.1f%%')
