@@ -254,8 +254,8 @@ class CrossentropyPlanner:
                 act_params = init_act_params.to(self.device)
         return act_params
 
-    @staticmethod
-    def get_winner_actions(final_actions: torch.Tensor,
+    def get_winner_actions(self,
+                           final_actions: torch.Tensor,
                            final_act_dist: torch.distributions.Distribution,
                            i_winners: torch.Tensor,
                            resample: bool = True):
@@ -264,6 +264,12 @@ class CrossentropyPlanner:
             actions = final_act_dist.sample()
         else:
             actions = final_actions
+
         winner_actions = actions[torch.arange(n_envs), i_winners[:, 0]]
+
+        if self.a_min is not None:
+            actions = torch.max(actions, self.a_min)
+        if self.a_max is not None:
+            actions = torch.min(actions, self.a_max)
         return winner_actions
 
