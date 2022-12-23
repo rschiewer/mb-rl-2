@@ -1,4 +1,5 @@
 import copy
+import time
 from typing import Callable, Union, Tuple, Optional, Dict
 from math import ceil
 
@@ -70,25 +71,31 @@ class CrossentropyPlanner:
             self._build_dist = self._build_categorical
 
     def _maybe_get_real_reward(self, actions: torch.Tensor, i_winners: torch.Tensor, average: bool = True):
+        n_envs = actions.shape[0]
         if self._debug_env:
             if average:
-                actions = actions[i_winners.tolist()].to(torch.float32).mean(dim=0).detach().cpu().numpy()
+                actions = actions[torch.arange(n_envs), i_winners].to(torch.float32).mean(dim=1).detach().cpu().numpy()
             else:
-                actions = actions[i_winners[0]].detach().cpu().numpy()
+                actions = actions[torch.arange(n_envs), i_winners[:, 0]].detach().cpu().numpy()
             if self.type == DistributionType.CATEGORICAL:
                 actions = actions.round().astype(int)
 
-            rewards = [0.0]
-            self._debug_env.reset()
-            for a in actions:
-                o, r, term, trunc, info = self._debug_env.step(a)
-                rewards.append(r)
-            rewards = np.array(rewards)
-            disc_mat = np.cumprod(np.full_like(rewards, self.discount, dtype=float))
-            disc_mat = np.roll(disc_mat, 1, axis=0)
-            disc_mat[0] = 1
-            R = np.sum(disc_mat * rewards)
-            return R
+            rewards = []
+            for i_env in range(n_envs):
+                env_ep_reward = [0.0]
+                self._debug_env.reset()
+                for a in actions[i_env]:
+                    #self._debug_env.render()
+                    #time.sleep(0.01)
+                    o, r, term, trunc, info = self._debug_env.step(a)
+                    env_ep_reward.append(r)
+                env_ep_reward = np.array(env_ep_reward)
+                disc_mat = np.cumprod(np.full_like(env_ep_reward, self.discount, dtype=float))
+                disc_mat = np.roll(disc_mat, 1, axis=0)
+                disc_mat[0] = 1
+                R = np.sum(disc_mat * env_ep_reward)
+                rewards.append(R)
+            return np.array(rewards)
 
     def plan(self,
              rollout_fn: Callable[[torch.Tensor], Tuple[torch.Tensor, Optional[torch.Tensor], Dict[str, TensorData]]],
@@ -134,9 +141,9 @@ class CrossentropyPlanner:
 
             i_winners, R_winners = disc_ret_sorted.indices[:, :n_winners], disc_ret_sorted.values[:, :n_winners]
 
-            #R_real = self._maybe_get_real_reward(actions, i_winners, average=True)
-            #R_real_evolution.append(R_real)
-            #R_winners_evolution.append(R_winners.mean(dim=0).detach().cpu().numpy())
+            R_real = self._maybe_get_real_reward(actions, i_winners, average=True)
+            R_real_evolution.append(R_real)
+            R_winners_evolution.append(R_winners.mean(dim=1).detach().cpu().numpy())
 
             if i_ev == self.n_evolution_steps - 1:  # disable action noise for the last update
                 act_noise = 0
@@ -146,11 +153,14 @@ class CrossentropyPlanner:
             # update distribution parameters with MLE parameters of the winner samples
             act_dist_params = self._update_dist(actions, act_dist_params, i_winners, act_noise)
 
-        #print(disc_ret_sorted.values[:n_winners])
-        #plt.plot(R_real_evolution, label='R real')
-        #plt.plot(R_winners_evolution, label='R rollout')
-        #plt.legend()
-        #plt.show()
+        if self._debug_env:
+            R_real_evolution = np.stack(R_real_evolution).swapaxes(0, 1)
+            R_winners_evolution = np.stack(R_winners_evolution).swapaxes(0, 1)
+            for i_env in range(actions.shape[0]):
+                plt.plot(R_real_evolution[i_env], label='R real')
+                plt.plot(R_winners_evolution[i_env], label='R rollout')
+            plt.legend()
+            plt.show()
 
         return actions, self._build_dist(act_dist_params), i_winners, R_winners, rollout_data
 
