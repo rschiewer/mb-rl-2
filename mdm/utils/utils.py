@@ -280,6 +280,27 @@ def prepare_data(o: Union[np.ndarray, torch.Tensor],
     return o, a, r, terminal, truncated, mask
 
 
+def apply_mask(o: torch.Tensor,
+               a: torch.Tensor,
+               r: torch.Tensor,
+               terminal: torch.Tensor,
+               truncated: torch.Tensor,
+               mask: torch.Tensor,
+               o_pad_val: float = 0,
+               a_pad_val: float = 0,
+               r_pad_val: float = 0,
+               terminal_pad_val: float = 0,
+               truncated_pad_val: float = 0):
+    boolean_mask = mask.to(torch.bool)
+    boolean_o_mask = boolean_mask.reshape(*boolean_mask.shape, *[1 for _ in range(o.ndim - boolean_mask.ndim)])
+    o.masked_fill_(boolean_o_mask, o_pad_val)
+    a.masked_fill_(boolean_mask, a_pad_val)
+    r.masked_fill_(boolean_mask, r_pad_val)
+    terminal.masked_fill_(boolean_mask, terminal_pad_val)
+    truncated.masked_fill_(boolean_mask, truncated_pad_val)
+    mask.fill_(0)
+
+
 def prepare_data_gridworld(s: Union[np.ndarray, torch.Tensor],
                            a: Union[np.ndarray, torch.Tensor],
                            r: Union[np.ndarray, torch.Tensor],
@@ -289,11 +310,11 @@ def prepare_data_gridworld(s: Union[np.ndarray, torch.Tensor],
                            env: Gridworld,
                            subtrajectory_len: int = 0,
                            ) -> Tuple[Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
-                            Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
-                            Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray]]:
+                                      Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
+                                      Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray]]:
     s, a, r, terminal, truncated, mask = flatten_and_unsqueeze(s, a, r, terminal, truncated, mask)
     s = to_onehot(s, max(env.grid_w, env.grid_h))
-    #s = normalize_obs(s, env)
+    # s = normalize_obs(s, env)
     a = to_onehot(a, env.action_space.n)  # don't care about the action being [1, 0, ... ] if it's always this way
 
     # swap batch and time axis
@@ -304,12 +325,12 @@ def prepare_data_gridworld(s: Union[np.ndarray, torch.Tensor],
     truncated = truncated.swapaxes(0, 1)
     mask = mask.swapaxes(0, 1)
 
-    #s.masked_fill(~mask.to(torch.bool).unsqueeze(-1), 0)
-    #a.masked_fill(~mask.to(torch.bool), 0)
-    #r.masked_fill(~mask.to(torch.bool), 0)
-    #terminal.masked_fill(~mask.to(torch.bool), 0)
-    #truncated.masked_fill(~mask.to(torch.bool), 0)
-    #mask[:] = 0
+    # s.masked_fill(~mask.to(torch.bool).unsqueeze(-1), 0)
+    # a.masked_fill(~mask.to(torch.bool), 0)
+    # r.masked_fill(~mask.to(torch.bool), 0)
+    # terminal.masked_fill(~mask.to(torch.bool), 0)
+    # truncated.masked_fill(~mask.to(torch.bool), 0)
+    # mask[:] = 0
 
     if subtrajectory_len > 0:
         # select a block of l_segment timesteps out of all trajectories
@@ -337,13 +358,13 @@ def trajectory_uncertainty(mem: [Dict[str, List[torch.Tensor]]]):
     # get variances
     z_var = [d.scale for d in z_dists]
     z_var = torch.stack(z_var)
-    #z_var = z_var.mean(axis=1)
+    # z_var = z_var.mean(axis=1)
     r_var = [d.scale for d in r_dists]
     r_var = torch.stack(r_var)
-    #r_var = r_var.mean(axis=1)
+    # r_var = r_var.mean(axis=1)
 
     return z_var, r_var
-    #return z_var.max(), z_var.std(), r_var.max(), r_var.std()
+    # return z_var.max(), z_var.std(), r_var.max(), r_var.std()
 
     fig, ax = plt.subplots(1, 2, figsize=(16, 10))
     for i in range(z_var.shape[-1]):
@@ -400,7 +421,7 @@ def augment_data_trajectory_ends(o: torch.Tensor,
     t_end = mask_aug.sum(dim=0)
     t_start_aug = []
     for t in t_end:
-        t_start_aug.append(random.randint(0, t-1))
+        t_start_aug.append(random.randint(0, t - 1))
 
     for i_traj, t in enumerate(t_start_aug):
         o_aug[:, i_traj, t_start_aug:] = 0
@@ -434,8 +455,8 @@ def to_np_arrays(mem: List[Dict[str, DataType]], dtypes: Sequence = None, paddin
     r_np = np.full((n_trajectories, longest), fill_value=padding[1], dtype=dtypes[2])
     term_np = np.full((n_trajectories, longest), fill_value=padding[1], dtype=dtypes[3])
     trunc_np = np.full((n_trajectories, longest), fill_value=padding[1], dtype=dtypes[4])
-    #o_mask = np.full_like(o_np, True)
-    #a_mask = np.full_like(a_np, True)
+    # o_mask = np.full_like(o_np, True)
+    # a_mask = np.full_like(a_np, True)
     mask = np.full_like(r_np, True)
 
     # copy data
@@ -445,16 +466,16 @@ def to_np_arrays(mem: List[Dict[str, DataType]], dtypes: Sequence = None, paddin
         r_np[i, 0:lengths[i]] = r[i]
         term_np[i, 0:lengths[i]] = term[i]
         trunc_np[i, 0:lengths[i]] = trunc[i]
-        #o_mask[i, 0:lengths[i]] = False
-        #a_mask[i, 0:lengths[i]] = False
+        # o_mask[i, 0:lengths[i]] = False
+        # a_mask[i, 0:lengths[i]] = False
         mask[i, 0:lengths[i]] = False
 
     # generate masked arrays
-    #o_np = ma.array(o_np, mask=o_mask)
-    #a_np = ma.array(a_np, mask=a_mask)
-    #r_np = ma.array(r_np, mask=mask)
-    #term_np = ma.array(term_np, mask=mask)
-    #trunc_np = ma.array(trunc_np, mask=mask)
+    # o_np = ma.array(o_np, mask=o_mask)
+    # a_np = ma.array(a_np, mask=a_mask)
+    # r_np = ma.array(r_np, mask=mask)
+    # term_np = ma.array(term_np, mask=mask)
+    # trunc_np = ma.array(trunc_np, mask=mask)
 
     return o_np, a_np, r_np, term_np, trunc_np, mask
 
@@ -483,7 +504,8 @@ def compute_returns(mem: TrajectoryMemory, gamma: float = 0.99):
     mem.mark_modified()
 
 
-def discrete_stats(module: torch.nn.Module, n_inputs: int, seq_len: int, n_repetitions: int = 1, module_kwargs: dict = None):
+def discrete_stats(module: torch.nn.Module, n_inputs: int, seq_len: int, n_repetitions: int = 1,
+                   module_kwargs: dict = None):
     if not module_kwargs:
         module_kwargs = {}
 
@@ -578,5 +600,3 @@ def random_walk_success_rate(env: gym.Env,
     ep_returns = np.array(ep_returns)
     ep_lens = np.array(ep_lens)
     return success, ep_returns, ep_lens
-
-
