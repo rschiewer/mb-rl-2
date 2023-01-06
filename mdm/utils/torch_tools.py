@@ -601,21 +601,21 @@ def to_tensors(mem: List[Dict[str, DataType]],
     longest = max(lengths)
 
     # prepare memory containers
-    o_torch = torch.full((n_trajectories, longest, *s_o), fill_value=padding[0], dtype=dtypes[0], device=device)
-    a_torch = torch.full((n_trajectories, longest, *s_a), fill_value=padding[1], dtype=dtypes[1], device=device)
-    r_torch = torch.full((n_trajectories, longest), fill_value=padding[1], dtype=dtypes[2], device=device)
-    term_torch = torch.full((n_trajectories, longest), fill_value=padding[1], dtype=dtypes[3], device=device)
-    trunc_torch = torch.full((n_trajectories, longest), fill_value=padding[1], dtype=dtypes[4], device=device)
+    o_torch = torch.full((longest, n_trajectories, *s_o), fill_value=padding[0], dtype=dtypes[0], device=device)
+    a_torch = torch.full((longest, n_trajectories, *s_a), fill_value=padding[1], dtype=dtypes[1], device=device)
+    r_torch = torch.full((longest, n_trajectories), fill_value=padding[2], dtype=dtypes[2], device=device)
+    term_torch = torch.full((longest, n_trajectories), fill_value=padding[3], dtype=dtypes[3], device=device)
+    trunc_torch = torch.full((longest, n_trajectories), fill_value=padding[4], dtype=dtypes[4], device=device)
     mask = torch.full_like(r_torch, True)
 
     # copy data
     for i in range(n_trajectories):
-        o_torch[i, 0:lengths[i]] = o[i]
-        a_torch[i, 0:lengths[i]] = a[i]
-        r_torch[i, 0:lengths[i]] = r[i]
-        term_torch[i, 0:lengths[i]] = term[i]
-        trunc_torch[i, 0:lengths[i]] = trunc[i]
-        mask[i, 0:lengths[i]] = False
+        o_torch[0:lengths[i], i] = o[i]
+        a_torch[0:lengths[i], i] = a[i]
+        r_torch[0:lengths[i], i] = r[i]
+        term_torch[0:lengths[i], i] = term[i]
+        trunc_torch[0:lengths[i], i] = trunc[i]
+        mask[0:lengths[i], i] = False
 
     return o_torch, a_torch, r_torch, term_torch, trunc_torch, mask
 
