@@ -619,3 +619,18 @@ def to_tensors(mem: List[Dict[str, DataType]],
 
     return o_torch, a_torch, r_torch, term_torch, trunc_torch, mask
 
+
+def pad_first_timestep(o: torch.Tensor,
+                       a: torch.Tensor,
+                       r: torch.Tensor,
+                       term: torch.Tensor,
+                       trunc: torch.Tensor,
+                       mask: torch.Tensor):
+    a = torch.cat([torch.zeros_like(a[0]), a], dim=0)
+    r = torch.cat([torch.zeros_like(r[0]), r], dim=0)
+    term = torch.cat([torch.zeros_like(term[0]), term], dim=0)
+    trunc = torch.cat([torch.zeros_like(trunc[0]), trunc], dim=0)
+    mask = torch.cat([torch.zeros_like(mask[0]), mask], dim=0)
+    return o, a, r, term, trunc, mask
+
+
