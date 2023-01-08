@@ -278,8 +278,8 @@ class CrossentropyPlanner:
         winner_actions = actions[torch.arange(n_envs), i_winners[:, 0]]
 
         if self.a_min is not None:
-            actions = torch.max(actions, self.a_min)
+            winner_actions = torch.max(winner_actions, self.a_min)
         if self.a_max is not None:
-            actions = torch.min(actions, self.a_max)
+            winner_actions = torch.min(winner_actions, self.a_max)
         return winner_actions
 
