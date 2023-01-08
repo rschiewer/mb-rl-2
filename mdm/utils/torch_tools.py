@@ -588,6 +588,9 @@ def to_tensors(mem: List[Dict[str, DataType]],
     # find out shapes
     s_o = mem[0]['o'].shape[1:]
     s_a = mem[0]['a'].shape[1:]
+    s_r = mem[0]['r'].shape[1:]
+    s_term = mem[0]['terminal'].shape[1:]
+    s_trunc = mem[0]['truncated'].shape[1:]
 
     # collect data
     o, a, r, term, trunc, lengths = [], [], [], [], [], []
@@ -603,9 +606,9 @@ def to_tensors(mem: List[Dict[str, DataType]],
     # prepare memory containers
     o_torch = torch.full((longest, n_trajectories, *s_o), fill_value=padding[0], dtype=dtypes[0], device=device)
     a_torch = torch.full((longest, n_trajectories, *s_a), fill_value=padding[1], dtype=dtypes[1], device=device)
-    r_torch = torch.full((longest, n_trajectories), fill_value=padding[2], dtype=dtypes[2], device=device)
-    term_torch = torch.full((longest, n_trajectories), fill_value=padding[3], dtype=dtypes[3], device=device)
-    trunc_torch = torch.full((longest, n_trajectories), fill_value=padding[4], dtype=dtypes[4], device=device)
+    r_torch = torch.full((longest, n_trajectories, *s_r), fill_value=padding[2], dtype=dtypes[2], device=device)
+    term_torch = torch.full((longest, n_trajectories, *s_term), fill_value=padding[3], dtype=dtypes[3], device=device)
+    trunc_torch = torch.full((longest, n_trajectories, *s_trunc), fill_value=padding[4], dtype=dtypes[4], device=device)
     mask = torch.full_like(r_torch, True)
 
     # copy data
