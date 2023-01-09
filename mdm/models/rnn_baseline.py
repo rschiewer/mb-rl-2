@@ -140,7 +140,7 @@ class RnnBaselineModel(DynamicsModel, FuzzyDeviceMixin):
         o_loss = torch.mean(o_loss * mask[:-1])
         r_loss = torch.nn.functional.mse_loss(pred['prim_r'], r_ground_truth[1:], reduction='none')
         r_loss = torch.mean(r_loss * mask[:-1])
-        term_loss = torch.nn.functional.mse_loss(pred['prim_term'], term_ground_truth[1:], reduction='none')
+        term_loss = torch.nn.functional.binary_cross_entropy(pred['prim_term'], term_ground_truth[1:], reduction='none')
         term_loss = torch.mean(term_loss * mask[:-1])
 
         o_mae = torch.mean(torch.abs(pred['prim_o'] - o_ground_truth[1:]) * mask[:-1])
