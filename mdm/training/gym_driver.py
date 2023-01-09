@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 from mdm.training.driver import Driver
 from mdm.memory.trajectory_memory import TrajectoryMemory
-from mdm.utils.step_count_environment import StepCountEnv
+from mdm.utils.gym_wrappers import CacheLastStepEnv, CacheLastStepVecEnv
 
 
 DataType = TypeVar('DataType', np.ndarray, int, float, bool)
@@ -17,11 +17,11 @@ DataType = TypeVar('DataType', np.ndarray, int, float, bool)
 class GymEpisodeDriver(Driver):
 
     def __init__(self,
-                 env: StepCountEnv,
+                 env: CacheLastStepEnv,
                  policy: Callable):
         super(GymEpisodeDriver, self).__init__()
-        if not isinstance(env, StepCountEnv):
-            raise ValueError(f'Provided environment needs to be wrapped in {StepCountEnv.__class__.__name__}')
+        if not isinstance(env, CacheLastStepEnv):
+            raise ValueError(f'Provided environment needs to be wrapped in {CacheLastStepEnv.__class__.__name__}')
         self.env = env
         self.policy = policy
 
@@ -53,7 +53,47 @@ class GymEpisodeDriver(Driver):
         return mem
 
 
-def act_in_env(env: StepCountEnv,
+def act_in_vector_env(env: CacheLastStepVecEnv,
+                      policy: callable,
+                      n_steps: int,
+                      traj_o: List[DataType],
+                      traj_a: List[ActType],
+                      traj_r: List[DataType],
+                      traj_term: List[DataType],
+                      traj_trunc: List[DataType],
+                      traj_mask: List[DataType],
+                      seed: int = None,
+                      pad_data: bool = True):
+    if n_steps == -1:
+        n_steps = sys.maxsize.real
+
+    if env.current_step == 0:
+        o, _ = env.reset(seed=seed)
+        traj_o.append(env.last_o)
+        traj_mask.append(env.envs_done.copy())
+        if pad_data:  # by convention, make (a_0, r_0, t_0) = 0
+            traj_a.append(env.last_a)
+            traj_r.append(env.last_r)
+            traj_term.append(env.last_term)
+            traj_trunc.append(env.last_trunc)
+
+    for t in range(n_steps):
+        a = policy(env.last_o, env.last_r, env.last_term, env.last_trunc, env.current_step == 0)
+        o_, r, terminal, truncated, info = env.step(a)
+
+        traj_o.append(o_)
+        traj_a.append(a)
+        traj_r.append(r)
+        traj_term.append(terminal)
+        traj_trunc.append(truncated)
+        traj_mask.append(env.envs_done.copy())
+
+        if env.all_envs_done:
+            return False
+    return True
+
+
+def act_in_env(env: CacheLastStepEnv,
                policy: callable,
                n_steps: int,
                traj_o: List[DataType],
@@ -61,20 +101,25 @@ def act_in_env(env: StepCountEnv,
                traj_r: List[DataType],
                traj_term: List[DataType],
                traj_trunc: List[DataType],
-               seed: int = None):
+               seed: int = None,
+               pad_data: bool = True):
+    assert env.current_step == 0 or (len(traj_o) > 0 and len(traj_a) > 0 and len(traj_r) > 0 and len(traj_term) > 0
+                                     and len(traj_trunc) > 0), 'env must either be in step 0 or last step info must ' \
+                                                               'be provided'
     if n_steps == -1:
         n_steps = sys.maxsize.real
 
     if env.current_step == 0:
         o, _ = env.reset(seed=seed)
-        traj_o.append(o)
-        traj_a.append(np.zeros_like(env.action_space.sample()))  # by convention, make (a_0, r_0, t_0) = 0
-        traj_r.append(0.0)
-        traj_term.append(False)
-        traj_trunc.append(False)
+        traj_o.append(env.last_o)
+        if pad_data:  # by convention, make (a_0, r_0, t_0) = 0
+            traj_a.append(env.last_a)
+            traj_r.append(env.last_r)
+            traj_term.append(env.last_term)
+            traj_trunc.append(env.last_trunc)
 
     for t in range(n_steps):
-        a = policy(traj_o[-1], traj_r[-1], traj_term[-1], traj_trunc[-1], env.current_step == 0)
+        a = policy(env.last_o, env.last_r, env.last_term, env.last_trunc, env.current_step == 0)
         o_, r, terminal, truncated, info = env.step(a)
 
         traj_o.append(o_)
