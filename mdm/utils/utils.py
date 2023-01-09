@@ -247,12 +247,12 @@ def prepare_data(o: Union[np.ndarray, torch.Tensor],
     assert 2 <= mask.ndim <= 3, f'Mask dim is {mask.ndim}, but needs to be 2 or 3'
 
     # expand data dimensions to at least one, so e.g. rewards have shape (batch, time, 1)
-    if o.ndim == 2: o = o.unsqueeze(-1)
-    if a.ndim == 2: a = a.unsqueeze(-1)
-    if r.ndim == 2: r = r.unsqueeze(-1)
-    if terminal.ndim == 2: terminal = terminal.unsqueeze(-1)
-    if truncated.ndim == 2: truncated = truncated.unsqueeze(-1)
-    if mask.ndim == 2: mask = mask.unsqueeze(-1)
+    if o.ndim == 2: o = o[..., None]
+    if a.ndim == 2: a = a[..., None]
+    if r.ndim == 2: r = r[..., None]
+    if terminal.ndim == 2: terminal = terminal[..., None]
+    if truncated.ndim == 2: truncated = truncated[..., None]
+    if mask.ndim == 2: mask = mask[..., None]
 
     if o_discrete:
         o = to_onehot(o, o_max)
