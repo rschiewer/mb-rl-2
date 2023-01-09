@@ -221,6 +221,12 @@ def fig_to_img(fig, clear_fig: bool = True):
     return Image.open(buffer)
 
 
+def expand_shape_right(to_expand: Union[np.ndarray, torch.Tensor], target: Union[np.ndarray, torch.Tensor]):
+    assert to_expand.ndim < target.ndim, 'works only if to_expand has fewer dimensions than target'
+    dim_diff = target.ndim - to_expand.ndim
+    return to_expand.reshape(*to_expand.shape, *[1 for _ in range(dim_diff)])
+
+
 def prepare_data(o: Union[np.ndarray, torch.Tensor],
                  a: Union[np.ndarray, torch.Tensor],
                  r: Union[np.ndarray, torch.Tensor],
@@ -232,10 +238,7 @@ def prepare_data(o: Union[np.ndarray, torch.Tensor],
                  a_max: int = 0,
                  o_discrete: bool = False,
                  o_max: int = 0,
-                 swap_batch_time_dim: bool = False
-                 ) -> Tuple[Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
-                            Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
-                            Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray]]:
+                 swap_batch_time_dim: bool = False):
     assert o.ndim >= 2, f'Observation dim is {o.ndim}, but needs to be at least 2'
     assert a.ndim >= 2, f'Action dim is {a.ndim}, but needs to be at least 2'
     assert 2 <= r.ndim <= 3, f'Reward dim is {r.ndim}, but needs to be 2 or 3'
@@ -277,7 +280,7 @@ def prepare_data(o: Union[np.ndarray, torch.Tensor],
         truncated = truncated[t_start:t_end]
         mask = mask[t_start:t_end]
 
-    return o, a, r, terminal, truncated, mask
+    return {'o': o, 'a': a, 'r': r, 'terminal': terminal, 'truncated': truncated, 'mask': mask}
 
 
 def apply_mask(o: torch.Tensor,
