@@ -21,7 +21,8 @@ class DynamicsModel(torch.nn.Module, ABC):
                    r_ground_truth: torch.Tensor,
                    term_ground_truth: torch.Tensor,
                    mask: torch.Tensor,
-                   optimizer: torch.optim.Optimizer) -> Dict[str, torch.Tensor]:
+                   optimizer: torch.optim.Optimizer,
+                   **kwargs) -> Dict[str, torch.Tensor]:
         pass
 
     @abstractmethod
@@ -30,5 +31,6 @@ class DynamicsModel(torch.nn.Module, ABC):
                   a_ground_truth: torch.Tensor,
                   r_ground_truth: torch.Tensor,
                   term_ground_truth: torch.Tensor,
-                  mask: torch.Tensor) -> Dict[str, torch.Tensor]:
+                  mask: torch.Tensor,
+                  **kwargs) -> Dict[str, torch.Tensor]:
         pass
