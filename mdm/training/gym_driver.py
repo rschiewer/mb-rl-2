@@ -7,7 +7,7 @@ import numpy as np
 from tqdm import tqdm
 
 from mdm.training.driver import Driver
-from mdm.memory.trajectory_memory import TrajectoryMemory
+from mdm.policies.random_policy import RandomPolicy
 from mdm.utils.gym_wrappers import CacheLastStepEnv, CacheLastStepVecEnv
 
 
@@ -43,14 +43,57 @@ class GymEpisodeDriver(Driver):
             seed = [None for _ in range(n_episodes)]
 
         for i_ep in ep_iter:
-            traj_o, traj_a, traj_r, traj_term, traj_trunc = [], [], [], [], []
-            act_in_env(self.env, self.policy, -1, traj_o, traj_a, traj_r, traj_term, traj_trunc,
+            traj_o, traj_a, traj_r, traj_term, traj_trunc, traj_mask = [], [], [], [], [], []
+            act_in_env(self.env, self.policy, -1, traj_o, traj_a, traj_r, traj_term, traj_trunc, traj_mask,
                        seed=seed[i_ep])
             traj = {'o': np.array(traj_o), 'a': np.array(traj_a), 'r': np.array(traj_r),
                     'terminal': np.array(traj_term), 'truncated': np.array(traj_trunc)}
             mem.append(traj)
 
         return mem
+
+
+def collect_data(env: Union[CacheLastStepEnv, CacheLastStepVecEnv], n_steps: int, policy: callable = None):
+    if not isinstance(env, (CacheLastStepEnv, CacheLastStepVecEnv)):
+        print(f'Normal gym envs need to be wrapped in {CacheLastStepEnv.__class__.__name__} and ',
+              f'vectorized environments need to be wrapped in {CacheLastStepVecEnv.__class__.__name__}')
+
+    if policy is None:
+        policy = RandomPolicy(env)
+
+    traj_o, traj_a, traj_r, traj_term, traj_trunc, traj_mask = [], [], [], [], [], []
+    if isinstance(env, CacheLastStepEnv):
+        act_in_env(env, policy, n_steps, traj_o, traj_a, traj_r, traj_term, traj_trunc, traj_mask)
+    elif isinstance(env, CacheLastStepVecEnv):
+        act_in_vector_env(env, policy, n_steps, traj_o, traj_a, traj_r, traj_term, traj_trunc, traj_mask)
+
+    o = np.stack(traj_o)
+    a = np.stack(traj_a)
+    r = np.stack(traj_r)
+    term = np.stack(traj_term)
+    trunc = np.stack(traj_trunc)
+    mask = np.stack(traj_mask)
+
+    l_trajs = (~mask).sum(axis=0)
+    if isinstance(env, CacheLastStepEnv):
+        o = o[:, None]
+        a = a[:, None]
+        r = r[:, None]
+        term = term[:, None]
+        trunc = trunc[:, None]
+        l_trajs = [l_trajs]
+        n_trajs = 1
+    elif isinstance(env, CacheLastStepVecEnv):
+        n_trajs = env.num_envs
+
+    mem = []
+    for i_traj in range(n_trajs):
+        l_traj = l_trajs[i_traj]
+        traj = {'o': o[:l_traj, i_traj], 'a': a[:l_traj, i_traj], 'r': r[:l_traj, i_traj],
+                'terminal': term[:l_traj, i_traj], 'truncated': trunc[:l_traj, i_traj]}
+        mem.append(traj)
+
+    return mem
 
 
 def act_in_vector_env(env: CacheLastStepVecEnv,
@@ -77,6 +120,7 @@ def act_in_vector_env(env: CacheLastStepVecEnv,
             traj_term.append(env.last_term)
             traj_trunc.append(env.last_trunc)
 
+    all_actions_done = True
     for t in range(n_steps):
         a = policy(env.last_o, env.last_r, env.last_term, env.last_trunc, env.current_step == 0)
         o_, r, terminal, truncated, info = env.step(a)
@@ -89,8 +133,12 @@ def act_in_vector_env(env: CacheLastStepVecEnv,
         traj_mask.append(env.envs_done.copy())
 
         if env.all_envs_done:
-            return False
-    return True
+            all_actions_done = False
+            break
+    # roll the mask one to the right to prevent it from masking the final reward
+    traj_mask.pop(-1)
+    traj_mask.insert(0, np.full_like(traj_mask[0], False))
+    return all_actions_done
 
 
 def act_in_env(env: CacheLastStepEnv,
@@ -101,6 +149,7 @@ def act_in_env(env: CacheLastStepEnv,
                traj_r: List[DataType],
                traj_term: List[DataType],
                traj_trunc: List[DataType],
+               traj_mask: List[DataType],
                seed: int = None,
                pad_data: bool = True):
     assert env.current_step == 0 or (len(traj_o) > 0 and len(traj_a) > 0 and len(traj_r) > 0 and len(traj_term) > 0
@@ -109,65 +158,35 @@ def act_in_env(env: CacheLastStepEnv,
     if n_steps == -1:
         n_steps = sys.maxsize.real
 
+    env_done = False
     if env.current_step == 0:
         o, _ = env.reset(seed=seed)
         traj_o.append(env.last_o)
         if pad_data:  # by convention, make (a_0, r_0, t_0) = 0
+            env_done = env.last_term or env.last_trunc
             traj_a.append(env.last_a)
             traj_r.append(env.last_r)
             traj_term.append(env.last_term)
             traj_trunc.append(env.last_trunc)
+            traj_mask.append(env_done)
 
+    all_actions_done = True
     for t in range(n_steps):
         a = policy(env.last_o, env.last_r, env.last_term, env.last_trunc, env.current_step == 0)
         o_, r, terminal, truncated, info = env.step(a)
+        env_done = env.last_term or env.last_trunc or env_done
 
         traj_o.append(o_)
         traj_a.append(a)
         traj_r.append(r)
         traj_term.append(terminal)
         traj_trunc.append(truncated)
+        traj_mask.append(env.last_term or env.last_trunc)
 
         if terminal or truncated:
-            return False
-    return True
-
-
-class GymStepDriver(GymEpisodeDriver):
-
-    def interact(self,
-                 n_steps: int = -1,
-                 mem: List[Dict[str, DataType]] = None,
-                 **kwargs) -> List[Dict[str, DataType]]:
-        if mem is None:
-            mem = []
-        if n_steps == -1:
-            n_steps = sys.maxsize.real
-
-        traj_o, traj_a, traj_r, traj_term, traj_trunc = [], [], [], [], []
-        o, _ = self.env.reset()
-        traj_o.append(self._process_obs(o))
-        traj_a.append(np.zeros_like(self.env.action_space.sample()))  # by convention, make (a_0, r_0, t_0) = 0
-        traj_r.append(0.0)
-        traj_term.append(False)
-        traj_trunc.append(False)
-
-        terminal = False
-        truncated = False
-        for t in range(n_steps):
-            a = self.policy(traj_o[-1], traj_r[-1], traj_term[-1], traj_trunc[-1], )
-            o_, r, terminal, truncated, info = self._process_step(self.env.step(a))
-
-            traj_o.append(o_)
-            traj_a.append(a)
-            traj_r.append(r)
-            traj_term.append(terminal)
-            traj_trunc.append(truncated)
-
-            if terminal or truncated:
-                break
-
-        traj = {'o': np.array(traj_o), 'a': np.array(traj_a), 'r': np.array(traj_r),
-                'terminal': np.array(traj_term), 'truncated': np.array(traj_trunc)}
-
-        return mem
+            all_actions_done = False
+            break
+    # roll the mask one to the right to prevent it from masking the final reward
+    traj_mask.pop(-1)
+    traj_mask.insert(0, False)
+    return all_actions_done
