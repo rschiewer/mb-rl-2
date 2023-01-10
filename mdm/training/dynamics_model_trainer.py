@@ -55,6 +55,7 @@ class DynamicsModelTrainer(ABC):
 
             #with profile(activities=[ProfilerActivity.CPU], record_shapes=True) as prof:
             #    with record_function("model_training"):
+            self.model.train()
             train_losses = self.model.train_step(s, a, r, term, mask, self.optimizer)
             #print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
 
