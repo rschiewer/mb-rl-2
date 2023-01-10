@@ -528,10 +528,34 @@ class BinomialDecoder(OutputDecoder):
                 sample: bool = True):
         params = self._mdl(x_enc)
         params = params.reshape(*params.shape[:-1], *self.s_x_orig)
-        d = torch.distributions.ContinuousBernoulli(logits=params)
+        d = torch.distributions.ContinuousBernoulli(logits=params, lims=(0.49999, 0.50001))
+        #d = torch.distributions.RelaxedBernoulli(temperature=0.1, logits=params)
         if sample:
             s = d.rsample()
         else:
             s = d.probs.round().to(torch.float32) + d.probs - d.probs.detach()
         return d, s
 
+
+class MLPDecoder(OutputDecoder):
+
+    def __init__(self,
+                 s_x_orig: Union[int, Sequence[int]],
+                 d_x_encoded: int,
+                 lws: Sequence[int],
+                 activation: str,
+                 layer_norm: bool,
+                 final_activation: str = None,
+                 **kwargs):
+        super(MLPDecoder, self).__init__(s_x_orig, d_x_encoded)
+
+        lws = (d_x_encoded, *lws, np.prod(s_x_orig))
+        self._mdl = torch.nn.Sequential(*lwa(lws, activation, layer_norm=layer_norm,
+                                             final_activation_function=final_activation))
+
+    def forward(self,
+                x_enc: torch.Tensor,
+                sample: bool = True):
+        x = self._mdl(x_enc)
+        x = x.reshape(*x.shape[:-1], *self.s_x_orig)
+        return None, x
