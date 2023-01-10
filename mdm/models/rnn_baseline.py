@@ -1,4 +1,5 @@
 from typing import Dict
+import random
 
 import torch.nn.functional
 
@@ -21,16 +22,24 @@ class RnnBaselineModel(DynamicsModel, FuzzyDeviceMixin):
                  rnn_type: str = 'lstm',
                  train_multistep_predictions: bool = False,
                  multistep_prediction_stride: int = 1,
+                 random_warmup_training: bool = False,
                  stochastic_outputs: bool = True):
         super(RnnBaselineModel, self).__init__()
+
+        assert int(train_multistep_predictions) + int(random_warmup_training) <= 1, ('Either '
+                                                                                     'train_multistep_predictions or '
+                                                                                     'random_warmup_training can be '
+                                                                                     'True, but not both.')
+
         self.d_a = d_a
         self.obs_encoder = obs_encoder
         self.obs_decoder = obs_decoder
         self.r_decoder = r_decoder
         self.term_decoder = term_decoder
-        self.stochastic_outputs = stochastic_outputs
         self.train_multistep_predictions = train_multistep_predictions
         self.multistep_prediction_stride = multistep_prediction_stride
+        self.random_warmup_training = random_warmup_training
+        self.stochastic_outputs = stochastic_outputs
 
         if rnn_type == 'lstm':
             rnn_constr = torch.nn.LSTM
@@ -51,6 +60,9 @@ class RnnBaselineModel(DynamicsModel, FuzzyDeviceMixin):
                 n_warmup: int,
                 rnn_state_start: torch.Tensor = None,
                 sample: bool = True):
+        if self.training and self.random_warmup_training:
+            n_warmup = random.randint(1, n_warmup)
+
         o = o[:-1]
         a = a[1:]
         r = r[:-1]
@@ -98,7 +110,8 @@ class RnnBaselineModel(DynamicsModel, FuzzyDeviceMixin):
                    r_ground_truth: torch.Tensor,
                    term_ground_truth: torch.Tensor,
                    mask: torch.Tensor,
-                   optimizer: torch.optim.Optimizer) -> Dict[str, torch.Tensor]:
+                   optimizer: torch.optim.Optimizer,
+                   **kwargs) -> Dict[str, torch.Tensor]:
         optimizer.zero_grad(set_to_none=True)
         losses = self.eval_step(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, mask)
         losses['total'].backward()
@@ -106,14 +119,15 @@ class RnnBaselineModel(DynamicsModel, FuzzyDeviceMixin):
         return losses
 
     def eval_step(self,
-                   o_ground_truth: torch.Tensor,
-                   a_ground_truth: torch.Tensor,
-                   r_ground_truth: torch.Tensor,
-                   term_ground_truth: torch.Tensor,
-                   mask: torch.Tensor) -> Dict[str, torch.Tensor]:
+                  o_ground_truth: torch.Tensor,
+                  a_ground_truth: torch.Tensor,
+                  r_ground_truth: torch.Tensor,
+                  term_ground_truth: torch.Tensor,
+                  mask: torch.Tensor,
+                  **kwargs) -> Dict[str, torch.Tensor]:
         n_time_steps = a_ground_truth.shape[0]
 
-        pred_teacher_forcing = self(o_ground_truth,  a_ground_truth, r_ground_truth,
+        pred_teacher_forcing = self(o_ground_truth, a_ground_truth, r_ground_truth,
                                     term_ground_truth, n_time_steps, sample=self.stochastic_outputs)
         loss = self.calc_loss(pred_teacher_forcing, o_ground_truth, r_ground_truth, term_ground_truth, mask)
 
@@ -137,24 +151,17 @@ class RnnBaselineModel(DynamicsModel, FuzzyDeviceMixin):
                   mask: torch.Tensor):
         mask = 1 - mask
         o_loss = torch.nn.functional.mse_loss(pred['prim_o'], o_ground_truth[1:], reduction='none')
-        o_loss = torch.mean(o_loss * mask[:-1])
+        o_loss = torch.mean(o_loss * mask[1:])
         r_loss = torch.nn.functional.mse_loss(pred['prim_r'], r_ground_truth[1:], reduction='none')
-        r_loss = torch.mean(r_loss * mask[:-1])
+        r_loss = torch.mean(r_loss * mask[1:])
         term_loss = torch.nn.functional.binary_cross_entropy(pred['prim_term'], term_ground_truth[1:], reduction='none')
-        term_loss = torch.mean(term_loss * mask[:-1])
+        term_loss = torch.mean(term_loss * mask[1:])
 
-        o_mae = torch.mean(torch.abs(pred['prim_o'] - o_ground_truth[1:]) * mask[:-1])
-        r_mae = torch.mean(torch.abs(pred['prim_r'] - r_ground_truth[1:]) * mask[:-1])
-        term_mae = torch.mean(torch.abs(pred['prim_term'] - term_ground_truth[1:]) * mask[:-1])
+        o_mae = torch.mean(torch.abs(pred['prim_o'] - o_ground_truth[1:]) * mask[1:])
+        r_mae = torch.mean(torch.abs(pred['prim_r'] - r_ground_truth[1:]) * mask[1:])
+        term_mae = torch.mean(torch.abs(pred['prim_term'] - term_ground_truth[1:]) * mask[1:])
 
         total = o_loss + r_loss + term_loss
 
         return {'total': total, 'prim_o': o_loss, 'prim_r': r_loss, 'prim_term': term_loss,
                 'monitoring_prim_o': o_mae, 'monitoring_prim_r': r_mae, 'monitoring_prim_term': term_mae}
-
-
-
-
-
-
-
