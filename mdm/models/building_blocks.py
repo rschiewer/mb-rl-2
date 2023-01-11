@@ -202,12 +202,12 @@ class RSSM(torch.nn.Module):
                d_batch: int,
                device: torch.device) -> torch.Tensor:
         return torch.zeros(d_batch, *self.o_shape, device=device)
- 
+
     def zero_a(self,
                d_batch: int,
                device: torch.device) -> torch.Tensor:
         return torch.zeros(d_batch, self.d_action, device=device)
- 
+
     def zero_r(self,
                d_batch: int,
                device: torch.device) -> torch.Tensor:
@@ -239,7 +239,7 @@ class RSSM(torch.nn.Module):
                   ctx_high_level: torch.Tensor):
         inp = torch.concat([z, a, ctx_high_level], dim=-1)
         inp = inp.unsqueeze(0)  # add time dim
-        #rnn_state = self.zero_rnn_state(inp.shape[1], inp.device)
+        # rnn_state = self.zero_rnn_state(inp.shape[1], inp.device)
         x_det, next_rnn_state = self._rnn(inp, rnn_state)
         x_det = x_det.squeeze(0)  # remove time dim
         return x_det, next_rnn_state
@@ -444,7 +444,7 @@ class GaussianDecoder(OutputDecoder):
 
     def forward(self, x_enc: torch.Tensor, sample: bool = True):
         params = self._mdl(x_enc)
-        #if self.s_x_orig != (1,):
+        # if self.s_x_orig != (1,):
         #    params = params.reshape(*params.shape[:-1], *self.s_x_orig, 2)
         mu, logvar = torch.tensor_split(params, 2, dim=-1)
         sigma = torch.exp(0.5 * logvar) + self.epsilon
@@ -501,13 +501,13 @@ class OneHotDecoder(OutputDecoder, ManagedStatefulTrainingModule):
 
         return d, s
 
-        #d = torch.distributions.OneHotCategorical(logits=params)
-        #probs = torch.softmax(params, dim=-1)
-        #if sample:
+        # d = torch.distributions.OneHotCategorical(logits=params)
+        # probs = torch.softmax(params, dim=-1)
+        # if sample:
         #    s = d.sample() + probs - probs.detach()
-        #else:
+        # else:
         #    s = torch.argmax(probs) + probs - probs.detach()
-        #return d, s
+        # return d, s
 
 
 class BinomialDecoder(OutputDecoder):
@@ -529,7 +529,7 @@ class BinomialDecoder(OutputDecoder):
         params = self._mdl(x_enc)
         params = params.reshape(*params.shape[:-1], *self.s_x_orig)
         d = torch.distributions.ContinuousBernoulli(logits=params, lims=(0.49999, 0.50001))
-        #d = torch.distributions.RelaxedBernoulli(temperature=0.1, logits=params)
+        # d = torch.distributions.RelaxedBernoulli(temperature=0.1, logits=params)
         if sample:
             s = d.rsample()
         else:
@@ -559,3 +559,67 @@ class MLPDecoder(OutputDecoder):
         x = self._mdl(x_enc)
         x = x.reshape(*x.shape[:-1], *self.s_x_orig)
         return None, x
+
+
+class UpwardsFilter(torch.nn.Module):
+
+    def __init__(self,
+                 window_size: int,
+                 pad_value: float):
+        super(UpwardsFilter, self).__init__()
+        self.window_size = window_size
+        self.pad_value = pad_value
+
+    def _preproc(self,
+                 x: torch.Tensor,
+                 pad_value: float = 0):
+        n_timesteps = x.shape[0]
+        n_pad = n_timesteps % self.window_size
+        if n_pad > 0:
+            x_pad = torch.full((n_pad, *x.shape[1:]), pad_value, device=x.device)
+            x = torch.concat([x, x_pad], dim=0)
+        x = x.reshape(x.shape[0] // self.window_size, self.window_size, *x.shape[1:])
+        return x
+
+    def forward(self,
+                x: torch.Tensor,
+                context: torch.Tensor = None) -> torch.Tensor:
+        pass
+
+
+class SumUpwardsFilter(UpwardsFilter):
+
+    def forward(self,
+                x: torch.Tensor,
+                context: torch.Tensor = None) -> torch.Tensor:
+        x = self._preproc(x, self.pad_value)
+        x = torch.sum(x, dim=1)
+        return x
+
+
+class AvgUpwardsFilter(UpwardsFilter):
+
+    def forward(self,
+                x: torch.Tensor,
+                context: torch.Tensor = None) -> torch.Tensor:
+        x = self._preproc(x, self.pad_value)
+        x = torch.mean(x, dim=1)
+        return x
+
+
+class OffsetUpwardsFilter(UpwardsFilter):
+
+    def __init__(self,
+                 window_size: int,
+                 pad_value: float,
+                 offset: int):
+        super(OffsetUpwardsFilter, self).__init__(window_size, pad_value)
+        self.offset = offset
+
+    def forward(self,
+                x: torch.Tensor,
+                context: torch.Tensor = None) -> torch.Tensor:
+        x = self._preproc(x, self.pad_value)
+        x = x[:, self.offset]
+        return x
+
