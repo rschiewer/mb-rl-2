@@ -319,7 +319,8 @@ class RSSM(torch.nn.Module):
         elif self.latent_dist == 'bernoulli':
             z_prior = torch.distributions.ContinuousBernoulli(logits=z_prior_params)
             z_smpl = z_prior.rsample() if sample else z_prior.probs
-        elif self.latent_dist == 'categorical':
+        #elif self.latent_dist == 'categorical':
+        else:  # categorical
             z_prior_params = z_prior_params.reshape((z_prior_params.shape[0], self.d_z, self.n_latent_categories))
             z_prior = torch.distributions.OneHotCategorical(logits=z_prior_params)
             probs = torch.nn.functional.softmax(z_prior.probs, dim=-1)
@@ -345,7 +346,8 @@ class RSSM(torch.nn.Module):
         elif self.latent_dist == 'bernoulli':
             z_post = torch.distributions.ContinuousBernoulli(logits=z_post_params)
             z_smpl = z_post.rsample() if sample else z_prior.probs
-        elif self.latent_dist == 'categorical':
+        # elif self.latent_dist == 'categorical':
+        else:  # categorical
             z_post_params = z_post_params.reshape((z_post_params.shape[0], self.d_z, self.n_latent_categories))
             z_post = torch.distributions.OneHotCategorical(logits=z_post_params)
             probs = torch.nn.functional.softmax(z_post.probs, dim=-1)
