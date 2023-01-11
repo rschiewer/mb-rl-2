@@ -272,18 +272,6 @@ class RSSM(torch.nn.Module):
         imagination['z_post'] = z_post
         return imagination
 
-    def reconstruct(self,
-                    z: torch.Tensor,
-                    h: torch.Tensor,
-                    sample: bool = True):
-        s = torch.concat([h, z], dim=-1)
-        o_dist, o_smpl = self.obs_decoder(s, sample)
-        r_dist, r_smpl = self.r_decoder(s, sample)
-        term_dist, term_smpl = self.term_decoder(s, sample)
-
-        return {'s': s, 'o_dist': o_dist, 'o': o_smpl, 'r_dist': r_dist, 'r': r_smpl, 'term_dist': term_dist,
-                'term': term_smpl}
-
     def forward(self,
                 z: torch.Tensor,
                 rnn_state: RnnStateType,
@@ -300,10 +288,18 @@ class RSSM(torch.nn.Module):
         else:
             world_state = self.imagine(z, rnn_state, ctx_high_level, a, sample)
             world_state['z_post'] = None
+
+        s = torch.concat([world_state['h'], world_state['z']], dim=-1)
+        r_dist, r_smpl = self.r_decoder(s, sample)
+        term_dist, term_smpl = self.term_decoder(s, sample)
+
         if reconstruct:
-            reconstruction = self.reconstruct(world_state['z'], world_state['h'], sample)
+            o_dist, o_smpl = self.obs_decoder(s, sample)
         else:
-            reconstruction = {}
+            o_dist, o_smpl = None, None
+
+        reconstruction = {'s': s, 'o': o_smpl, 'o_dist': o_dist, 'r_dist': r_dist, 'r': r_smpl, 'term_dist': term_dist,
+                          'term': term_smpl}
 
         return {**world_state, **reconstruction}
 
