@@ -605,13 +605,13 @@ class AvgUpwardsFilter(UpwardsFilter):
         return x
 
 
-class OffsetUpwardsFilter(UpwardsFilter):
+class PickOneUpwardsFilter(UpwardsFilter):
 
     def __init__(self,
                  window_size: int,
                  pad_value: float,
                  offset: int):
-        super(OffsetUpwardsFilter, self).__init__(window_size, pad_value)
+        super(PickOneUpwardsFilter, self).__init__(window_size, pad_value)
         self.offset = offset
 
     def forward(self,
