@@ -577,11 +577,11 @@ class UpwardsFilter(torch.nn.Module):
             x_pad = torch.full((n_pad, *x.shape[1:]), pad_value, device=x.device)
             x = torch.concat([x, x_pad], dim=0)
         x = x.reshape(x.shape[0] // self.window_size, self.window_size, *x.shape[1:])
-        return x
+        return x, n_pad
 
     def forward(self,
                 x: torch.Tensor,
-                context: torch.Tensor = None) -> torch.Tensor:
+                context: Optional[torch.Tensor] = None) -> torch.Tensor:
         pass
 
 
@@ -589,8 +589,8 @@ class SumUpwardsFilter(UpwardsFilter):
 
     def forward(self,
                 x: torch.Tensor,
-                context: torch.Tensor = None) -> torch.Tensor:
-        x = self._preproc(x, self.pad_value)
+                context: Optional[torch.Tensor] = None) -> torch.Tensor:
+        x, _ = self._preproc(x, self.pad_value)
         x = torch.sum(x, dim=1)
         return x
 
@@ -599,10 +599,13 @@ class AvgUpwardsFilter(UpwardsFilter):
 
     def forward(self,
                 x: torch.Tensor,
-                context: torch.Tensor = None) -> torch.Tensor:
-        x = self._preproc(x, self.pad_value)
-        x = torch.mean(x, dim=1)
-        return x
+                context: Optional[torch.Tensor] = None) -> torch.Tensor:
+        x, n_pad = self._preproc(x, self.pad_value)
+        x_filtered = torch.mean(x, dim=1)
+        if n_pad:
+            n_valid = self.window_size - n_pad
+            x_filtered[-1] = torch.mean(x[-1, :n_valid], dim=0)
+        return x_filtered
 
 
 class PickOneUpwardsFilter(UpwardsFilter):
@@ -616,8 +619,11 @@ class PickOneUpwardsFilter(UpwardsFilter):
 
     def forward(self,
                 x: torch.Tensor,
-                context: torch.Tensor = None) -> torch.Tensor:
-        x = self._preproc(x, self.pad_value)
-        x = x[:, self.offset]
+                context: Optional[torch.Tensor] = None) -> torch.Tensor:
+        x, n_pad = self._preproc(x, self.pad_value)
+        x_filtered = x[:, self.offset]
+        if n_pad:
+            last_valid = self.window_size - n_pad
+            x_filtered[-1] = x[-1, last_valid]
         return x
 
