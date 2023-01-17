@@ -637,3 +637,14 @@ class LearnableUpwardsFilter(UpwardsFilter):
                 actions: torch.Tensor,
                 sample: bool = True) -> torch.Tensor:
         return self._pipeline(actions, sample)
+
+
+class IdentityUpwardsFilter(UpwardsFilter):
+
+    def __init__(self):
+        super(IdentityUpwardsFilter, self).__init__(1)
+
+    def forward(self,
+                x: torch.Tensor,
+                context: Optional[torch.Tensor] = None) -> torch.Tensor:
+        return x
