@@ -10,9 +10,8 @@ import numpy as np
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.models.building_blocks import RnnStateType
 from mdm.planning.cem_planner import CrossentropyPlanner, TensorData, DistributionType
-from mdm.utils.utils import SliceType, to_onehot, prepare_data, flatten_and_unsqueeze, sensitivity_analysis, trajectory_uncertainty
-from mdm.utils.torch_tools import (extract_sub_distribution, bin_every_k_steps, pack_rnn_state, unpack_rnn_state,
-                                   TensorIndex, to_tensors)
+from mdm.utils.utils import SliceType, to_onehot, prepare_data_gridworld, flatten_and_unsqueeze, sensitivity_analysis, trajectory_uncertainty
+from mdm.utils.torch_tools import *
 
 
 def update_history(history: Dict[str, torch.Tensor],
@@ -29,7 +28,9 @@ def update_history(history: Dict[str, torch.Tensor],
 def select_batch_items(mem: Dict[str, Union[torch.Tensor, torch.distributions.Distribution]],
                        i: TensorIndex,
                        keepdim: bool = False):
-    if keepdim and type(i) is int:
+    if keepdim and type(i) is not slice:
+        if isinstance(i, torch.Tensor):
+            i = i.detach().cpu().numpy().item()
         i = slice(i, i+1)
 
     ret = {}
@@ -41,7 +42,7 @@ def select_batch_items(mem: Dict[str, Union[torch.Tensor, torch.distributions.Di
             elif isinstance(timestep, torch.Tensor):
                 ret[name].append(timestep[i])
             elif isinstance(timestep, torch.distributions.Distribution):
-                ret[name].append(extract_sub_distribution(timestep, i, keepdim=keepdim))
+                ret[name].append(extract_sub_distribution(timestep, i))  # keepdim is handled by calling function
             elif 'rnn_state' in name:
                 ret[name].append(unpack_rnn_state(pack_rnn_state(timestep)[i]))
             else:
@@ -271,7 +272,8 @@ def collect_groundtruth_data(model: MultiscaleDynamicsModelMK2,
     # prepare actions and first step's data (note: only the initial observation contains real environment info)
     n_a_required = n_steps - 1 - len(predefined_actions)
     groundtruth_data = {'a': [], 'o': [], 'r': [], 'term': [], 'trunc': []}
-    groundtruth_data['a'] += [0] + list(predefined_actions) + [env.action_space.sample() for _ in range(n_a_required)]
+    groundtruth_data['a'] += [np.zeros_like(env.action_space.sample())] + list(predefined_actions) +\
+                             [env.action_space.sample() for _ in range(n_a_required)]
     groundtruth_data['o'].append(env.reset()[0])
     groundtruth_data['r'].append(0.0)
     groundtruth_data['term'].append(0.0)
@@ -297,7 +299,7 @@ def collect_groundtruth_data(model: MultiscaleDynamicsModelMK2,
     mask = torch.zeros_like(r)
     o, a, r, term, trunc, mask = [x.to(model.device) for x in (o, a, r, term, trunc, mask)]
     o, a, r, term, trunc, mask = [x.unsqueeze(0) for x in (o, a, r, term, trunc, mask)]
-    o, a, r, term, trunc, mask = prepare_data(o, a, r, term, trunc, mask, env)
+    o, a, r, term, trunc, mask = prepare_data_gridworld(o, a, r, term, trunc, mask, env)
 
     # use lists instead of tensor objects to match new convention
     # this is ugly but works
@@ -400,10 +402,11 @@ def plan_abstract(model: MultiscaleDynamicsModelMK2,
     if n_plan_steps == 0:
         return history
 
-    abstr_z_start = history['abstr_z'][-1].repeat(n_rollouts, 1)
+    abstr_z_start = repeat_distribution(history['abstr_z'][-1], (n_rollouts, 1))
     abstr_rnn_state_start = unpack_rnn_state(pack_rnn_state(history['abstr_rnn_state'][-1]).repeat(n_rollouts, 1, 1, 1))
 
     def _rollout_fn(_a: torch.Tensor):
+        _a = _a[0]  # remove redundant env dimension
         if model.abstract_action_model.model_type in ('det_tanh', 'prob_normal'):
             _a = torch.clamp(_a, -0.99, 0.99)  # limit action range to allowed values
         elif model.abstract_action_model.model_type in ('prob_categorical', 'det_mapping'):
@@ -413,13 +416,15 @@ def plan_abstract(model: MultiscaleDynamicsModelMK2,
                                                     n_posterior_steps=0)
         _criterion = torch.stack(_mem['abstr_r'], dim=1).squeeze(-1)
         _discount = torch.stack(_mem['abstr_term'], dim=1).squeeze(-1)
+        _criterion = _criterion.unsqueeze(0)  # add "env" dimension
+        _discount = _discount.unsqueeze(0)
         return _criterion, _discount, _mem
 
     a, a_dist, i_win, R_win, data = planner_abstr.plan(rollout_fn=_rollout_fn,
                                                        n_rollouts=n_rollouts,
                                                        n_plan_steps=n_plan_steps)
     # update history with new rollouts
-    data = select_batch_items(data, i_win[0], keepdim=True)
+    data = select_batch_items(data, i_win[0, 0], keepdim=True)
     history = update_history(history, data)
     return history
 
@@ -434,7 +439,7 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
                                                           f'length, but they are {n_steps_done} and '
                                                           f'{model.abstract_step_size}')
     i_t = i_section * model.abstract_step_size - 1
-    z_start = history['prim_z'][i_t].repeat(n_rollouts, 1)
+    z_start = repeat_distribution(history['prim_z'][i_t], (n_rollouts, 1))
     rnn_state_start = unpack_rnn_state(pack_rnn_state(history['prim_rnn_state'][i_t]).repeat(n_rollouts, 1, 1, 1))
     target = history['abstr_o'][i_section].repeat(n_rollouts, *[1 for _ in model.abstract_model.o_shape])
     #target = torch.flatten(target, start_dim=1)
@@ -443,6 +448,7 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
     r_goal = history['abstr_r'][i_section].repeat(n_rollouts, 1)
 
     def _rollout_fn(_a: torch.Tensor):
+        _a = _a[0]  # remove redundant env dimension
         _a = to_onehot(_a, n_classes=model.primitive_model.d_action)
         _a = _a.swapaxes(0, 1)
         _mem, _prim_final = model.rollout_primitive(a=_a, z=z_start, rnn_state=rnn_state_start, sample=True)
@@ -460,13 +466,14 @@ def plan_section(model: MultiscaleDynamicsModelMK2,
         #_criterion = - torch.mean((_rollout_goal - target) ** 2, dim=1, keepdim=True)
         #_criterion -= torch.mean((_rollout_r - r_goal) ** 2, dim=1, keepdim=True)
         _discount = None
+        _criterion = _criterion.unsqueeze(0)  # add "env" dimension
         return _criterion, _discount, _mem
 
     a, a_dist, i_win, R_win, data = planner_prim.plan(rollout_fn=_rollout_fn,
                                                       n_rollouts=n_rollouts,
                                                       n_plan_steps=model.abstract_step_size)
     # filter out winner rollout for every entry in the memory
-    data = select_batch_items(data, i_win[0], keepdim=True)
+    data = select_batch_items(data, i_win[0, 0], keepdim=True)
     history = update_history(history, data)
 
     return history, model.abstract_step_size

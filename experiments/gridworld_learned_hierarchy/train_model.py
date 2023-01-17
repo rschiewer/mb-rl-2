@@ -10,7 +10,7 @@ from mdm.training.offline_rl_driver import OfflineRLDriver
 from mdm.memory.trajectory_memory import TrajectoryMemory
 from mdm.models.multiscale_model import *
 from mdm.gridworld.gridworld import Gridworld
-from mdm.utils.utils import here, load_yaml, np_one_hot, prepare_data
+from mdm.utils.utils import here, load_yaml, np_one_hot, prepare_data_gridworld
 from mdm.logging.neptune_logger import NeptuneLogger
 
 
@@ -75,12 +75,12 @@ if __name__ == '__main__':
     # train model
     def get_batch_train():
         s, a, r, terminal, w = train_driver.interact(trainer_d_batch).to_np_arrays(dtype=np.float32, pad_last_terminal_flag=False)
-        s, a, r, terminal = prepare_data(s, a, r, terminal, env)
+        s, a, r, terminal = prepare_data_gridworld(s, a, r, terminal, env)
         return s, a, r, terminal
 
     def get_batch_test():
         s, a, r, terminal, w = test_driver.interact(trainer_d_batch).to_np_arrays(dtype=np.float32, pad_last_terminal_flag=False)
-        s, a, r, terminal = prepare_data(s, a, r, terminal, env)
+        s, a, r, terminal = prepare_data_gridworld(s, a, r, terminal, env)
         return s, a, r, terminal
 
     neptune_logger = NeptuneLogger(neptune_cfg['PROJECT_NAME'], api_token=neptune_cfg['NEPTUNE_API_TOKEN'])
