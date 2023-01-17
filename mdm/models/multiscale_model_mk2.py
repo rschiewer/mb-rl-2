@@ -275,7 +275,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                    r_ground_truth: torch.Tensor,
                    term_ground_truth: torch.Tensor,
                    mask: torch.Tensor,
-                   optimizer: torch.optim.Optimizer) -> Dict[str, torch.Tensor]:
+                   optimizer: torch.optim.Optimizer,
+                   **kwargs) -> Dict[str, torch.Tensor]:
         optimizer.zero_grad(set_to_none=True)
         losses = self.eval_step(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, mask)
         losses['total'].backward()
