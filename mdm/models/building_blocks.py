@@ -562,11 +562,9 @@ class MLPDecoder(OutputDecoder):
 class UpwardsFilter(torch.nn.Module):
 
     def __init__(self,
-                 window_size: int,
-                 pad_value: float):
+                 window_size: int):
         super(UpwardsFilter, self).__init__()
         self.window_size = window_size
-        self.pad_value = pad_value
 
     def _preproc(self,
                  x: torch.Tensor,
@@ -590,7 +588,7 @@ class SumUpwardsFilter(UpwardsFilter):
     def forward(self,
                 x: torch.Tensor,
                 context: Optional[torch.Tensor] = None) -> torch.Tensor:
-        x, _ = self._preproc(x, self.pad_value)
+        x, _ = self._preproc(x, 0.0)
         x = torch.sum(x, dim=1)
         return x
 
@@ -600,7 +598,7 @@ class AvgUpwardsFilter(UpwardsFilter):
     def forward(self,
                 x: torch.Tensor,
                 context: Optional[torch.Tensor] = None) -> torch.Tensor:
-        x, n_pad = self._preproc(x, self.pad_value)
+        x, n_pad = self._preproc(x, 0.0)
         x_filtered = torch.mean(x, dim=1)
         if n_pad:
             n_valid = self.window_size - n_pad
@@ -612,15 +610,14 @@ class PickOneUpwardsFilter(UpwardsFilter):
 
     def __init__(self,
                  window_size: int,
-                 pad_value: float,
                  offset: int):
-        super(PickOneUpwardsFilter, self).__init__(window_size, pad_value)
+        super(PickOneUpwardsFilter, self).__init__(window_size)
         self.offset = offset
 
     def forward(self,
                 x: torch.Tensor,
                 context: Optional[torch.Tensor] = None) -> torch.Tensor:
-        x, n_pad = self._preproc(x, self.pad_value)
+        x, n_pad = self._preproc(x, 0.0)
         x_filtered = x[:, self.offset]
         if n_pad:
             last_valid = self.window_size - n_pad
