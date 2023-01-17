@@ -55,13 +55,6 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         self.latent_overshooting = latent_overshooting
         self.overshooting_stride = overshooting_stride
         self.detach_posteriors = detach_posteriors
-        self._current_train_step = None
-
-    def prepare_for_training(self):
-        self._current_train_step = 0
-        for m in self.modules():
-            if isinstance(m, ManagedStatefulTrainingModule):
-                m.prepare_for_training()
 
     def forward(self,
                 o: torch.Tensor,
@@ -117,14 +110,14 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             # ctx_low_level = self.fuse_state(prim_current['z'], prim_current['rnn_state']).detach()
             # mem['ctx_low_level'].append(ctx_low_level)
             prim_data = mem[self.abstr_pred_target][-1].detach()
-            #prim_data = o[i_end - 1]
+            # prim_data = o[i_end - 1]
             mem['abstr_o_target'].append(prim_data)
             abstr_r_groundtruth = torch.stack(mem['prim_r'][i_start:i_end], dim=0)
             abstr_r_groundtruth = self.calc_abstr_r_ground_truth(abstr_r_groundtruth)
             abstr_term_groundtruth = torch.stack(mem['prim_term'][i_start:i_end], dim=0)
             abstr_term_groundtruth = self.calc_abstr_term_ground_truth(abstr_term_groundtruth)
-            #abstr_r_groundtruth = abstr_r[i_chunk].unsqueeze(0)
-            #abstr_term_groundtruth = abstr_term[i_chunk].unsqueeze(0)
+            # abstr_r_groundtruth = abstr_r[i_chunk].unsqueeze(0)
+            # abstr_term_groundtruth = abstr_term[i_chunk].unsqueeze(0)
 
             mem, abstr_current = self.rollout_abstract(a=add_time_dim(abstr_a), r=abstr_r_groundtruth,
                                                        term=abstr_term_groundtruth,
@@ -269,21 +262,20 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                 #    mem[k] =  [torch.concat([d.loc, d.scale]) for d in v]
         return mem
 
-    def train_step(self,
-                   o_ground_truth: torch.Tensor,
-                   a_ground_truth: torch.Tensor,
-                   r_ground_truth: torch.Tensor,
-                   term_ground_truth: torch.Tensor,
-                   mask: torch.Tensor,
-                   optimizer: torch.optim.Optimizer,
-                   **kwargs) -> Dict[str, torch.Tensor]:
+    def _train_step(self,
+                    o_ground_truth: torch.Tensor,
+                    a_ground_truth: torch.Tensor,
+                    r_ground_truth: torch.Tensor,
+                    term_ground_truth: torch.Tensor,
+                    mask: torch.Tensor,
+                    optimizer: torch.optim.Optimizer,
+                    **kwargs) -> Dict[str, torch.Tensor]:
         optimizer.zero_grad(set_to_none=True)
         losses = self.eval_step(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, mask)
         losses['total'].backward()
-        #torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
+        # torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
         optimizer.step()
 
-        self._current_train_step += 1
         for m in self.modules():
             if isinstance(m, ManagedStatefulTrainingModule):
                 m.increase_train_step()
@@ -317,12 +309,13 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
         beta = min(t % (self.beta_rise + self.beta_stay) * max_beta / self.beta_rise, max_beta)
         return beta
 
-    def eval_step(self,
-                  o_ground_truth: torch.Tensor,
-                  a_ground_truth: torch.Tensor,
-                  r_ground_truth: torch.Tensor,
-                  term_ground_truth: torch.Tensor,
-                  mask: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def _eval_step(self,
+                   o_ground_truth: torch.Tensor,
+                   a_ground_truth: torch.Tensor,
+                   r_ground_truth: torch.Tensor,
+                   term_ground_truth: torch.Tensor,
+                   mask: torch.Tensor,
+                   **kwargs) -> Dict[str, torch.Tensor]:
         abstr_steps = ceil(a_ground_truth.shape[0] / self.abstract_step_size)
 
         abstr_r_ground_truth = self.calc_abstr_r_ground_truth(r_ground_truth)
@@ -365,11 +358,11 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
                 loss['monitoring_abstr_kl'] += kl_abstr
 
             # each of the loss terms below was calculated once for pred_post call and then abstr_steps - 1 times in the loop
-            #normalizing_factor = max(abstr_steps, 1)
-            #loss['prim_kl_s'] /= normalizing_factor
-            #loss['abstr_kl_s'] /= normalizing_factor
-            #loss['monitoring_prim_kl'] /= normalizing_factor
-            #loss['monitoring_abstr_kl'] /= normalizing_factor
+            # normalizing_factor = max(abstr_steps, 1)
+            # loss['prim_kl_s'] /= normalizing_factor
+            # loss['abstr_kl_s'] /= normalizing_factor
+            # loss['monitoring_prim_kl'] /= normalizing_factor
+            # loss['monitoring_abstr_kl'] /= normalizing_factor
 
         return loss
 
@@ -382,8 +375,8 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             x_target = torch.abs(x_target - 1e-5)
             x_target /= x_target.sum(dim=-1, keepdim=True)
             mask = mask.reshape(*mask.shape + (1,) * (x_target.ndim - mask.ndim))  # append size 1 dim for broadcasting
-            #neg_log_prob = [(d.rsample() - x) ** 2 * m for d, x, m in zip(distributions, x_target, mask)]
-        #else:
+            # neg_log_prob = [(d.rsample() - x) ** 2 * m for d, x, m in zip(distributions, x_target, mask)]
+        # else:
         neg_log_prob = [-d.log_prob(x) * m for d, x, m in zip(distributions, x_target, mask)]
         neg_log_prob = torch.stack(neg_log_prob, dim=0).mean()
         return neg_log_prob
@@ -401,7 +394,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
             kl_div = kl_div[1:].mean()  # ignore first prior since it's totally uninformed
         else:
             kl_div = torch.tensor(0, dtype=torch.float32)
-        #if torch.isnan(kl_div):
+        # if torch.isnan(kl_div):
         #    print('!!!')
         return kl_div
 
