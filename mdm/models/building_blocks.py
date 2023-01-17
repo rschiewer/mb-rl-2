@@ -517,6 +517,19 @@ class AvgUpwardsFilter(UpwardsFilter):
         return x_filtered
 
 
+class MaxUpwardsFilter(UpwardsFilter):
+
+    def forward(self,
+                x: torch.Tensor,
+                context: Optional[torch.Tensor] = None) -> torch.Tensor:
+        x, n_pad = self._preproc(x, 0.0)
+        x_filtered = torch.max(x, dim=1)
+        if n_pad:
+            n_valid = self.window_size - n_pad
+            x_filtered[-1] = torch.max(x[-1, :n_valid], dim=0)
+        return x_filtered
+
+
 class PickOneUpwardsFilter(UpwardsFilter):
 
     def __init__(self,
