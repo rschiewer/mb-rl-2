@@ -544,9 +544,9 @@ class PickOneUpwardsFilter(UpwardsFilter):
         x, n_pad = self._preproc(x, 0.0)
         x_filtered = x[:, self.offset]
         if n_pad:
-            last_valid = self.window_size - n_pad
-            x_filtered[-1] = x[-1, last_valid]
-        return x
+            n_valid = self.window_size - n_pad
+            x_filtered[-1] = x[-1, n_valid - 1]
+        return x_filtered
 
 
 class LearnableUpwardsFilter(UpwardsFilter):
