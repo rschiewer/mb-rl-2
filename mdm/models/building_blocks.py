@@ -523,10 +523,10 @@ class MaxUpwardsFilter(UpwardsFilter):
                 x: torch.Tensor,
                 context: Optional[torch.Tensor] = None) -> torch.Tensor:
         x, n_pad = self._preproc(x, 0.0)
-        x_filtered = torch.max(x, dim=1)
+        x_filtered = torch.max(x, dim=1).values
         if n_pad:
             n_valid = self.window_size - n_pad
-            x_filtered[-1] = torch.max(x[-1, :n_valid], dim=0)
+            x_filtered[-1] = torch.max(x[-1, :n_valid], dim=0).values
         return x_filtered
 
 
