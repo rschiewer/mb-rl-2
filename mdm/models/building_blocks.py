@@ -530,6 +530,19 @@ class MaxUpwardsFilter(UpwardsFilter):
         return x_filtered
 
 
+class MinUpwardsFilter(UpwardsFilter):
+
+    def forward(self,
+                x: torch.Tensor,
+                context: Optional[torch.Tensor] = None) -> torch.Tensor:
+        x, n_pad = self._preproc(x, 0.0)
+        x_filtered = torch.min(x, dim=1).values
+        if n_pad:
+            n_valid = self.window_size - n_pad
+            x_filtered[-1] = torch.min(x[-1, :n_valid], dim=0).values
+        return x_filtered
+
+
 class PickOneUpwardsFilter(UpwardsFilter):
 
     def __init__(self,
