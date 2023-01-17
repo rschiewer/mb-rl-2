@@ -18,7 +18,7 @@ mdm:
   n_warmup_prim: -1
   n_warmup_abstr: -1
   detach_posteriors: False
-  latent_overshooting: False
+  latent_overshooting: True
   beta_abstract_action: 0.0
   beta_abstract_model: 1.0
   abstract_pred_target: "prim_o"
@@ -110,7 +110,7 @@ abstr_act_mdl:
 
 optim:
   type: 'adamW'  #'adamW'
-  lr: 0.0005 #0.0002
+  lr: 0.0003 #0.0002
 
 trainer:
   n_train_steps: 10000
