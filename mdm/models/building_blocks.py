@@ -584,7 +584,8 @@ class LearnableUpwardsFilter(UpwardsFilter):
     def _point_estimate(self,
                         x: torch.Tensor,
                         sample: bool) -> torch.Tensor:
-        x = torch.flatten(x, start_dim=1)
+        x = x.transpose(1, 2)
+        x = torch.flatten(x, start_dim=2)
         x = self._mdl(x)
 
         return torch.tanh(x)
@@ -634,9 +635,10 @@ class LearnableUpwardsFilter(UpwardsFilter):
         return x2
 
     def forward(self,
-                actions: torch.Tensor,
+                x: torch.Tensor,
                 sample: bool = True) -> torch.Tensor:
-        return self._pipeline(actions, sample)
+        x, n_pad = self._preproc(x, 0.0)
+        return self._pipeline(x, sample)
 
 
 class IdentityUpwardsFilter(UpwardsFilter):
