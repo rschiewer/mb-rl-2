@@ -4,7 +4,7 @@ from math import cos
 
 import torch
 
-from mdm.models.building_blocks import AbstractActionModel, RSSM, RnnStateType, InputEncoder, OutputDecoder
+from mdm.models.building_blocks import LearnableUpwardsFilter, RSSM, RnnStateType, InputEncoder, OutputDecoder
 from mdm.utils.torch_tools import *
 from mdm.models.dynamics_model import DynamicsModel
 
@@ -14,7 +14,7 @@ class MultiscaleDynamicsModelMK2(DynamicsModel, FuzzyDeviceMixin):
     def __init__(self,
                  primitive_model: RSSM,
                  abstract_model: RSSM,
-                 abstract_action_model: AbstractActionModel,
+                 abstract_action_model: LearnableUpwardsFilter,
                  abstract_step_size: int,
                  abstract_pred_target: str,
                  beta_kl_primitive: float = 0.01,

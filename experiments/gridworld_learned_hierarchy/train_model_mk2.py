@@ -12,7 +12,7 @@ from PIL import Image
 from mdm.gridworld.gridworld import Gridworld, FullyObservableGridworld
 from mdm.utils.utils import *
 from mdm.utils.torch_tools import get_mu, get_sigma, bin_every_k_steps, to_tensors
-from mdm.models.building_blocks import RSSM, AbstractActionModel, OneHotDecoder, OneHotEncoder, GaussianDecoder, BinomialDecoder
+from mdm.models.building_blocks import RSSM, LearnableUpwardsFilter, OneHotDecoder, OneHotEncoder, GaussianDecoder, BinomialDecoder
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.training.dynamics_model_trainer import DynamicsModelTrainer
 from mdm.memory.trajectory_memory import TrajectoryMemory
@@ -41,7 +41,7 @@ if __name__ == '__main__':
     # infer missing config values
     cfg['prim_mdl']['d_a'] = env.action_space.n
     cfg['abstr_act_mdl']['d_a'] = env.action_space.n
-    cfg['abstr_act_mdl']['abstract_step_size'] = cfg['mdm']['abstract_step_size']
+    cfg['abstr_act_mdl']['window_size'] = cfg['mdm']['abstract_step_size']
     cfg['abstr_act_mdl']['d_a_abstract'] = cfg['abstr_mdl']['d_a']
 
     # calculate missing model parameter dimensions
@@ -74,7 +74,7 @@ if __name__ == '__main__':
     abstr_mdl = RSSM(obs_encoder=abstr_obs_enc, obs_decoder=abstr_obs_dec, r_decoder=abstr_r_dec,
                      term_decoder=abstr_term_dec, **cfg['abstr_mdl'])
 
-    abstr_act_mdl = AbstractActionModel(**cfg['abstr_act_mdl'])
+    abstr_act_mdl = LearnableUpwardsFilter(**cfg['abstr_act_mdl'])
 
     model = MultiscaleDynamicsModelMK2(primitive_model=prim_mdl, abstract_model=abstr_mdl,
                                        abstract_action_model=abstr_act_mdl, **cfg['mdm'])

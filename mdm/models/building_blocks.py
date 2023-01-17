@@ -11,95 +11,6 @@ from mdm.utils.torch_tools import (layers_with_activation as lwa, add_time_dim, 
 from mdm.utils.utils import DistributionType
 
 
-class AbstractActionModel(torch.nn.Module):
-
-    def __init__(self,
-                 d_a: int,
-                 abstract_step_size: int,
-                 d_a_abstract: int,
-                 lws: tuple = (64, 64),
-                 layer_norm: bool = False,
-                 activation: str = 'relu',
-                 model_type: str = None):
-        super(AbstractActionModel, self).__init__()
-
-        self.d_a = d_a
-        self.d_abstract_action = d_a_abstract
-        self.model_type = model_type
-        self.abstract_step_size = abstract_step_size
-
-        if model_type == 'det_mapping':
-            lws = (1, 1)
-            self._pipeline = self._det_mapping
-        elif model_type == 'det_tanh':
-            lws = (d_a * abstract_step_size, *lws, d_a_abstract)
-            self._pipeline = self._point_estimate
-        elif model_type == 'prob_normal':
-            lws = (d_a * abstract_step_size, *lws, d_a_abstract * 2)
-            self._pipeline = self._prob_mdl_normal
-        elif model_type == 'prob_categorical':
-            lws = (d_a * abstract_step_size, *lws, d_a_abstract)
-            self._pipeline = self._prob_mdl_categorical
-        else:
-            raise ValueError(f'Unsupported model type: {model_type}')
-        self._mdl = torch.nn.Sequential(*lwa(lws, activation, layer_norm=layer_norm))
-
-    def _point_estimate(self,
-                        x: torch.Tensor,
-                        sample: bool) -> torch.Tensor:
-        x = torch.flatten(x, start_dim=1)
-        x = self._mdl(x)
-
-        return torch.tanh(x)
-
-    def _prob_mdl_normal(self,
-                         x: torch.Tensor,
-                         sample: bool) -> torch.Tensor:
-        x = torch.flatten(x, start_dim=1)
-        x = self._mdl(x)
-
-        x = make_gaussian_params(x, 0.1)
-
-        # restrict mean of Gaussians to (-1, 1)
-        mu, sigma = torch.tensor_split(x, 2, dim=-1)
-        mu = torch.tanh(mu)
-        x = torch.concat([mu, sigma], dim=-1)
-
-        if sample:
-            x = sample_from_gaussian(x)
-        else:
-            x = mu
-        return x
-
-    def _prob_mdl_categorical(self,
-                              x: torch.Tensor,
-                              sample: bool) -> torch.Tensor:
-        x = torch.flatten(x, start_dim=1)
-        x = self._mdl(x)
-
-        if sample:
-            x = sample_from_categorical(x)
-        else:
-            x = torch.nn.functional.one_hot(torch.argmax(x, dim=-1), num_classes=x.shape[-1]).to(torch.float32)
-        return x
-
-    def _det_mapping(self,
-                     actions: torch.Tensor,
-                     sample: bool = None) -> torch.Tensor:
-        x2 = actions.argmax(dim=-1)
-        exp_mat = torch.full_like(x2, actions.shape[-1])
-        exp_mat = torch.cumprod(exp_mat, dim=1)
-        exp_mat = torch.flip(exp_mat, dims=(1,))
-        exp_mat = torch.roll(exp_mat, -1, dims=1)
-        exp_mat[:, -1] = 1
-        x2 = torch.sum(x2 * exp_mat, dim=1)
-        x2 = torch.nn.functional.one_hot(x2, num_classes=self.d_abstract_action).to(torch.float32)
-        return x2
-
-    def forward(self,
-                actions: torch.Tensor,
-                sample: bool = True) -> torch.Tensor:
-        return self._pipeline(actions, sample)
 
 
 class RSSM(torch.nn.Module):
@@ -624,3 +535,92 @@ class PickOneUpwardsFilter(UpwardsFilter):
             x_filtered[-1] = x[-1, last_valid]
         return x
 
+
+class LearnableUpwardsFilter(UpwardsFilter):
+
+    def __init__(self,
+                 window_size: int,
+                 d_x_orig: int,
+                 d_x_filtered: int,
+                 lws: tuple = (64, 64),
+                 layer_norm: bool = False,
+                 activation: str = 'relu',
+                 model_type: str = None):
+        super(LearnableUpwardsFilter, self).__init__(window_size)
+
+        self.d_x_orig = d_x_orig
+        self.d_x_filtered = d_x_filtered
+        self.model_type = model_type
+
+        if model_type == 'det_mapping':
+            lws = (1, 1)
+            self._pipeline = self._det_mapping
+        elif model_type == 'det_tanh':
+            lws = (d_x_orig * window_size, *lws, d_x_filtered)
+            self._pipeline = self._point_estimate
+        elif model_type == 'prob_normal':
+            lws = (d_x_orig * window_size, *lws, d_x_filtered * 2)
+            self._pipeline = self._prob_mdl_normal
+        elif model_type == 'prob_categorical':
+            lws = (d_x_orig * window_size, *lws, d_x_filtered)
+            self._pipeline = self._prob_mdl_categorical
+        else:
+            raise ValueError(f'Unsupported model type: {model_type}')
+        self._mdl = torch.nn.Sequential(*lwa(lws, activation, layer_norm=layer_norm))
+
+    def _point_estimate(self,
+                        x: torch.Tensor,
+                        sample: bool) -> torch.Tensor:
+        x = torch.flatten(x, start_dim=1)
+        x = self._mdl(x)
+
+        return torch.tanh(x)
+
+    def _prob_mdl_normal(self,
+                         x: torch.Tensor,
+                         sample: bool) -> torch.Tensor:
+        x = torch.flatten(x, start_dim=1)
+        x = self._mdl(x)
+
+        x = make_gaussian_params(x, 0.001)
+
+        # restrict mean of Gaussians to (-1, 1)
+        mu, sigma = torch.tensor_split(x, 2, dim=-1)
+        mu = torch.tanh(mu)
+        x = torch.concat([mu, sigma], dim=-1)
+
+        if sample:
+            x = sample_from_gaussian(x)
+        else:
+            x = mu
+        return x
+
+    def _prob_mdl_categorical(self,
+                              x: torch.Tensor,
+                              sample: bool) -> torch.Tensor:
+        x = torch.flatten(x, start_dim=1)
+        x = self._mdl(x)
+
+        if sample:
+            x = sample_from_categorical(x)
+        else:
+            x = torch.nn.functional.one_hot(torch.argmax(x, dim=-1), num_classes=x.shape[-1]).to(torch.float32)
+        return x
+
+    def _det_mapping(self,
+                     x: torch.Tensor,
+                     sample: bool = None) -> torch.Tensor:
+        x2 = x.argmax(dim=-1)
+        exp_mat = torch.full_like(x2, x.shape[-1])
+        exp_mat = torch.cumprod(exp_mat, dim=1)
+        exp_mat = torch.flip(exp_mat, dims=(1,))
+        exp_mat = torch.roll(exp_mat, -1, dims=1)
+        exp_mat[:, -1] = 1
+        x2 = torch.sum(x2 * exp_mat, dim=1)
+        x2 = torch.nn.functional.one_hot(x2, num_classes=self.d_x_filtered).to(torch.float32)
+        return x2
+
+    def forward(self,
+                actions: torch.Tensor,
+                sample: bool = True) -> torch.Tensor:
+        return self._pipeline(actions, sample)
