@@ -246,27 +246,29 @@ if __name__ == '__main__':
 
     def eval_callback(o: torch.Tensor, a: torch.Tensor, r: torch.Tensor, term: torch.Tensor, mask, i_step: int):
         model.eval()
-        pred = model(o, a, r, term, cfg['eval']['n_warmup_prim'], sample=True)
+        predictions = []
+        for i_lvl in range(len(model.rssm_modules)):
+            pred, _ = model(o, a, r, term, cfg['eval']['warmup_steps'][i_lvl], sample=True)
+            predictions.append(pred)
         model.train()
-        return
 
-        prim_r_mean = pred['prim_r'].mean(dim=1).squeeze().detach().cpu().numpy()
-        prim_r_std = pred['prim_r'].std(dim=1).squeeze().detach().cpu().numpy()
-        prim_term_mean = pred['prim_term'].mean(dim=1).squeeze().detach().cpu().numpy()
-        prim_term_std = pred['prim_term'].std(dim=1).squeeze().detach().cpu().numpy()
+        lvl_0_r_mean = torch.stack(predictions[0]['r']).mean(dim=1).squeeze().detach().cpu().numpy()
+        lvl_0_r_std = torch.stack(predictions[0]['r']).std(dim=1).squeeze().detach().cpu().numpy()
+        lvl_0_term_mean = torch.stack(predictions[0]['term']).mean(dim=1).squeeze().detach().cpu().numpy()
+        lvl_0_term_std = torch.stack(predictions[0]['term']).std(dim=1).squeeze().detach().cpu().numpy()
 
-        plt.plot(prim_r_mean, label='mean')
-        plt.plot(prim_r_std, label='std')
+        plt.plot(lvl_0_r_mean, label='mean')
+        plt.plot(lvl_0_r_std, label='std')
         plt.legend()
         logger.log_plot(fig_to_img(fig), Scope.PARAMETERS() / 'model_stats/prim_r', i_step)
-        plt.plot(prim_term_mean, label='mean')
-        plt.plot(prim_term_std, label='std')
+        plt.plot(lvl_0_term_mean, label='mean')
+        plt.plot(lvl_0_term_std, label='std')
         plt.legend()
         logger.log_plot(fig_to_img(fig), Scope.PARAMETERS() / 'model_stats/prim_term', i_step)
 
-        losses = model.calc_loss(pred, o, r, term, mask)
-        losses = {k: v.detach().cpu().numpy() for k, v in losses.items()}
-        logger.log(losses, Scope.TEST() / 'with_warmup', i_step)
+        #losses = model.calc_loss(pred, o, r, term, mask)
+        #losses = {k: v.detach().cpu().numpy() for k, v in losses.items()}
+        #logger.log(losses, Scope.TEST() / 'with_warmup', i_step)
 
 
     trainer = DynamicsModelTrainer(model=model, optimizer=optimizer, get_batch_train=get_batch_train,

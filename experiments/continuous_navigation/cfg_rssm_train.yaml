@@ -107,12 +107,11 @@ optim:
    lr: 0.001 #0.0002
 
 trainer:
-   n_train_steps: 2000
+   n_train_steps: 3000
    eval_interval: 100
-   d_batch: 256
+   d_batch: 512
    pad_last_terminal_flag: False
    subtrajectory_len: 0
 
 eval:
-   n_warmup_prim: 2
-   n_warmup_abstr: 1
+   warmup_steps: [ 2, 1 ]
