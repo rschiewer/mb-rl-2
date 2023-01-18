@@ -380,6 +380,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                   mask: torch.Tensor,
                   kl_beta: float,
                   kl_reg_beta: float = 0.0):
+        mask = 1 - mask  # use mask to multiply irrelevant steps with zero
         rec_o = self._neg_log_prob(predictions['o_dist'], targets['o'], mask)
         rec_r = self._neg_log_prob(predictions['r_dist'], targets['r'], mask)
         rec_term = self._neg_log_prob(predictions['term_dist'], targets['term'], mask)
