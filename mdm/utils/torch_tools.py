@@ -475,6 +475,8 @@ def extract_sub_distribution(d: torch.distributions.Distribution,
         d_extracted = torch.distributions.RelaxedOneHotCategorical(d.temperature, logits=d.logits[idx])
     elif isinstance(d, torch.distributions.ContinuousBernoulli):
         d_extracted = torch.distributions.ContinuousBernoulli(logits=d.logits[idx])
+    elif isinstance(d, torch.distributions.RelaxedBernoulli):
+        d_extracted = torch.distributions.RelaxedBernoulli(logits=d.logits[idx], temperature=d.temperature)
     else:
         raise ValueError(f'Distribution class not supported: {type(d)}')
     return d_extracted
