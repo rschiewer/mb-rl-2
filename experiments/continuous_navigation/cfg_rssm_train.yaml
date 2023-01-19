@@ -8,18 +8,17 @@ final_model_path: "trained_models/model"
 mdm:
    rssm_modules:
       # RSSM no. 1
-      -  d_z: 3
+      -  d_z: 10
          d_h: 64
-         n_hidden_layers: 1
+         n_hidden_layers: 3
          hidden_dropout: 0.1
-         epsilon: 1.0
+         epsilon: 0.001
          z_prior_lws: [ 64, 64 ]
          z_post_lws: [ 64, 64 ]
          layer_norm: True
          activation: "relu"
          rnn_type: "lstm"
          latent_dist: "normal"  #"normal" "categorical" "bernoulli"
-         stochastic_outputs: True
          o_encoder:
             class: "MLPEncoder"
             d_x_encoded: 32
@@ -44,19 +43,18 @@ mdm:
             layer_norm: True
             activation: "relu"
       # RSSM no. 2
-      -  d_z: 3
+      -  d_z: 10
          d_h: 64
          d_a: 2
          n_hidden_layers: 1
          hidden_dropout: 0.1
-         epsilon: 1.0
+         epsilon: 0.001
          z_prior_lws: [ 64, 64 ]
          z_post_lws: [ 64, 64 ]
          layer_norm: True
          activation: "relu"
          rnn_type: "lstm"
          latent_dist: "normal"  #"normal" "categorical" "bernoulli"
-         stochastic_outputs: True
          o_encoder:
             class: "MLPEncoder"
             lws: [ 32 ]
@@ -103,7 +101,7 @@ mdm:
    kl_betas: [ 1.0, 1.0 ]
 
 optim:
-   type: 'adamW'  # 'adamW' 'adam'
+   type: 'adam'  # 'adamW' 'adam'
    lr: 0.001 #0.0002
 
 trainer:

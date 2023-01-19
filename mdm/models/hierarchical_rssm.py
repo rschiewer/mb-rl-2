@@ -30,8 +30,7 @@ class StandardRSSM(torch.nn.Module):
                  layer_norm: bool = False,
                  activation: str = 'relu',
                  rnn_type: str = 'lstm',
-                 latent_dist: str = 'normal',
-                 stochastic_outputs: bool = True):
+                 latent_dist: str = 'normal'):
         super().__init__()
 
         assert o_decoder.d_x_encoded == d_z + d_h
@@ -52,7 +51,6 @@ class StandardRSSM(torch.nn.Module):
         self.activation = activation
         self.rnn_type = rnn_type
         self.latent_dist = latent_dist
-        self.stochastic_outputs = stochastic_outputs
 
         self.n_latent_categories = 16
         if latent_dist == 'normal':
@@ -188,19 +186,20 @@ class StandardRSSM(torch.nn.Module):
                 context: Optional[torch.Tensor] = None,
                 use_posterior: bool = True,
                 reconstruct: bool = True,
-                sample: bool = True):
+                sample_state: bool = True,
+                sample_output: bool = True):
         # compute next world state
         if use_posterior:
-            h, next_state = self.observe(a, o_current, r_current, term_current, last_state, context, sample)
+            h, next_state = self.observe(a, o_current, r_current, term_current, last_state, context, sample_state)
         else:
-            h, next_state = self.imagine(a, last_state, context, sample)
+            h, next_state = self.imagine(a, last_state, context, sample_state)
 
         # predict outputs
         s = torch.concat([h, next_state['z']], dim=-1)
-        r_dist, r_smpl = self.r_decoder(s, sample)
-        term_dist, term_smpl = self.term_decoder(s, sample)
+        r_dist, r_smpl = self.r_decoder(s, sample_output)
+        term_dist, term_smpl = self.term_decoder(s, sample_output)
         if reconstruct:
-            o_dist, o_smpl = self.o_decoder(s, sample)
+            o_dist, o_smpl = self.o_decoder(s, sample_output)
         else:
             o_dist, o_smpl = None, None
 
