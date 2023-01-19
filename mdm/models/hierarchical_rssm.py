@@ -291,7 +291,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         return [filters['o'].window_size for filters in self.upwards_filters[1:]]
 
     def forward(self, o, a, r, term, n_warmup: int = -1, level: int = 0, memory: Optional[dict] = None,
-                start_state: Optional[dict] = None, sample: bool = True, reconstruct: bool = True):
+                start_state: Optional[dict] = None, sample_state: bool = True, sample_output: bool = True,
+                reconstruct: bool = True):
         assert o.shape[0] == r.shape[0] == term.shape[0]
 
         device = self.device
@@ -311,7 +312,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 use_posterior = False
 
             pred, state = mdl(a=a_t, o_current=o_t, r_current=r_t, term_current=term_t, last_state=state,
-                              use_posterior=use_posterior, sample=sample, reconstruct=reconstruct)
+                              use_posterior=use_posterior, sample_state=sample_state, sample_output=sample_output,
+                              reconstruct=reconstruct)
 
             for k, v in {**pred, **state}.items():
                 data = mem.get(k, [])
@@ -353,7 +355,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             if n_warmup == 'rand':
                 n_warmup = random.randint(1, filtered_inp_level['o'].shape[0])
             # do prediction
-            mem, _ = self(**filtered_inp_level, n_warmup=n_warmup, level=i_level, sample=True, reconstruct=True)
+            mem, _ = self(**filtered_inp_level, n_warmup=n_warmup, level=i_level, sample_state=True,
+                          sample_output=True, reconstruct=True)
             # prep next lvl input
             inp_lvl = {'o': torch.stack(mem[link]), 'a': filtered_inp_level['a'], 'r': torch.stack(mem['r']),
                        'term': torch.stack(mem['term'])}

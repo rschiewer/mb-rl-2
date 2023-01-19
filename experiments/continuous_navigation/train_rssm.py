@@ -74,7 +74,7 @@ def plan_with_warmup(model: DynamicsModel,
         _a = _a.swapaxes(0, 1)  # swap batch and time dim since model is time-first but planner is batch-first
         _a = torch.cat([a_start_batch, _a], dim=0)
         _mem, _ = model(a=_a, o=o_start_batch, r=r_start_batch, term=term_start_batch,
-                        n_warmup=n_warmup, sample=True)
+                        n_warmup=n_warmup, sample_state=True, sample_output=False)
         _criterion = torch.stack(_mem['r']).squeeze(-1).swapaxes(0, 1)
         _discount = torch.stack(_mem['term']).squeeze(-1).swapaxes(0, 1)
 
@@ -89,7 +89,7 @@ def plan_with_warmup(model: DynamicsModel,
     data = select_batch_items(data, i_win[:, 0], keepdim=True)
     # CAUTION: the actions from planner are without the already performed warmup acitons!
     a_win = planner_prim.get_winner_actions(a, a_dist, i_win, resample=True)
-    return a_win, data
+    return a_win, R_win[:, 0], data
 
 
 if __name__ == '__main__':
@@ -97,7 +97,7 @@ if __name__ == '__main__':
     parser.add_argument('-log', default=False, action='store_true')
     args = parser.parse_args()
 
-    cfg = load_yaml(here() / 'cfg_rssm_train.yaml')
+    cfg = load_yaml(here() / 'cfg_simple_rssm_train.yaml')
     planning_cfg = load_yaml(here() / 'cfg_rssm_plan.yaml')
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
@@ -183,15 +183,15 @@ if __name__ == '__main__':
     d_batch, pad = cfg['trainer']['d_batch'], cfg['trainer']['pad_last_terminal_flag']
     train_with_subtrajectories = cfg['trainer']['subtrajectory_len']
 
-    n_evolution_steps = 40
+    n_evolution_steps = 50
     winning_perc = 0.2
     discount = 0.98
     act_noise = 0.0
     alpha = 1
-    n_warmup = 2
+    n_warmup = 3
     n_plan_steps = 50
     n_rollouts = 1024
-    n_envs = 50
+    n_envs = 30
 
     planner_prim = CrossentropyPlanner(DistributionType.NORMAL, d_dist=2, act_noise=act_noise, discount=discount,
                                        n_evolution_steps=n_evolution_steps, winning_perc=winning_perc, alpha=alpha,
@@ -208,12 +208,13 @@ if __name__ == '__main__':
             collect_env.reset()
             warmup_data_trajectories = collect_data(collect_env, n_warmup, RandomPolicy(collect_env))
             warmup_data = prepare_data(**to_tensors(warmup_data_trajectories, model.device))
-            a_win, i_win = plan_with_warmup(model, planner_prim, warmup_data, n_plan_steps, n_rollouts, n_warmup)
+            a_win, R_win, i_win = plan_with_warmup(model, planner_prim, warmup_data, n_plan_steps, n_rollouts, n_warmup)
             collect_policy = PredefinedPolicy(collect_env, a_win.detach().cpu().numpy().swapaxes(0, 1))
             collected_data_trajectories = collect_data(collect_env, n_plan_steps - n_warmup - 1, collect_policy)
             mem = [{k: np.concatenate([wu[k], col[k]]) for k in wu}
                    for wu, col in zip(warmup_data_trajectories, collected_data_trajectories)]
             train_mem.extend(mem)
+            logger.log({'highest_planning_reward': R_win.mean().detach().cpu().numpy()}, Scope.TRAIN(), i_step)
 
         batch = train_driver.interact(d_batch)
         batch = to_tensors(batch, model.device)
@@ -225,7 +226,7 @@ if __name__ == '__main__':
         collect_env.reset()
         warmup_data_trajectories = collect_data(collect_env, n_warmup, RandomPolicy(collect_env))
         warmup_data = prepare_data(**to_tensors(warmup_data_trajectories, model.device))
-        a_win, i_win = plan_with_warmup(model, planner_prim, warmup_data, n_plan_steps, n_rollouts, n_warmup)
+        a_win, R_win, i_win = plan_with_warmup(model, planner_prim, warmup_data, n_plan_steps, n_rollouts, n_warmup)
         collect_policy = PredefinedPolicy(collect_env, a_win.detach().cpu().numpy().swapaxes(0, 1))
         collected_data_trajectories = collect_data(collect_env, n_plan_steps - n_warmup - 1, collect_policy)
         mem = [{k: np.concatenate([wu[k], col[k]]) for k in wu}
@@ -248,7 +249,7 @@ if __name__ == '__main__':
         model.eval()
         predictions = []
         for i_lvl in range(len(model.rssm_modules)):
-            pred, _ = model(o, a, r, term, cfg['eval']['warmup_steps'][i_lvl], sample=True)
+            pred, _ = model(o, a, r, term, cfg['eval']['warmup_steps'][i_lvl], sample_state=True, sample_output=False)
             predictions.append(pred)
         model.train()
 
