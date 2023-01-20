@@ -77,7 +77,7 @@ class NeptuneLogger(Logger):
                 self.log(value, full_scope, time_step=time_step)
             elif isinstance(value, list):
                 for v in value:
-                    self._run[str(full_scope)].log(v, step=time_step)
+                    self.log({name: v}, scope, time_step=time_step)
             elif isinstance(value, Figure):
                 self.log_plot(value, full_scope, time_step=time_step)
             else:
