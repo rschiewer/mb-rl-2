@@ -6,6 +6,7 @@ import torch
 from tqdm import tqdm
 import numpy as np
 from pathlib import Path
+import matplotlib.pyplot as plt
 
 from mdm.logging.logger import Logger, Scope
 from mdm.models.dynamics_model import DynamicsModel
@@ -56,7 +57,14 @@ class DynamicsModelTrainer(ABC):
             #with profile(activities=[ProfilerActivity.CPU], record_shapes=True) as prof:
             #    with record_function("model_training"):
             self.model.train()
+            #params_before = [p.detach().cpu().numpy() for p in self.model.parameters()]
             train_losses = self.model.train_step(s, a, r, term, mask, self.optimizer)
+            #params_after = [p.detach().cpu().numpy() for p in self.model.parameters()]
+            #diff = []
+            #for before, after in zip(params_before, params_after):
+            #    diff.append(np.abs(after - before).mean())
+            #plt.plot(diff)
+            #plt.show()
             #print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
 
             if progress_bar:

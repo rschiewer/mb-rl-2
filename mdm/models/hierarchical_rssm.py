@@ -1,5 +1,7 @@
 import random
 from typing import Sequence, List, Dict
+import copy
+from collections import OrderedDict
 
 import torch
 from torch.nn import ModuleList, ModuleDict
@@ -257,6 +259,20 @@ class StandardRSSM(torch.nn.Module):
         return z_post, z_smpl
 
 
+@torch.jit.script
+def _update_ema_modules(modules: List[Dict[str, torch.Tensor]], ema_modules: List[Dict[str, torch.Tensor]]):
+    # with torch.no_grad():
+    #    for m, ema_m in zip(modules, ema_modules):
+    #        params_m = OrderedDict(m.named_parameters())
+    #        params_ema_m = OrderedDict(ema_m.named_parameters())
+    #        for name, param_m in params_m.items():
+    #            params_ema_m[name].sub_(0.99 * (params_ema_m[name] - param_m))
+    with torch.no_grad():
+        for params_m, params_ema_m in zip(modules, ema_modules):
+            for name, param_m in params_m.items():
+                params_ema_m[name].sub_(0.99 * (params_ema_m[name] - param_m))
+
+
 class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
     def __init__(self,
@@ -264,7 +280,9 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                  links: Sequence[str],  # links associate output from one lvl below with inputs on this lvl
                  upwards_filters: Sequence[Dict[str, UpwardsFilter]],
                  warmup_steps: Sequence[Union[int, str]],
-                 kl_betas: Sequence[float]):
+                 kl_betas: Sequence[float],
+                 kl_reg_betas: Sequence[float],
+                 ema_regularization: bool = False):
         super(HierarchicalRSSM, self).__init__()
 
         assert len(links) == len(rssm_modules) - 1
@@ -280,11 +298,20 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             level.update(mask_filter)
         upwards_filters = [ModuleDict(lvl_0_filters)] + [ModuleDict(x) for x in upwards_filters]
 
+        if ema_regularization:
+            # generate EMA shadow copies of the RSSMs
+            self._ema_rssm_modules = ModuleList([copy.deepcopy(m) for m in rssm_modules])
+            for ema_mod in self._ema_rssm_modules:  # disable gradient computation in the ema shadow copies
+                for param in ema_mod.parameters():
+                    param.detach_()
+
         self.rssm_modules = ModuleList(list(rssm_modules))
         self.links = [*links, lvl_k_link]
         self.upwards_filters = ModuleList(upwards_filters)
         self.warmup_steps = warmup_steps
         self.kl_betas = tuple(kl_betas)
+        self.kl_reg_betas = tuple(kl_reg_betas)
+        self.ema_regularization = ema_regularization
 
     @property
     def strides(self):
@@ -292,13 +319,13 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
     def forward(self, o, a, r, term, n_warmup: int = -1, level: int = 0, memory: Optional[dict] = None,
                 start_state: Optional[dict] = None, sample_state: bool = True, sample_output: bool = True,
-                reconstruct: bool = True):
+                reconstruct: bool = True, use_ema_modules: bool = False):
         assert o.shape[0] == r.shape[0] == term.shape[0]
 
         device = self.device
+        mdl = self._ema_rssm_modules[level] if use_ema_modules else self.rssm_modules[level]
         n_pred_steps, d_batch = a.shape[:2]
         n_groundtruth_steps = o.shape[0]
-        mdl = self.rssm_modules[level]
         mem = {} if memory is None else memory
         state = mdl.init_state(d_batch, device) if start_state is None else start_state
         n_warmup = n_warmup if n_warmup > 0 else n_pred_steps
@@ -331,10 +358,23 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                     optimizer: torch.optim.Optimizer,
                     **kwargs) -> Dict[str, torch.Tensor]:
         optimizer.zero_grad(set_to_none=True)
-        losses = self.eval_step(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, mask)
+        losses_tf = self.eval_step(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, mask,
+                                   force_warmup=[-1 for _ in self.rssm_modules])
+        losses_one = self.eval_step(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, mask,
+                                    force_warmup=[1 for _ in self.rssm_modules])
+        losses_wu = self.eval_step(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, mask)
+        losses = {}
+        for k in losses_tf:
+            losses[k] = (losses_tf[k] + losses_wu[k] + losses_one[k]) / 3
         losses['total'].backward()
         # torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
         optimizer.step()
+
+        # update ema modules
+        if self.ema_regularization:
+            rssm_params = [OrderedDict(m.named_parameters()) for m in self.rssm_modules]
+            ema_params = [OrderedDict(m.named_parameters()) for m in self._ema_rssm_modules]
+            _update_ema_modules(rssm_params, ema_params)
 
         return losses
 
@@ -345,32 +385,40 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                    term_ground_truth: torch.Tensor,
                    mask: torch.Tensor,
                    **kwargs) -> Dict[str, torch.Tensor]:
+        warmup_steps = kwargs.get('force_warmup', self.warmup_steps)
         # execute all levels
         pred = []
+        pred_ema = []
         targets = []
         inp_lvl = {'o': o_ground_truth, 'a': a_ground_truth, 'r': r_ground_truth, 'term': term_ground_truth}
-        for i_level, (filters, link, n_warmup) in enumerate(zip(self.upwards_filters, self.links, self.warmup_steps)):
+        for i_lvl, (filters, link, n_warmup) in enumerate(zip(self.upwards_filters, self.links, warmup_steps)):
             # prep current lvl input
             filtered_inp_level = {k: filters[k](inp_lvl[k]) for k in inp_lvl}
-            if n_warmup == 'rand':
-                n_warmup = random.randint(1, filtered_inp_level['o'].shape[0])
+            n_warmup = random.randint(1, filtered_inp_level['o'].shape[0]) if n_warmup == 'rand' else n_warmup
             # do prediction
-            mem, _ = self(**filtered_inp_level, n_warmup=n_warmup, level=i_level, sample_state=True,
+            mem, _ = self(**filtered_inp_level, n_warmup=n_warmup, level=i_lvl, sample_state=True,
                           sample_output=True, reconstruct=True)
+            if self.ema_regularization:
+                mem_ema, _ = self(**filtered_inp_level, n_warmup=n_warmup, level=i_lvl, sample_state=True,
+                                  sample_output=True, reconstruct=True, use_ema_modules=True)
+            else:
+                mem_ema = None
             # prep next lvl input
             inp_lvl = {'o': torch.stack(mem[link]), 'a': filtered_inp_level['a'], 'r': torch.stack(mem['r']),
                        'term': torch.stack(mem['term'])}
 
             pred.append(mem)
+            pred_ema.append(mem_ema)
             targets.append(filtered_inp_level)
 
         # compute losses
         losses = {}
         mask_lvl = mask
-        for i_level, (pred_lvl, tarted_lvl, filters) in enumerate(zip(pred, targets, self.upwards_filters)):
-            mask_lvl = filters['mask'](mask_lvl)
-            loss_level = self.calc_loss(pred_lvl, tarted_lvl, mask_lvl, self.kl_betas[i_level])
-            loss_level = {k + f'_{i_level}': v for k, v in loss_level.items()}
+        for i_lvl in range(len(self.rssm_modules)):
+            mask_lvl = self.upwards_filters[i_lvl]['mask'](mask_lvl)
+            loss_level = self.calc_loss(pred[i_lvl], pred_ema[i_lvl], targets[i_lvl], mask_lvl, self.kl_betas[i_lvl],
+                                        self.kl_reg_betas[i_lvl])
+            loss_level = {k + f'_{i_lvl}': v for k, v in loss_level.items()}
             losses.update(loss_level)
         losses['total'] = torch.stack([v for k, v in losses.items() if k.startswith('total')]).mean()
 
@@ -378,6 +426,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
     def calc_loss(self,
                   predictions: Dict[str, List[Union[torch.Tensor, torch.distributions.Distribution]]],
+                  predictions_ema: Dict[str, List[Union[torch.Tensor, torch.distributions.Distribution]]],
                   targets: Dict[str, torch.Tensor],
                   mask: torch.Tensor,
                   kl_beta: float,
@@ -394,8 +443,19 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         mae_term = self._mae(predictions['term'], targets['term'], mask)
 
         total = rec_o + rec_r + rec_term + kl_z * kl_beta + kl_reg_z * kl_reg_beta
-        return {'total': total, 'o': rec_o, 'r': rec_r, 'term': rec_term, 'kl_z': kl_z, 'kl_reg_z': kl_reg_z,
+        loss = {'total': total, 'o': rec_o, 'r': rec_r, 'term': rec_term, 'kl_z': kl_z, 'kl_reg_z': kl_reg_z,
                 'monitoring_o': mae_o, 'monitoring_r': mae_r, 'monitoring_term': mae_term}
+
+        if self.ema_regularization:
+            cons_o = self._kl_div(predictions['o_dist'], predictions_ema['o_dist'], mask)
+            cons_r = self._kl_div(predictions['r_dist'], predictions_ema['r_dist'], mask)
+            cons_term = self._kl_div(predictions['term_dist'], predictions_ema['term_dist'], mask)
+            cons_z_prior = self._kl_div(predictions['z_prior'], predictions_ema['z_prior'], mask)
+            cons_z_post = self._kl_div(predictions['z_post'], predictions_ema['z_post'], mask)
+            loss['ema_reg'] = cons_o + cons_r + cons_term + cons_z_prior + cons_z_post
+            loss['total'] += loss['ema_reg']
+
+        return loss
 
     @staticmethod
     def _neg_log_prob(distributions: List[torch.distributions.Distribution],
