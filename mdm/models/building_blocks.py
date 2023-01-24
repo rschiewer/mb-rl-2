@@ -438,8 +438,8 @@ class BinomialDecoder(OutputDecoder):
                 sample: bool = True):
         params = self._mdl(x_enc)
         params = params.reshape(*params.shape[:-1], *self.s_x_orig)
-        #d = torch.distributions.ContinuousBernoulli(logits=params, lims=(0.49999, 0.50001))
-        d = torch.distributions.RelaxedBernoulli(temperature=self._temperature, logits=params)
+        d = torch.distributions.ContinuousBernoulli(logits=params, lims=(0.49999, 0.50001))
+        #d = torch.distributions.RelaxedBernoulli(temperature=self._temperature, logits=params)
         if sample:
             s = d.rsample()
         else:

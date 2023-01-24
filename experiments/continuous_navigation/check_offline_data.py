@@ -11,7 +11,7 @@ from mdm.utils.analysis_tools import plot_trajectory_stats
 
 
 if __name__ == '__main__':
-    cfg = load_yaml(here() / 'model_cfg.yaml')
+    cfg = load_yaml(here() / 'cfg_simple_rssm_train.yaml')
 
     map_version = 'VeryEasy'
     env = gym.make(f'gym_nav2d:nav2d{map_version}-v0')
