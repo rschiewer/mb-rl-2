@@ -4,6 +4,7 @@ import io
 import argparse
 import pickle
 
+import gym.vector
 import matplotlib.pyplot as plt
 import torch
 import numpy as np
@@ -74,9 +75,11 @@ def plan_with_warmup(model: DynamicsModel,
         _a = _a.swapaxes(0, 1)  # swap batch and time dim since model is time-first but planner is batch-first
         _a = torch.cat([a_start_batch, _a], dim=0)
         _mem, _ = model(a=_a, o=o_start_batch, r=r_start_batch, term=term_start_batch,
-                        n_warmup=n_warmup, sample_state=True, sample_output=False)
+                        n_warmup=n_warmup, sample_state=True, sample_output=True)
         _criterion = torch.stack(_mem['r']).squeeze(-1).swapaxes(0, 1)
+        # _criterion -= torch.stack([d.scale / 2 for d in _mem['r_dist']]).squeeze(-1).swapaxes(0, 1)
         _discount = torch.stack(_mem['term']).squeeze(-1).swapaxes(0, 1)
+        # _discount = torch.where(_discount > 0.75, 1.0, 0.0)
 
         _criterion = _criterion.reshape(n_envs, n_rollouts, _criterion.shape[-1])
         _discount = _discount.reshape(n_envs, n_rollouts, _discount.shape[-1])
@@ -97,7 +100,7 @@ if __name__ == '__main__':
     parser.add_argument('-log', default=False, action='store_true')
     args = parser.parse_args()
 
-    cfg = load_yaml(here() / 'cfg_simple_rssm_train.yaml')
+    cfg = load_yaml(here() / 'cfg_rssm_train.yaml')
     planning_cfg = load_yaml(here() / 'cfg_rssm_plan.yaml')
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
@@ -180,41 +183,37 @@ if __name__ == '__main__':
     test_mem = load_memory(here() / cfg['test_samples'])
     test_driver = OfflineRLDriver(test_mem, sampling_type=SamplingType.RANDOM)
 
-    d_batch, pad = cfg['trainer']['d_batch'], cfg['trainer']['pad_last_terminal_flag']
-    train_with_subtrajectories = cfg['trainer']['subtrajectory_len']
+    d_batch = cfg['trainer']['d_batch']
 
-    n_evolution_steps = 50
-    winning_perc = 0.2
-    discount = 0.98
-    act_noise = 0.0
-    alpha = 1
-    n_warmup = 3
-    n_plan_steps = 50
-    n_rollouts = 1024
-    n_envs = 30
-
-    planner_prim = CrossentropyPlanner(DistributionType.NORMAL, d_dist=2, act_noise=act_noise, discount=discount,
-                                       n_evolution_steps=n_evolution_steps, winning_perc=winning_perc, alpha=alpha,
-                                       device=model.device, debug_env=None,
+    planner_prim = CrossentropyPlanner(DistributionType.NORMAL, d_dist=2,
+                                       device=model.device, debug_env=None, **planning_cfg['pln_prim'],
                                        a_min=-1.0, a_max=1.0)
-
+    n_envs = cfg['trainer']['collect_envs']
     collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * n_envs)
     collect_env = CacheLastStepVecEnv(collect_env)
+    n_eval_envs = cfg['eval']['eval_envs']
+    eval_env = gym.vector.AsyncVectorEnv([make_env_fn] * n_eval_envs)
+    eval_env = CacheLastStepVecEnv(eval_env)
 
 
     def get_batch_train(i_step):
         # collect live data using current model for planning
-        if i_step % 50 == 0 and i_step > 0:
+        if i_step % 50 == 0:
+            model.eval()
             collect_env.reset()
-            warmup_data_trajectories = collect_data(collect_env, n_warmup, RandomPolicy(collect_env))
+            warmup_data_trajectories = collect_data(collect_env, planning_cfg['n_warmup_prim'],
+                                                    RandomPolicy(collect_env))
             warmup_data = prepare_data(**to_tensors(warmup_data_trajectories, model.device))
-            a_win, R_win, i_win = plan_with_warmup(model, planner_prim, warmup_data, n_plan_steps, n_rollouts, n_warmup)
+            a_win, R_win, i_win = plan_with_warmup(model, planner_prim, warmup_data, planning_cfg['n_plan_steps_prim'],
+                                                   planning_cfg['n_rollouts'], planning_cfg['n_warmup_prim'])
             collect_policy = PredefinedPolicy(collect_env, a_win.detach().cpu().numpy().swapaxes(0, 1))
-            collected_data_trajectories = collect_data(collect_env, n_plan_steps - n_warmup - 1, collect_policy)
+            remaining_steps = planning_cfg['n_plan_steps_prim'] - planning_cfg['n_warmup_prim'] - 1
+            collected_data_trajectories = collect_data(collect_env, remaining_steps, collect_policy)
             mem = [{k: np.concatenate([wu[k], col[k]]) for k in wu}
                    for wu, col in zip(warmup_data_trajectories, collected_data_trajectories)]
             train_mem.extend(mem)
             logger.log({'highest_planning_reward': R_win.mean().detach().cpu().numpy()}, Scope.TRAIN(), i_step)
+            model.train()
 
         batch = train_driver.interact(d_batch)
         batch = to_tensors(batch, model.device)
@@ -223,15 +222,15 @@ if __name__ == '__main__':
 
 
     def get_batch_test(i_step):
-        collect_env.reset()
-        warmup_data_trajectories = collect_data(collect_env, n_warmup, RandomPolicy(collect_env))
-        warmup_data = prepare_data(**to_tensors(warmup_data_trajectories, model.device))
-        a_win, R_win, i_win = plan_with_warmup(model, planner_prim, warmup_data, n_plan_steps, n_rollouts, n_warmup)
-        collect_policy = PredefinedPolicy(collect_env, a_win.detach().cpu().numpy().swapaxes(0, 1))
-        collected_data_trajectories = collect_data(collect_env, n_plan_steps - n_warmup - 1, collect_policy)
-        mem = [{k: np.concatenate([wu[k], col[k]]) for k in wu}
-               for wu, col in zip(warmup_data_trajectories, collected_data_trajectories)]
-        test_mem.extend(mem)
+        # collect_env.reset()
+        # warmup_data_trajectories = collect_data(collect_env, n_warmup, RandomPolicy(collect_env))
+        # warmup_data = prepare_data(**to_tensors(warmup_data_trajectories, model.device))
+        # a_win, R_win, i_win = plan_with_warmup(model, planner_prim, warmup_data, n_plan_steps, n_rollouts, n_warmup)
+        # collect_policy = PredefinedPolicy(collect_env, a_win.detach().cpu().numpy().swapaxes(0, 1))
+        # collected_data_trajectories = collect_data(collect_env, n_plan_steps - n_warmup - 1, collect_policy)
+        # mem = [{k: np.concatenate([wu[k], col[k]]) for k in wu}
+        #       for wu, col in zip(warmup_data_trajectories, collected_data_trajectories)]
+        # test_mem.extend(mem)
 
         batch = test_driver.interact(d_batch)
         batch = to_tensors(batch, model.device)
@@ -249,9 +248,8 @@ if __name__ == '__main__':
         model.eval()
         predictions = []
         for i_lvl in range(len(model.rssm_modules)):
-            pred, _ = model(o, a, r, term, cfg['eval']['warmup_steps'][i_lvl], sample_state=True, sample_output=False)
+            pred, _ = model(o, a, r, term, cfg['eval']['warmup_steps'][i_lvl], sample_state=True, sample_output=True)
             predictions.append(pred)
-        model.train()
 
         lvl_0_r_mean = torch.stack(predictions[0]['r']).mean(dim=1).squeeze().detach().cpu().numpy()
         lvl_0_r_std = torch.stack(predictions[0]['r']).std(dim=1).squeeze().detach().cpu().numpy()
@@ -267,9 +265,39 @@ if __name__ == '__main__':
         plt.legend()
         logger.log_plot(fig_to_img(fig), Scope.PARAMETERS() / 'model_stats/prim_term', i_step)
 
-        #losses = model.calc_loss(pred, o, r, term, mask)
-        #losses = {k: v.detach().cpu().numpy() for k, v in losses.items()}
-        #logger.log(losses, Scope.TEST() / 'with_warmup', i_step)
+        # losses = model.calc_loss(pred, o, r, term, mask)
+        # losses = {k: v.detach().cpu().numpy() for k, v in losses.items()}
+        # logger.log(losses, Scope.TEST() / 'with_warmup', i_step)
+
+        eval_env.reset()
+        warmup_data_trajectories = collect_data(eval_env, planning_cfg['n_warmup_prim'], RandomPolicy(eval_env))
+        warmup_data = prepare_data(**to_tensors(warmup_data_trajectories, model.device))
+        a_win, R_win, i_win = plan_with_warmup(model, planner_prim, warmup_data, planning_cfg['n_plan_steps_prim'],
+                                               planning_cfg['n_rollouts'], planning_cfg['n_warmup_prim'])
+        collect_policy = PredefinedPolicy(eval_env, a_win.detach().cpu().numpy().swapaxes(0, 1))
+        remaining_steps = planning_cfg['n_plan_steps_prim'] - planning_cfg['n_warmup_prim'] - 1
+        collected_data_trajectories = collect_data(eval_env, remaining_steps, collect_policy)
+        mem = [{k: np.concatenate([wu[k], col[k]]) for k in wu}
+               for wu, col in zip(warmup_data_trajectories, collected_data_trajectories)]
+        ep_len = 0
+        success = 0
+        avg_return = 0
+        for ep in mem:
+            avg_return += np.stack(ep['r']).sum()
+            if ep['terminal'].sum() == 1:
+                ep_len += len(ep['terminal'])
+                success += 1
+            elif ep['terminal'].sum() > 1:
+                raise RuntimeError('More than one terminal flag, there is something wrong!')
+            else:
+                ep_len += len(ep['terminal'])
+        success /= n_eval_envs
+        ep_len /= n_eval_envs
+        avg_return /= n_eval_envs
+
+        logger.log({'ep_len': ep_len, 'success': success, 'avg_return': avg_return},
+                   Scope.PARAMETERS() / 'model_stats/eval_planning', i_step)
+        model.train()
 
 
     trainer = DynamicsModelTrainer(model=model, optimizer=optimizer, get_batch_train=get_batch_train,

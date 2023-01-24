@@ -12,7 +12,7 @@ mdm:
          d_h: 64
          n_hidden_layers: 3
          hidden_dropout: 0.1
-         epsilon: 0.001
+         epsilon: 0.00001
          z_prior_lws: [ 64, 64 ]
          z_post_lws: [ 64, 64 ]
          layer_norm: True
@@ -30,13 +30,13 @@ mdm:
             lws: [ 32, 32 ]
             layer_norm: True
             activation: "relu"
-            epsilon: 0.001
+            epsilon: 0.00001
          r_decoder:
             class: "GaussianDecoder"
             lws: [ 32, 32 ]
             layer_norm: True
             activation: "relu"
-            epsilon: 0.001
+            epsilon: 0.00001
          term_decoder:
             class: "BinomialDecoder"
             lws: [ 32, 32 ]
@@ -48,7 +48,7 @@ mdm:
          d_a: 2
          n_hidden_layers: 1
          hidden_dropout: 0.1
-         epsilon: 0.001
+         epsilon: 0.00001
          z_prior_lws: [ 64, 64 ]
          z_post_lws: [ 64, 64 ]
          layer_norm: True
@@ -66,13 +66,13 @@ mdm:
             lws: [ 32, 32 ]
             layer_norm: True
             activation: "relu"
-            epsilon: 0.001
+            epsilon: 0.00001
          r_decoder:
             class: "GaussianDecoder"
             lws: [ 32, 32 ]
             layer_norm: True
             activation: "relu"
-            epsilon: 0.001
+            epsilon: 0.00001
          term_decoder:
             class: "BinomialDecoder"
             lws: [ 32, 32 ]
@@ -99,6 +99,8 @@ mdm:
             window_size: 2
    warmup_steps: [ 'rand', 'rand' ]
    kl_betas: [ 1.0, 1.0 ]
+   kl_reg_betas: [ 0.01, 0.01 ]
+   ema_regularization: True
 
 optim:
    type: 'adam'  # 'adamW' 'adam'
@@ -107,9 +109,11 @@ optim:
 trainer:
    n_train_steps: 3000
    eval_interval: 100
-   d_batch: 512
+   d_batch: 1024
    pad_last_terminal_flag: False
    subtrajectory_len: 0
+   collect_envs: 50
 
 eval:
    warmup_steps: [ 2, 1 ]
+   eval_envs: 20

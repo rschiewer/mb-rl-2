@@ -1,13 +1,13 @@
 ---
 n_episodes: 25
-n_rollouts: 2048
+n_rollouts: 1024
 n_warmup_prim: 2
 n_warmup_abstr: 1
 n_plan_steps_prim: 50
 n_plan_steps_abstr: 20
 
 pln_prim:
-  n_evolution_steps: 40
+  n_evolution_steps: 30
   winning_perc: 0.2
   discount: 0.98
   act_noise: 0.000
