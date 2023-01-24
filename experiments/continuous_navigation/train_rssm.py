@@ -198,7 +198,7 @@ if __name__ == '__main__':
 
     def get_batch_train(i_step):
         # collect live data using current model for planning
-        if i_step % 50 == 0:
+        if i_step % cfg['trainer']['collect_interval'] == 0:
             model.eval()
             collect_env.reset()
             warmup_data_trajectories = collect_data(collect_env, planning_cfg['n_warmup_prim'],
