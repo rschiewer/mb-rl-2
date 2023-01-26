@@ -55,12 +55,12 @@ def select_batch_items(mem: Dict[str, Union[torch.Tensor, torch.distributions.Di
     return ret
 
 
-def plan_with_warmup(model: DynamicsModel,
-                     planner_prim: CrossentropyPlanner,
-                     env_data: Dict[str, torch.Tensor],
-                     n_plan_steps: int,
-                     n_rollouts: int,
-                     n_warmup: int):
+def plan(model: DynamicsModel,
+         planner_prim: CrossentropyPlanner,
+         env_data: Dict[str, torch.Tensor],
+         n_plan_steps: int,
+         n_rollouts: int,
+         n_warmup: int):
     n_envs = env_data['o'].shape[1]
 
     # repeat the starting data n_rollouts times per environment, so use repeat_interleave instead of repeat
@@ -100,7 +100,7 @@ if __name__ == '__main__':
     parser.add_argument('-log', default=False, action='store_true')
     args = parser.parse_args()
 
-    cfg = load_yaml(here() / 'cfg_rssm_train.yaml')
+    cfg = load_yaml(here() / 'cfg_simple_rssm_train.yaml')
     planning_cfg = load_yaml(here() / 'cfg_rssm_plan.yaml')
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
@@ -204,8 +204,8 @@ if __name__ == '__main__':
             warmup_data_trajectories = collect_data(collect_env, planning_cfg['n_warmup_prim'],
                                                     RandomPolicy(collect_env))
             warmup_data = prepare_data(**to_tensors(warmup_data_trajectories, model.device))
-            a_win, R_win, i_win = plan_with_warmup(model, planner_prim, warmup_data, planning_cfg['n_plan_steps_prim'],
-                                                   planning_cfg['n_rollouts'], planning_cfg['n_warmup_prim'])
+            a_win, R_win, _ = plan(model, planner_prim, warmup_data, planning_cfg['n_plan_steps_prim'],
+                                   planning_cfg['n_rollouts'], planning_cfg['n_warmup_prim'])
             collect_policy = PredefinedPolicy(collect_env, a_win.detach().cpu().numpy().swapaxes(0, 1))
             remaining_steps = planning_cfg['n_plan_steps_prim'] - planning_cfg['n_warmup_prim'] - 1
             collected_data_trajectories = collect_data(collect_env, remaining_steps, collect_policy)
@@ -272,8 +272,8 @@ if __name__ == '__main__':
         eval_env.reset()
         warmup_data_trajectories = collect_data(eval_env, planning_cfg['n_warmup_prim'], RandomPolicy(eval_env))
         warmup_data = prepare_data(**to_tensors(warmup_data_trajectories, model.device))
-        a_win, R_win, i_win = plan_with_warmup(model, planner_prim, warmup_data, planning_cfg['n_plan_steps_prim'],
-                                               planning_cfg['n_rollouts'], planning_cfg['n_warmup_prim'])
+        a_win, R_win, _ = plan(model, planner_prim, warmup_data, planning_cfg['n_plan_steps_prim'],
+                               planning_cfg['n_rollouts'], planning_cfg['n_warmup_prim'])
         collect_policy = PredefinedPolicy(eval_env, a_win.detach().cpu().numpy().swapaxes(0, 1))
         remaining_steps = planning_cfg['n_plan_steps_prim'] - planning_cfg['n_warmup_prim'] - 1
         collected_data_trajectories = collect_data(eval_env, remaining_steps, collect_policy)
