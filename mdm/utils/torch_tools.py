@@ -12,7 +12,7 @@ from mdm.utils.utils import SliceType, DataType
 
 RnnStateType = TypeVar('RnnStateType', torch.Tensor, Tuple[torch.Tensor, torch.Tensor])
 TensorData = TypeVar('TensorData', torch.Tensor, Tuple[torch.Tensor, ...], List[torch.Tensor])
-TensorIndex = TypeVar('TensorIndex', int, SliceType, torch.Tensor)
+TensorIndex = TypeVar('TensorIndex', int, Sequence[int], torch.Tensor)
 _Placeholder = namedtuple('placeholder', 'device')
 
 
