@@ -306,15 +306,19 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                     param.detach_()
 
         self.rssm_modules = ModuleList(list(rssm_modules))
-        self.links = [*links, lvl_k_link]
+        self.links = (*links, lvl_k_link)
         self.upwards_filters = ModuleList(upwards_filters)
-        self.warmup_steps = warmup_steps
+        self.warmup_steps = tuple(warmup_steps)
         self.kl_betas = tuple(kl_betas)
         self.kl_reg_betas = tuple(kl_reg_betas)
         self.ema_regularization = ema_regularization
 
     @property
-    def strides(self):
+    def levels(self) -> int:
+        return len(self.rssm_modules)
+
+    @property
+    def strides(self) -> List[int]:
         return [filters['o'].window_size for filters in self.upwards_filters[1:]]
 
     def forward(self, o, a, r, term, n_warmup: int = -1, level: int = 0, memory: Optional[dict] = None,
