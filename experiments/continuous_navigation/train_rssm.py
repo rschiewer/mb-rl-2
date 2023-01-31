@@ -38,25 +38,25 @@ def select_batch_items(mem: Dict[str, Union[torch.Tensor, torch.distributions.Di
             i = i.detach().cpu().numpy().item()
             i = slice(i, i + 1)
 
-    ret = {}
-    for name, val in mem.items():
-        ret[name] = []
-        for timestep in val:
-            if timestep is None:
+    ret = {name: [] for name in mem}
+    for name, trajectory_data in mem.items():
+        for x_t in trajectory_data:
+            if x_t is None:
                 ret[name].append(None)
-            elif isinstance(timestep, torch.Tensor):
-                ret[name].append(timestep[i])
-            elif isinstance(timestep, torch.distributions.Distribution):
-                ret[name].append(extract_sub_distribution(timestep, i))  # keepdim is handled by calling function
+            elif isinstance(x_t, torch.Tensor):
+                ret[name].append(x_t[i])
+            elif isinstance(x_t, torch.distributions.Distribution):
+                ret[name].append(extract_sub_distribution(x_t, i))  # keepdim is handled by calling function
             elif 'rnn_state' in name:
-                ret[name].append(unpack_rnn_state(pack_rnn_state(timestep)[i]))
+                ret[name].append(unpack_rnn_state(pack_rnn_state(x_t)[i]))
             else:
-                raise ValueError(f'Unknown memory content for key {name}: {timestep}')
+                raise ValueError(f'Unknown memory content for key {name}: {x_t}')
     return ret
 
 
 def plan(model: DynamicsModel,
-         planner_prim: CrossentropyPlanner,
+         level: int,
+         planner: CrossentropyPlanner,
          env_data: Dict[str, torch.Tensor],
          n_plan_steps: int,
          n_rollouts: int,
@@ -74,25 +74,87 @@ def plan(model: DynamicsModel,
         _a = _a.reshape(_a.shape[0] * _a.shape[1], *_a.shape[2:])
         _a = _a.swapaxes(0, 1)  # swap batch and time dim since model is time-first but planner is batch-first
         _a = torch.cat([a_start_batch, _a], dim=0)
-        _mem, _ = model(a=_a, o=o_start_batch, r=r_start_batch, term=term_start_batch,
-                        n_warmup=n_warmup, sample_state=True, sample_output=True)
+        _mem, _ = model(a=_a, o=o_start_batch, r=r_start_batch, terminal=term_start_batch,
+                        n_warmup=n_warmup, level=level, sample_state=True, sample_output=True)
         _criterion = torch.stack(_mem['r']).squeeze(-1).swapaxes(0, 1)
         # _criterion -= torch.stack([d.scale / 2 for d in _mem['r_dist']]).squeeze(-1).swapaxes(0, 1)
-        _discount = torch.stack(_mem['term']).squeeze(-1).swapaxes(0, 1)
+        _discount = torch.stack(_mem['terminal']).squeeze(-1).swapaxes(0, 1)
         # _discount = torch.where(_discount > 0.75, 1.0, 0.0)
 
         _criterion = _criterion.reshape(n_envs, n_rollouts, _criterion.shape[-1])
         _discount = _discount.reshape(n_envs, n_rollouts, _discount.shape[-1])
         return _criterion, _discount, _mem
 
-    a, a_dist, i_win, R_win, data = planner_prim.plan(rollout_fn=_rollout_fn, n_rollouts=n_rollouts,
-                                                      n_plan_steps=n_plan_steps, n_envs=n_envs)
+    a, a_dist, i_win, R_win, data = planner.plan(rollout_fn=_rollout_fn, n_rollouts=n_rollouts,
+                                                 n_plan_steps=n_plan_steps, n_envs=n_envs)
 
     # select winner batch item per per memory timestep
     data = select_batch_items(data, i_win[:, 0], keepdim=True)
     # CAUTION: the actions from planner are without the already performed warmup acitons!
-    a_win = planner_prim.get_winner_actions(a, a_dist, i_win, resample=True)
+    a_win = planner.get_winner_actions(a, a_dist, i_win, resample=False)
     return a_win, R_win[:, 0], data
+
+
+def run_model(model: DynamicsModel,
+              level: int,
+              env_data: Dict[str, torch.Tensor],
+              discount: float = 1.0):
+    mem, _ = model(**env_data, n_warmup=-1, level=level, sample_state=True, sample_output=True)
+    step_rewards = torch.stack(mem['r'])
+    disc_mat = torch.cumprod(torch.full_like(step_rewards, discount), dim=0)
+    disc_mat = torch.roll(disc_mat, 1, dims=0)
+    disc_mat[0, :, :] = 1
+    R_win = torch.sum(step_rewards * disc_mat, dim=0)
+    a_win = mem['a']
+    return a_win, R_win, mem
+
+
+def plan_hierarchical(model: HierarchicalRSSM,
+                      env_data: Dict[str, torch.Tensor],
+                      planners: List[CrossentropyPlanner],
+                      n_plan_steps: List[int],
+                      n_rollouts: List[int],
+                      n_warmup: List[int]):
+    n_groundtruth_steps, n_envs = env_data['o'].shape[:2]
+    del env_data['truncated']
+    del env_data['mask']
+
+    min_n_warmup = [n_warmup[-1]]
+    for level in reversed(range(model.levels - 1)):
+        from_above = min_n_warmup[-1] * model.strides[level + 1]
+        wu = max(from_above, n_warmup[level])
+        min_n_warmup.append(wu)
+    min_n_warmup.reverse()
+
+    assert min_n_warmup[0] == n_groundtruth_steps
+
+    # climb hierarchy and collect warmup data
+    inp_lvl = env_data
+    for level in range(model.levels):
+        filters = model.upwards_filters[level]
+        filtered_inp_level = {k: filters[k](inp_lvl[k]) for k in inp_lvl}
+
+        plan_steps_lvl = min_n_warmup[level] - n_warmup[level]
+        if plan_steps_lvl > 0:
+            a_win, R_win, data = plan(model=model, level=level, planner=planners[level], env_data=filtered_inp_level,
+                                      n_plan_steps=plan_steps_lvl, n_rollouts=n_rollouts[level],
+                                      n_warmup=n_warmup[level])
+        else:
+            a_win, R_win, data = run_model(model=model, level=level, env_data=filtered_inp_level,
+                                           discount=planners[level].discount)
+        link = model.links[level]
+        inp_lvl = {'o': torch.stack(data[link]), 'a': filtered_inp_level['a'], 'r': torch.stack(data['r']),
+                   'terminal': torch.stack(data['terminal'])}
+
+    # plan top level
+    top_level = model.levels
+    a_win, R_win, data = plan(model=model, level=top_level, planner=planners[top_level], env_data=filtered_inp_level,
+                              n_plan_steps=n_plan_steps[top_level], n_rollouts=n_rollouts[top_level],
+                              n_warmup=n_warmup[level])
+
+    # plan top to bottom
+    for level in reversed(range(model.levels)):
+        pass
 
 
 if __name__ == '__main__':
@@ -100,7 +162,7 @@ if __name__ == '__main__':
     parser.add_argument('-log', default=False, action='store_true')
     args = parser.parse_args()
 
-    cfg = load_yaml(here() / 'cfg_simple_rssm_train.yaml')
+    cfg = load_yaml(here() / 'cfg_rssm_train.yaml')
     planning_cfg = load_yaml(here() / 'cfg_rssm_plan.yaml')
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
@@ -185,9 +247,13 @@ if __name__ == '__main__':
 
     d_batch = cfg['trainer']['d_batch']
 
-    planner_prim = CrossentropyPlanner(DistributionType.NORMAL, d_dist=2,
-                                       device=model.device, debug_env=None, **planning_cfg['pln_prim'],
-                                       a_min=-1.0, a_max=1.0)
+    planner_0 = CrossentropyPlanner(DistributionType.NORMAL, d_dist=2,
+                                    device=model.device, debug_env=None, **planning_cfg['pln_prim'],
+                                    a_min=-1.0, a_max=1.0)
+    planner_1 = CrossentropyPlanner(DistributionType.NORMAL, d_dist=model.rssm_modules[1].d_a,
+                                    device=model.device, debug_env=None, **planning_cfg['pln_prim'],
+                                    a_min=-1.0, a_max=1.0)
+
     n_envs = cfg['trainer']['collect_envs']
     collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * n_envs)
     collect_env = CacheLastStepVecEnv(collect_env)
@@ -204,8 +270,12 @@ if __name__ == '__main__':
             warmup_data_trajectories = collect_data(collect_env, planning_cfg['n_warmup_prim'],
                                                     RandomPolicy(collect_env))
             warmup_data = prepare_data(**to_tensors(warmup_data_trajectories, model.device))
-            a_win, R_win, _ = plan(model, planner_prim, warmup_data, planning_cfg['n_plan_steps_prim'],
+            a_win, R_win, _ = plan(model, 0, planner_0, warmup_data, planning_cfg['n_plan_steps_prim'],
                                    planning_cfg['n_rollouts'], planning_cfg['n_warmup_prim'])
+            a_win, R_win, _ = plan_hierarchical(model, warmup_data, [planner_0, planner_1],
+                                                [planning_cfg['n_plan_steps_prim'], planning_cfg['n_plan_steps_abstr']],
+                                                [planning_cfg['n_rollouts'], planning_cfg['n_rollouts']],
+                                                [planning_cfg['n_warmup_prim'], planning_cfg['n_warmup_abstr']])
             collect_policy = PredefinedPolicy(collect_env, a_win.detach().cpu().numpy().swapaxes(0, 1))
             remaining_steps = planning_cfg['n_plan_steps_prim'] - planning_cfg['n_warmup_prim'] - 1
             collected_data_trajectories = collect_data(collect_env, remaining_steps, collect_policy)
@@ -253,8 +323,8 @@ if __name__ == '__main__':
 
         lvl_0_r_mean = torch.stack(predictions[0]['r']).mean(dim=1).squeeze().detach().cpu().numpy()
         lvl_0_r_std = torch.stack(predictions[0]['r']).std(dim=1).squeeze().detach().cpu().numpy()
-        lvl_0_term_mean = torch.stack(predictions[0]['term']).mean(dim=1).squeeze().detach().cpu().numpy()
-        lvl_0_term_std = torch.stack(predictions[0]['term']).std(dim=1).squeeze().detach().cpu().numpy()
+        lvl_0_term_mean = torch.stack(predictions[0]['terminal']).mean(dim=1).squeeze().detach().cpu().numpy()
+        lvl_0_term_std = torch.stack(predictions[0]['terminal']).std(dim=1).squeeze().detach().cpu().numpy()
 
         plt.plot(lvl_0_r_mean, label='mean')
         plt.plot(lvl_0_r_std, label='std')
@@ -272,7 +342,7 @@ if __name__ == '__main__':
         eval_env.reset()
         warmup_data_trajectories = collect_data(eval_env, planning_cfg['n_warmup_prim'], RandomPolicy(eval_env))
         warmup_data = prepare_data(**to_tensors(warmup_data_trajectories, model.device))
-        a_win, R_win, _ = plan(model, planner_prim, warmup_data, planning_cfg['n_plan_steps_prim'],
+        a_win, R_win, _ = plan(model, 0, planner_0, warmup_data, planning_cfg['n_plan_steps_prim'],
                                planning_cfg['n_rollouts'], planning_cfg['n_warmup_prim'])
         collect_policy = PredefinedPolicy(eval_env, a_win.detach().cpu().numpy().swapaxes(0, 1))
         remaining_steps = planning_cfg['n_plan_steps_prim'] - planning_cfg['n_warmup_prim'] - 1
