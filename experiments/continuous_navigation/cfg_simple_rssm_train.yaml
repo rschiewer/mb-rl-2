@@ -46,7 +46,7 @@ mdm:
    upwards_filters: [ ]
    warmup_steps: [ 'rand' ]
    kl_betas: [ 1.0 ]
-   kl_reg_betas: [ 0.01 ]
+   kl_reg_betas: [ 0.001 ]
    ema_regularization: True
 
 optim:
@@ -59,9 +59,9 @@ trainer:
    d_batch: 1024
    pad_last_terminal_flag: False
    subtrajectory_len: 0
-   collect_envs: 50
-   collect_interval: 50
+   collect_envs: 10
+   collect_interval: 10
 
 eval:
    warmup_steps: [ 2 ]
-   eval_envs: 20
+   eval_envs: 10
