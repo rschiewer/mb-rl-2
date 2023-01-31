@@ -274,6 +274,7 @@ def _update_ema_modules(modules: List[Dict[str, torch.Tensor]], ema_modules: Lis
 
 
 class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
+    _filter_names = ('o', 'a', 'r', 'terminal', 'mask')
 
     def __init__(self,
                  rssm_modules: Sequence[StandardRSSM],
@@ -292,8 +293,10 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             assert len(window_sizes) == 1
 
         lvl_k_link = 'o'  # only here to make the loop in eval_step() method work
-        lvl_0_filters = {k: IdentityUpwardsFilter() for k in ('o', 'a', 'r', 'terminal', 'mask')}
+        lvl_0_filters = {k: IdentityUpwardsFilter() for k in self._filter_names}
         for level in upwards_filters:
+            assert level.keys() <= set(
+                self._filter_names), f'Allowed filter names: {self._filter_names}, found filter names: {level.keys()}'
             mask_filter = {'mask': MinUpwardsFilter(level['o'].window_size)}
             level.update(mask_filter)
         upwards_filters = [ModuleDict(lvl_0_filters)] + [ModuleDict(x) for x in upwards_filters]
@@ -319,7 +322,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
     @property
     def strides(self) -> List[int]:
-        return [filters['o'].window_size for filters in self.upwards_filters[1:]]
+        return [filters['o'].window_size for filters in self.upwards_filters]
 
     def forward(self, o, a, r, terminal, n_warmup: int = -1, level: int = 0, memory: Optional[dict] = None,
                 start_state: Optional[dict] = None, sample_state: bool = True, sample_output: bool = True,
