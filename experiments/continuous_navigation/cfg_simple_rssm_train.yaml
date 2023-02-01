@@ -59,9 +59,9 @@ trainer:
    d_batch: 1024
    pad_last_terminal_flag: False
    subtrajectory_len: 0
-   collect_envs: 10
+   collect_envs: 50
    collect_interval: 10
 
 eval:
    warmup_steps: [ 2 ]
-   eval_envs: 10
+   eval_envs: 20
