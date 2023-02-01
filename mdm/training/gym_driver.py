@@ -111,6 +111,7 @@ def act_in_vector_env(env: CacheLastStepVecEnv,
         n_steps = sys.maxsize.real
 
     if env.current_step == 0:
+        n_steps -= 1
         o, _ = env.reset(seed=seed)
         traj_o.append(env.last_o)
         traj_mask.append(env.envs_done.copy())
@@ -160,6 +161,7 @@ def act_in_env(env: CacheLastStepEnv,
 
     env_done = False
     if env.current_step == 0:
+        n_steps -= 1
         o, _ = env.reset(seed=seed)
         traj_o.append(env.last_o)
         if pad_data:  # by convention, make (a_0, r_0, t_0) = 0
