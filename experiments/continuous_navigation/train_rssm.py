@@ -87,6 +87,7 @@ def plan(model: HierarchicalRSSM,
     # repeat the starting data n_rollouts times per environment, so use repeat_interleave instead of repeat
     if env_data is None:
         assert model_state is not None
+        assert n_warmup == 0
         n_envs = model_state['z'].shape[0]
         o_start_batch = torch.zeros(0, 0, 0, device=model.device)  # zero time, batch and data dim
         a_start_batch = torch.zeros(0, n_envs * n_rollouts, model.rssm_modules[level].d_a, device=model.device)
@@ -212,20 +213,30 @@ def plan_hierarchical(model: HierarchicalRSSM,
                                                    n_plan_steps=n_plan_steps, n_rollouts=n_rollouts[i_top_lvl],
                                                    n_warmup=n_warmup[i_top_lvl], env_data=top_lvl_input_data)
 
-    # plan top to bottom levels to maximize target similarity
+    # now plan top to bottom levels to maximize target similarity
+
     planning_data = [{}] * model.levels
     best_actions = [[]] * model.levels
     best_returns = [None] * model.levels
+
+    # top level for all memories is already done, so fill it in
     planning_data[-1] = top_lvl_data
-    best_actions[-1] = a_win_top  # 0 is env dimension, 1 is time dimension, 2 is action dimension
+    best_actions[-1] = a_win_top  # 0 is env/batch dimension, 1 is time dimension, 2 is action dimension
     best_returns[-1] = return_win_top
+
     for level in reversed(range(model.levels - 1)):
         above_level = level + 1
-        i_chunk_start = 0  # len(init_data[above_level]['o'])
+        i_chunk_start = len(init_data[above_level]['o'])  # omit the warm up steps
         i_chunk_end = len(planning_data[above_level]['o'])
-        n_plan_steps_level = model.strides[above_level]
+        n_plan_steps_level = model.strides[above_level]  # plan chunk by chunk
         a_win_level = []
         return_win_level = []
+
+        # add init data portion of the trajectories
+        for k, v in init_data[level].items():
+            tmp = planning_data[level].get(k, [])
+            tmp.extend(v)
+            planning_data[level][k] = tmp
 
         # iterate through the chunks and do planning
         model_state = {'rnn_state': init_data[level]['rnn_state'][-1], 'z': init_data[level]['z'][-1]}
@@ -233,7 +244,7 @@ def plan_hierarchical(model: HierarchicalRSSM,
             goal_data = {model.links[level]: planning_data[above_level]['o'][i_chunk]}
             a_win, return_win, data = plan(model=model, level=level, planner=planners[level],
                                            n_plan_steps=n_plan_steps_level, n_rollouts=n_rollouts[level],
-                                           n_warmup=n_warmup[level], model_state=model_state,
+                                           n_warmup=0, model_state=model_state,
                                            goal_data=goal_data)
             model_state = {'rnn_state': data['rnn_state'][-1], 'z': data['z'][-1]}
 
@@ -246,10 +257,6 @@ def plan_hierarchical(model: HierarchicalRSSM,
                 planning_data[level][k] = tmp
         best_actions[level] = torch.stack(a_win_level, dim=1)
         best_returns[level] = torch.stack(return_win_level).sum(dim=0)
-
-    for level in range(model.levels):
-        for k in init_data[level]:
-            planning_data[level][k] = init_data[level][k] + planning_data[level][k]
 
     best_lvl_0_actions = best_actions[0]
     return best_lvl_0_actions, best_returns, planning_data
