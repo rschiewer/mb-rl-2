@@ -354,6 +354,11 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 data.append(v)
                 mem[k] = data
 
+            # store a as well for the record
+            #actions = mem.get('a', [])
+            #actions.append(a_t)
+            #mem['a'] = actions
+
         return mem, state
 
     def _train_step(self,
@@ -401,6 +406,12 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         for i_lvl, (filters, link, n_warmup) in enumerate(zip(self.upwards_filters, self.links, warmup_steps)):
             # prep current lvl input
             filtered_inp_level = {k: filters[k](inp_lvl[k]) for k in inp_lvl}
+
+            # TODO: just a test, remove again later
+            filtered_inp_level['o'] = filtered_inp_level['o'].detach()
+            filtered_inp_level['r'] = filtered_inp_level['r'].detach()
+            filtered_inp_level['terminal'] = filtered_inp_level['terminal'].detach()
+
             n_warmup = random.randint(1, filtered_inp_level['o'].shape[0]) if n_warmup == 'rand' else n_warmup
             # do prediction
             mem, _ = self(**filtered_inp_level, n_warmup=n_warmup, level=i_lvl, sample_state=True,

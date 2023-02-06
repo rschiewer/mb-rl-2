@@ -8,7 +8,7 @@ final_model_path: "trained_models/model"
 mdm:
    rssm_modules:
       # RSSM no. 1
-      -  d_z: 10
+      -  d_z: 8
          d_h: 64
          n_hidden_layers: 3
          hidden_dropout: 0.1
@@ -43,10 +43,10 @@ mdm:
             layer_norm: True
             activation: "relu"
       # RSSM no. 2
-      -  d_z: 10
+      -  d_z: 16
          d_h: 64
          d_a: 2
-         n_hidden_layers: 1
+         n_hidden_layers: 3
          hidden_dropout: 0.1
          epsilon: 0.00001
          z_prior_lws: [ 64, 64 ]
@@ -108,7 +108,7 @@ optim:
    lr: 0.001 #0.0002
 
 trainer:
-   n_train_steps: 3000
+   n_train_steps: 10000
    eval_interval: 100
    d_batch: 1024
    pad_last_terminal_flag: False
