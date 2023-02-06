@@ -355,9 +355,9 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 mem[k] = data
 
             # store a as well for the record
-            #actions = mem.get('a', [])
-            #actions.append(a_t)
-            #mem['a'] = actions
+            actions = mem.get('a', [])
+            actions.append(a_t)
+            mem['a'] = actions
 
         return mem, state
 
