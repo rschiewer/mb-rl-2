@@ -54,6 +54,25 @@ def select_batch_items(mem: Dict[str, Union[torch.Tensor, torch.distributions.Di
     return ret
 
 
+def select_winners(mem: Dict[str, Union[torch.Tensor, torch.distributions.Distribution]],
+                   i_win: torch.Tensor,
+                   n_envs: int,
+                   n_rollouts: int):
+    assert i_win.ndim == 1
+
+    offsets = torch.tensor([i * n_rollouts for i in range(n_envs)], dtype=torch.long, device=i_win.device)
+    i_win_offs = i_win + offsets
+
+    for k, v in mem.items():
+        for t, x_t in enumerate(v):
+            if isinstance(x_t, torch.Tensor):
+                v[t] = x_t[i_win_offs]
+            elif isinstance(x_t, torch.distributions.Distribution):
+                v[t] = extract_sub_distribution(x_t, i_win_offs)
+            elif 'rnn_state' in k:
+                v[t] = unpack_rnn_state(pack_rnn_state(x_t)[i_win_offs])
+
+
 def plan(model: HierarchicalRSSM,
          level: int,
          planner: CrossentropyPlanner,
@@ -92,9 +111,12 @@ def plan(model: HierarchicalRSSM,
             # _discount = torch.where(_discount > 0.75, 1.0, 0.0)
             return _criterion, _discount
     else:
-        goal_data = {k: torch.repeat_interleave(v, n_rollouts, dim=0) if v.ndim <= 2  # no time dim, so first is batch
-        else torch.repeat_interleave(v, n_rollouts, dim=1)
-                     for k, v in goal_data.items()}
+        goal_data = {
+            k: torch.repeat_interleave(v, n_rollouts, dim=0)
+            if v.ndim <= 2  # no time dim, so first is batch
+            else torch.repeat_interleave(v, n_rollouts, dim=1)
+            for k, v in goal_data.items()
+        }
 
         def _calc_criterion(_mem):
             _criterion = torch.zeros(n_envs * n_rollouts, 1, device=model.device)
@@ -120,7 +142,7 @@ def plan(model: HierarchicalRSSM,
                                                  n_plan_steps=n_plan_steps, n_envs=n_envs)
 
     # select winner batch item per per memory timestep
-    data = select_batch_items(data, i_win[:, 0], keepdim=True)
+    select_winners(data, i_win[:, 0], n_envs, n_rollouts)
     # CAUTION: the actions from planner are without the already performed warmup acitons!
     a_win = planner.get_winner_actions(a, a_dist, i_win, resample=False)
     return a_win, R_win[:, 0], data
@@ -180,7 +202,7 @@ def plan_hierarchical(model: HierarchicalRSSM,
         link = model.links[level]
         inp_lvl = {'o': torch.stack(data[link]), 'a': filtered_inp_level['a'], 'r': torch.stack(data['r']),
                    'terminal': torch.stack(data['terminal'])}
-        data['a'] = list(filtered_inp_level['a'].unbind(0))  # record actions as well; make list to match other buffers
+        # data['a'] = list(filtered_inp_level['a'].unbind(0))  # record actions as well; make list to match other buffers
         init_data.append(data)
 
     # plan top level to maximize reward
@@ -195,11 +217,11 @@ def plan_hierarchical(model: HierarchicalRSSM,
     best_actions = [[]] * model.levels
     best_returns = [None] * model.levels
     planning_data[-1] = top_lvl_data
-    best_actions[-1] = list(a_win_top.unbind(1))  # 0 is env dimension, 1 is time dimension, 2 is action dimension
+    best_actions[-1] = a_win_top  # 0 is env dimension, 1 is time dimension, 2 is action dimension
     best_returns[-1] = return_win_top
     for level in reversed(range(model.levels - 1)):
         above_level = level + 1
-        i_chunk_start = len(init_data[above_level]['o'])
+        i_chunk_start = 0  # len(init_data[above_level]['o'])
         i_chunk_end = len(planning_data[above_level]['o'])
         n_plan_steps_level = model.strides[above_level]
         a_win_level = []
@@ -225,8 +247,12 @@ def plan_hierarchical(model: HierarchicalRSSM,
         best_actions[level] = torch.stack(a_win_level, dim=1)
         best_returns[level] = torch.stack(return_win_level).sum(dim=0)
 
+    for level in range(model.levels):
+        for k in init_data[level]:
+            planning_data[level][k] = init_data[level][k] + planning_data[level][k]
+
     best_lvl_0_actions = best_actions[0]
-    return best_lvl_0_actions, best_returns, planning_data[0]
+    return best_lvl_0_actions, best_returns, planning_data
 
 
 if __name__ == '__main__':
@@ -339,15 +365,15 @@ if __name__ == '__main__':
         if i_step % cfg['trainer']['collect_interval'] == 0:
             model.eval()
             collect_env.reset()
-            warmup_data_trajectories = collect_data(collect_env, planning_cfg['n_warmup'][0],
-                                                    RandomPolicy(collect_env))
+            n_wu_lvl_0 = planning_cfg['n_warmup'][0]
+            n_wu_lvl_n = planning_cfg['n_warmup'][-1]
+            warmup_data_trajectories = collect_data(collect_env, n_wu_lvl_0, RandomPolicy(collect_env))
             warmup_data = prepare_data(**to_tensors(warmup_data_trajectories, model.device))
-            # a_win, return_levels, _ = plan(model, 0, planner_0, planning_cfg['n_plan_steps_prim'], planning_cfg['n_rollouts'],
-            #                       planning_cfg['n_warmup_prim'], warmup_data)
-            a_win, return_levels, _ = plan_hierarchical(model, warmup_data, [planner_0, planner_1],
-                                                planning_cfg['n_plan_steps'],
-                                                [planning_cfg['n_rollouts'], planning_cfg['n_rollouts']],
-                                                planning_cfg['n_warmup'])
+            a_win, return_levels, plan_data = plan_hierarchical(model, warmup_data, [planner_0, planner_1],
+                                                                planning_cfg['n_plan_steps'] - n_wu_lvl_n,
+                                                                [planning_cfg['n_rollouts'],
+                                                                 planning_cfg['n_rollouts']],
+                                                                planning_cfg['n_warmup'])
             collect_policy = PredefinedPolicy(collect_env, a_win.detach().cpu().numpy().swapaxes(0, 1))
             # remaining_steps = planning_cfg['n_plan_steps_prim'] - planning_cfg['n_warmup'][0] - 1
             collected_data_trajectories = collect_data(collect_env, collect_policy.max_timestep, collect_policy)
