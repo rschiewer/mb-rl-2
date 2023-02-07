@@ -123,6 +123,10 @@ def act_in_vector_env(env: CacheLastStepVecEnv,
 
     all_actions_done = True
     for t in range(n_steps):
+        if env.all_envs_done:
+            all_actions_done = False
+            break
+
         a = policy(env.last_o, env.last_r, env.last_term, env.last_trunc, env.current_step == 0)
         o_, r, terminal, truncated, info = env.step(a)
 
@@ -133,12 +137,9 @@ def act_in_vector_env(env: CacheLastStepVecEnv,
         traj_trunc.append(truncated)
         traj_mask.append(env.envs_done.copy())
 
-        if env.all_envs_done:
-            all_actions_done = False
-            break
     # roll the mask one to the right to prevent it from masking the final reward
-    traj_mask.pop(-1)
-    traj_mask.insert(0, np.full_like(traj_mask[0], False))
+    last_step = traj_mask.pop(-1)
+    traj_mask.insert(0, np.full_like(last_step, False))
     return all_actions_done
 
 
