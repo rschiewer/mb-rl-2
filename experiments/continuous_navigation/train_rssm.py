@@ -353,12 +353,15 @@ if __name__ == '__main__':
 
     d_batch = cfg['trainer']['d_batch']
 
-    planner_0 = CrossentropyPlanner(DistributionType.NORMAL, d_dist=2,
-                                    device=model.device, debug_env=None, **planning_cfg['planners'][0],
-                                    a_min=-1.0, a_max=1.0)
-    planner_1 = CrossentropyPlanner(DistributionType.NORMAL, d_dist=model.rssm_modules[1].d_a,
-                                    device=model.device, debug_env=None, **planning_cfg['planners'][1],
-                                    a_min=-1.0, a_max=1.0)
+    planners = [CrossentropyPlanner(DistributionType.NORMAL, d_dist=m.d_a, device=model.device, debug_env=None,
+                                    **pln_cfg, a_min=-1.0, a_max=1.0)
+                for pln_cfg, m in zip(planning_cfg['planners'], model.rssm_modules)]
+    #planner_0 = CrossentropyPlanner(DistributionType.NORMAL, d_dist=2,
+    #                                device=model.device, debug_env=None, **planning_cfg['planners'][0],
+    #                                a_min=-1.0, a_max=1.0)
+    #planner_1 = CrossentropyPlanner(DistributionType.NORMAL, d_dist=model.rssm_modules[1].d_a,
+    #                                device=model.device, debug_env=None, **planning_cfg['planners'][1],
+    #                                a_min=-1.0, a_max=1.0)
 
     n_envs = cfg['trainer']['collect_envs']
     collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * n_envs)
@@ -367,22 +370,22 @@ if __name__ == '__main__':
     eval_env = gym.vector.AsyncVectorEnv([make_env_fn] * n_eval_envs)
     eval_env = CacheLastStepVecEnv(eval_env)
 
+    n_wu_lvl_0 = planning_cfg['n_warmup'][0]
+    n_wu_lvl_n = planning_cfg['n_warmup'][-1]
+
 
     def get_batch_train(i_step):
         if i_step % cfg['trainer']['collect_interval'] == 0:
             model.eval()
             collect_env.reset()
-            n_wu_lvl_0 = planning_cfg['n_warmup'][0]
-            n_wu_lvl_n = planning_cfg['n_warmup'][-1]
             warmup_data_trajectories = collect_data(collect_env, n_wu_lvl_0, RandomPolicy(collect_env))
             warmup_data = prepare_data(**to_tensors(warmup_data_trajectories, model.device))
-            a_win, return_levels, plan_data = plan_hierarchical(model, warmup_data, [planner_0, planner_1],
+            a_win, return_levels, plan_data = plan_hierarchical(model, warmup_data, planners,
                                                                 planning_cfg['n_plan_steps'] - n_wu_lvl_n,
                                                                 [planning_cfg['n_rollouts'],
                                                                  planning_cfg['n_rollouts']],
                                                                 planning_cfg['n_warmup'])
             collect_policy = PredefinedPolicy(collect_env, a_win.detach().cpu().numpy().swapaxes(0, 1))
-            # remaining_steps = planning_cfg['n_plan_steps_prim'] - planning_cfg['n_warmup'][0] - 1
             collected_data_trajectories = collect_data(collect_env, collect_policy.max_timestep, collect_policy)
             mem = [{k: np.concatenate([wu[k], col[k]]) for k in wu}
                    for wu, col in zip(warmup_data_trajectories, collected_data_trajectories)]
@@ -447,9 +450,9 @@ if __name__ == '__main__':
         # mem = [{k: np.concatenate([wu[k], col[k]]) for k in wu}
         #       for wu, col in zip(warmup_data_trajectories, collected_data_trajectories)]
 
-        warmup_data_trajectories = collect_data(collect_env, planning_cfg['n_warmup'][0], RandomPolicy(eval_env))
+        warmup_data_trajectories = collect_data(eval_env, n_wu_lvl_0, RandomPolicy(eval_env))
         warmup_data = prepare_data(**to_tensors(warmup_data_trajectories, model.device))
-        a_win, R_win, _ = plan_hierarchical(model, warmup_data, [planner_0, planner_1],
+        a_win, R_win, _ = plan_hierarchical(model, warmup_data, planners,
                                             planning_cfg['n_plan_steps'],
                                             [planning_cfg['n_rollouts'], planning_cfg['n_rollouts']],
                                             planning_cfg['n_warmup'])
