@@ -630,7 +630,7 @@ def to_tensors(mem: List[Dict[str, DataType]],
                device: torch.device,
                dtypes: Union[List, Tuple] = None,
                padding: Union[List, Tuple] = None):
-    fids = mem[0].keys()
+    fids = reduce(lambda a, b: set(a) | set(b), mem)
     assert 'mask' not in fids, 'found forbidden field id "mask" in mem'
     if dtypes is None: dtypes = [torch.float32 for _ in range(len(fids))]
     if padding is None: padding = [0.0 for _ in range(len(fids))]
@@ -640,27 +640,30 @@ def to_tensors(mem: List[Dict[str, DataType]],
 
     # collect trajectory data
     data = {fid: [] for fid in fids}
-    lengths = []
+    lengths = {fid: [] for fid in fids}
     for traj in mem:
-        l_values = []
+        assert set(traj) == fids, f'found trajectory in batch that misses fields: {set(traj)} vs. {fids}'
         for fid, fval in traj.items():
             data[fid].append(torch.from_numpy(fval))
-            l_values.append(len(fval))
-        lengths.append(max(l_values))
-    longest = max(lengths)
+            lengths[fid].append(len(fval))
+    longest = {k: max(v) for k, v in lengths.items()}
     n_traj = len(mem)
 
     # prepare memory containers
-    cont = {fid: torch.full((longest, n_traj, *shapes[fid]), fill_value=padding[fid], dtype=dtypes[fid], device=device)
-            for fid in fids}
-    cont['mask'] = torch.full((longest, n_traj), fill_value=True, dtype=torch.float32, device=device)
+    cont = {fid: torch.full((longest[fid], n_traj, *shapes[fid]), fill_value=padding[fid], dtype=dtypes[fid],
+                            device=device) for fid in fids}
 
     # copy data
     for fid, fval in data.items():
+        flens = lengths[fid]
         for i in range(n_traj):
-            cont[fid][0:lengths[i], i] = data[fid][i]
+            cont[fid][0:flens[i], i] = data[fid][i]
+
+    # mask for longest field per trajectory (valid for o, a, r, term, trunc but not for higher level a)
+    cont['mask'] = torch.full((max(longest.values()), n_traj), fill_value=True, dtype=torch.float32, device=device)
     for i in range(n_traj):
-        cont['mask'][0:lengths[i], i] = False
+        longest_field = max([x[i] for x in lengths.values()])
+        cont['mask'][0:longest_field, i] = False
 
     return cont
 
