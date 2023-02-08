@@ -1,4 +1,5 @@
 import random
+import re
 from typing import Sequence, List, Dict
 import copy
 from collections import OrderedDict
@@ -387,21 +388,18 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
     def _eval_step(self,
                    training_data: Dict[str, torch.Tensor],
                    **kwargs) -> Dict[str, torch.Tensor]:
-        o_ground_truth = training_data['o']
-        a_ground_truth = training_data['a']
-        r_ground_truth = training_data['r']
-        term_ground_truth = training_data['terminal']
-        mask: torch.Tensor = training_data['mask']
         warmup_steps = kwargs.get('force_warmup', self.warmup_steps)
 
         # execute all levels
         pred = []
         pred_ema = []
         targets = []
-        inp_lvl = {'o': o_ground_truth, 'a': a_ground_truth, 'r': r_ground_truth, 'terminal': term_ground_truth}
+        inp_lvl = {k: v for k, v in training_data.items() if k in ('o', 'a', 'r', 'terminal')}  # ground truth data lvl0
         for i_lvl, (filters, link, n_warmup) in enumerate(zip(self.upwards_filters, self.links, warmup_steps)):
             # prep current lvl input
             filtered_inp_level = {k: filters[k](inp_lvl[k]) for k in inp_lvl}
+            if f'a_{i_lvl}' in training_data:
+                filtered_inp_level['a'] = training_data[f'a_{i_lvl}']
 
             # TODO: just a test, remove again later
             filtered_inp_level['o'] = filtered_inp_level['o'].detach()
@@ -418,7 +416,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             else:
                 mem_ema = None
             # prep next lvl input
-            #inp_lvl = {'o': torch.stack(mem[link]), 'a': filtered_inp_level['a'], 'r': torch.stack(mem['r']),
+            #inp_lvl = {'o': torch.stack(mem[link]), 'a': a_next_lvl, 'r': torch.stack(mem['r']),
             #           'terminal': torch.stack(mem['terminal'])}
             # TODO: just a test, remove again later
             inp_lvl = {'o': torch.stack(mem[link]), 'a': filtered_inp_level['a'], 'r': filtered_inp_level['r'],
@@ -430,7 +428,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
         # compute losses
         losses = {}
-        mask_lvl = mask
+        mask_lvl = training_data['mask']
         for i_lvl in range(len(self.rssm_modules)):
             mask_lvl = self.upwards_filters[i_lvl]['mask'](mask_lvl)
             loss_level = self.calc_loss(pred[i_lvl], pred_ema[i_lvl], targets[i_lvl], mask_lvl, self.kl_betas[i_lvl],
