@@ -348,8 +348,10 @@ if __name__ == '__main__':
     else:
         raise ValueError(f'Unknown optimizer type: {optim_type}')
 
-    train_mem = load_memory(here() / cfg['train_samples'])
-    train_driver = OfflineRLDriver(train_mem, sampling_type=SamplingType.RANDOM)
+    offline_mem = load_memory(here() / cfg['train_samples'])
+    offline_driver = OfflineRLDriver(offline_mem, sampling_type=SamplingType.RANDOM)
+    online_mem = []
+    online_driver = OfflineRLDriver(online_mem, sampling_type=SamplingType.RANDOM)
     test_mem = load_memory(here() / cfg['test_samples'])
     test_driver = OfflineRLDriver(test_mem, sampling_type=SamplingType.RANDOM)
 
@@ -371,7 +373,7 @@ if __name__ == '__main__':
 
 
     def get_batch_train(i_step):
-        if i_step % cfg['trainer']['collect_interval'] == 0 and i_step > 0:
+        if i_step % cfg['trainer']['collect_interval'] == 0:# and i_step > 0:
             model.eval()
             collect_env.reset()
             warmup_data_trajectories = collect_data(collect_env, n_wu_lvl_0, RandomPolicy(collect_env))
@@ -383,15 +385,24 @@ if __name__ == '__main__':
                                                                 planning_cfg['n_warmup'])
             collect_policy = PredefinedPolicy(collect_env, a_win.detach().cpu().numpy().swapaxes(0, 1))
             collected_data_trajectories = collect_data(collect_env, collect_policy.max_timestep, collect_policy)
+            # on the environment level, we want to record the real data to the train memory
             mem = [{k: np.concatenate([wu[k], col[k]]) for k in wu}
                    for wu, col in zip(warmup_data_trajectories, collected_data_trajectories)]
-            train_mem.extend(mem)
+            # for all other levels, only store the actions proposed by the planner
+            for i_level, level in enumerate(plan_data[1:]):
+                a_level = torch.stack(level['a']).detach().cpu().numpy()
+                for i_traj, traj in enumerate(mem):
+                    traj[f'a_{i_level + 1}'] = a_level[:, i_traj]
+            online_mem.extend(mem)
             for level, return_level in enumerate(return_levels):
                 avg_score = return_level.mean().detach().cpu().numpy()
                 logger.log({'top_planning_score': avg_score}, Scope.TRAIN() / f'planning/level_{level}', i_step)
             model.train()
 
-        batch = train_driver.interact(d_batch)
+        if random.random() > 0.5 and len(online_mem) > 0:
+            batch = online_driver.interact(d_batch)
+        else:
+            batch = offline_driver.interact(d_batch)
         batch = to_tensors(batch, model.device)
         batch = prepare_data(batch)
         return batch
