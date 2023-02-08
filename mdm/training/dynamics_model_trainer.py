@@ -17,8 +17,8 @@ class DynamicsModelTrainer(ABC):
     def __init__(self,
                  model: DynamicsModel,
                  optimizer: torch.optim.Optimizer,
-                 get_batch_train: Callable[..., Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]],
-                 get_batch_test: Callable[..., Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]],
+                 get_batch_train: Callable[..., Dict[str, torch.Tensor]],
+                 get_batch_test: Callable[..., Dict[str, torch.Tensor]],
                  eval_interval: int = None,
                  scheduler: object = None,
                  logger: Logger = None,
@@ -52,13 +52,13 @@ class DynamicsModelTrainer(ABC):
 
         self.model.prepare_for_training()
         for i_step in step_iter:
-            s, a, r, term, trunc, mask = self.get_batch_train(i_step)
+            training_data = self.get_batch_train(i_step)
 
             #with profile(activities=[ProfilerActivity.CPU], record_shapes=True) as prof:
             #    with record_function("model_training"):
             self.model.train()
             #params_before = [p.detach().cpu().numpy() for p in self.model.parameters()]
-            train_losses = self.model.train_step(s, a, r, term, mask, self.optimizer)
+            train_losses = self.model.train_step(training_data, self.optimizer)
             #params_after = [p.detach().cpu().numpy() for p in self.model.parameters()]
             #diff = []
             #for before, after in zip(params_before, params_after):
@@ -77,12 +77,10 @@ class DynamicsModelTrainer(ABC):
                 self.scheduler.step()
 
             if self.eval_interval is not None and i_step % self.eval_interval == 0:
-                s, a, r, term, trunc, mask = self.get_batch_test(i_step)
-                #s, a, r, term, mask = [torch.from_numpy(x).to(device=device, dtype=torch.float32) for x in
-                #                       (s, a, r, term, r.mask)]
+                training_data = self.get_batch_test(i_step)
 
                 self.model.eval()
-                eval_losses = self.model.eval_step(s, a, r, term, mask)
+                eval_losses = self.model.eval_step(training_data)
                 self.model.train()
 
                 last_total_loss = last_eval_losses.get('total', np.inf)
@@ -107,10 +105,10 @@ class DynamicsModelTrainer(ABC):
                     self.logger.log(means, Scope.PARAMETERS(), i_step)
 
                 if self.eval_callback:
-                    self.eval_callback(s, a, r, term, mask, i_step)
+                    self.eval_callback(training_data, i_step)
 
             if self.train_callback:
-                self.train_callback(s, a, r, term, mask, i_step)
+                self.train_callback(training_data, i_step)
 
         if self.logger:
             self.logger.stop_session()

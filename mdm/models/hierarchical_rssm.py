@@ -362,19 +362,13 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         return mem, state
 
     def _train_step(self,
-                    o_ground_truth: torch.Tensor,
-                    a_ground_truth: torch.Tensor,
-                    r_ground_truth: torch.Tensor,
-                    term_ground_truth: torch.Tensor,
-                    mask: torch.Tensor,
+                    training_data: Dict[str, torch.Tensor],
                     optimizer: torch.optim.Optimizer,
                     **kwargs) -> Dict[str, torch.Tensor]:
         optimizer.zero_grad(set_to_none=True)
-        losses_tf = self.eval_step(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, mask,
-                                   force_warmup=[-1 for _ in self.rssm_modules])
-        losses_one = self.eval_step(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, mask,
-                                    force_warmup=[1 for _ in self.rssm_modules])
-        losses_wu = self.eval_step(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, mask)
+        losses_tf = self.eval_step(training_data, force_warmup=[-1 for _ in self.rssm_modules])
+        losses_one = self.eval_step(training_data, force_warmup=[1 for _ in self.rssm_modules])
+        losses_wu = self.eval_step(training_data)
         losses = {}
         for k in losses_tf:
             losses[k] = (losses_tf[k] + losses_wu[k] + losses_one[k]) / 3
@@ -391,13 +385,15 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         return losses
 
     def _eval_step(self,
-                   o_ground_truth: torch.Tensor,
-                   a_ground_truth: torch.Tensor,
-                   r_ground_truth: torch.Tensor,
-                   term_ground_truth: torch.Tensor,
-                   mask: torch.Tensor,
+                   training_data: Dict[str, torch.Tensor],
                    **kwargs) -> Dict[str, torch.Tensor]:
+        o_ground_truth = training_data['o']
+        a_ground_truth = training_data['a']
+        r_ground_truth = training_data['r']
+        term_ground_truth = training_data['terminal']
+        mask: torch.Tensor = training_data['mask']
         warmup_steps = kwargs.get('force_warmup', self.warmup_steps)
+
         # execute all levels
         pred = []
         pred_ema = []
@@ -422,8 +418,11 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             else:
                 mem_ema = None
             # prep next lvl input
-            inp_lvl = {'o': torch.stack(mem[link]), 'a': filtered_inp_level['a'], 'r': torch.stack(mem['r']),
-                       'terminal': torch.stack(mem['terminal'])}
+            #inp_lvl = {'o': torch.stack(mem[link]), 'a': filtered_inp_level['a'], 'r': torch.stack(mem['r']),
+            #           'terminal': torch.stack(mem['terminal'])}
+            # TODO: just a test, remove again later
+            inp_lvl = {'o': torch.stack(mem[link]), 'a': filtered_inp_level['a'], 'r': filtered_inp_level['r'],
+                       'terminal': filtered_inp_level['terminal']}
 
             pred.append(mem)
             pred_ema.append(mem_ema)

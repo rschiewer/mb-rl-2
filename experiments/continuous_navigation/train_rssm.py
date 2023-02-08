@@ -356,12 +356,6 @@ if __name__ == '__main__':
     planners = [CrossentropyPlanner(DistributionType.NORMAL, d_dist=m.d_a, device=model.device, debug_env=None,
                                     **pln_cfg, a_min=-1.0, a_max=1.0)
                 for pln_cfg, m in zip(planning_cfg['planners'], model.rssm_modules)]
-    #planner_0 = CrossentropyPlanner(DistributionType.NORMAL, d_dist=2,
-    #                                device=model.device, debug_env=None, **planning_cfg['planners'][0],
-    #                                a_min=-1.0, a_max=1.0)
-    #planner_1 = CrossentropyPlanner(DistributionType.NORMAL, d_dist=model.rssm_modules[1].d_a,
-    #                                device=model.device, debug_env=None, **planning_cfg['planners'][1],
-    #                                a_min=-1.0, a_max=1.0)
 
     n_envs = cfg['trainer']['collect_envs']
     collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * n_envs)
@@ -398,27 +392,26 @@ if __name__ == '__main__':
         batch = train_driver.interact(d_batch)
         batch = to_tensors(batch, model.device)
         batch = prepare_data(**batch)
-        return batch['o'], batch['a'], batch['r'], batch['terminal'], batch['truncated'], batch['mask']
+        return batch
 
 
     def get_batch_test(i_step):
         batch = test_driver.interact(d_batch)
         batch = to_tensors(batch, model.device)
         batch = prepare_data(**batch)
-        return batch['o'], batch['a'], batch['r'], batch['terminal'], batch['truncated'], batch['mask']
+        return batch
 
 
-    model_path = f'{cfg["final_model_path"]}.ptmdl'
-
-    # train
     fig = plt.figure(figsize=(10, 10))
 
 
-    def eval_callback(o: torch.Tensor, a: torch.Tensor, r: torch.Tensor, term: torch.Tensor, mask, i_step: int):
+    def eval_callback(training_data, i_step: int):
+        # record plots of reward/terminal predictions for expert dataset, we have an expectation how they should look
         model.eval()
         predictions = []
         for i_lvl in range(len(model.rssm_modules)):
-            pred, _ = model(o, a, r, term, cfg['eval']['warmup_steps'][i_lvl], sample_state=True, sample_output=True)
+            pred, _ = model(training_data['o'], training_data['a'], training_data['r'], training_data['terminal'],
+                            cfg['eval']['warmup_steps'][i_lvl], sample_state=True, sample_output=True)
             predictions.append(pred)
 
         lvl_0_r_mean = torch.stack(predictions[0]['r']).mean(dim=1).squeeze().detach().cpu().numpy()
@@ -435,21 +428,8 @@ if __name__ == '__main__':
         plt.legend()
         logger.log_plot(fig_to_img(fig), Scope.PARAMETERS() / 'model_stats/prim_term', i_step)
 
-        # losses = model.calc_loss(pred, o, r, term, mask)
-        # losses = {k: v.detach().cpu().numpy() for k, v in losses.items()}
-        # logger.log(losses, Scope.TEST() / 'with_warmup', i_step)
-
+        # do some planning and see how successfull the model is
         eval_env.reset()
-        # warmup_data_trajectories = collect_data(eval_env, planning_cfg['n_warmup'][0], RandomPolicy(eval_env))
-        # warmup_data = prepare_data(**to_tensors(warmup_data_trajectories, model.device))
-        # a_win, R_win, _ = plan(model, 0, planner_0, planning_cfg['n_plan_steps_prim'], planning_cfg['n_rollouts'],
-        #                       planning_cfg['n_warmup_prim'], warmup_data)
-        # collect_policy = PredefinedPolicy(eval_env, a_win.detach().cpu().numpy().swapaxes(0, 1))
-        # remaining_steps = planning_cfg['n_plan_steps_prim'] - planning_cfg['n_warmup_prim'] - 1
-        # collected_data_trajectories = collect_data(eval_env, remaining_steps, collect_policy)
-        # mem = [{k: np.concatenate([wu[k], col[k]]) for k in wu}
-        #       for wu, col in zip(warmup_data_trajectories, collected_data_trajectories)]
-
         warmup_data_trajectories = collect_data(eval_env, n_wu_lvl_0, RandomPolicy(eval_env))
         warmup_data = prepare_data(**to_tensors(warmup_data_trajectories, model.device))
         a_win, R_win, _ = plan_hierarchical(model, warmup_data, planners,

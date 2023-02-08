@@ -21,44 +21,27 @@ class DynamicsModel(torch.nn.Module, ABC):
                 m.prepare_for_training()
 
     def train_step(self,
-                   o_ground_truth: torch.Tensor,
-                   a_ground_truth: torch.Tensor,
-                   r_ground_truth: torch.Tensor,
-                   term_ground_truth: torch.Tensor,
-                   mask: torch.Tensor,
+                   training_data: Dict[str, torch.Tensor],
                    optimizer: torch.optim.Optimizer,
                    **kwargs) -> Dict[str, torch.Tensor]:
-        results = self._train_step(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, mask, optimizer,
-                                   **kwargs)
+        results = self._train_step(training_data, optimizer, **kwargs)
         self._current_train_step += 1
         return results
 
     def eval_step(self,
-                  o_ground_truth: torch.Tensor,
-                  a_ground_truth: torch.Tensor,
-                  r_ground_truth: torch.Tensor,
-                  term_ground_truth: torch.Tensor,
-                  mask: torch.Tensor,
+                  training_data: Dict[str, torch.Tensor],
                   **kwargs) -> Dict[str, torch.Tensor]:
-        return self._eval_step(o_ground_truth, a_ground_truth, r_ground_truth, term_ground_truth, mask, **kwargs)
+        return self._eval_step(training_data, **kwargs)
 
     @abstractmethod
     def _train_step(self,
-                    o_ground_truth: torch.Tensor,
-                    a_ground_truth: torch.Tensor,
-                    r_ground_truth: torch.Tensor,
-                    term_ground_truth: torch.Tensor,
-                    mask: torch.Tensor,
+                    training_data: Dict[str, torch.Tensor],
                     optimizer: torch.optim.Optimizer,
                     **kwargs) -> Dict[str, torch.Tensor]:
         pass
 
     @abstractmethod
     def _eval_step(self,
-                   o_ground_truth: torch.Tensor,
-                   a_ground_truth: torch.Tensor,
-                   r_ground_truth: torch.Tensor,
-                   term_ground_truth: torch.Tensor,
-                   mask: torch.Tensor,
+                   training_data: Dict[str, torch.Tensor],
                    **kwargs) -> Dict[str, torch.Tensor]:
         pass
