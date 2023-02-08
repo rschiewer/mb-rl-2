@@ -1,4 +1,5 @@
 import os.path
+import time
 from pathlib import Path
 import io
 import argparse
@@ -369,7 +370,7 @@ if __name__ == '__main__':
 
 
     def get_batch_train(i_step):
-        if i_step % cfg['trainer']['collect_interval'] == 0:
+        if i_step % cfg['trainer']['collect_interval'] == 0 and i_step > 0:
             model.eval()
             collect_env.reset()
             warmup_data_trajectories = collect_data(collect_env, n_wu_lvl_0, RandomPolicy(collect_env))

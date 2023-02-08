@@ -9,7 +9,6 @@ import torch.jit as jit
 
 from mdm.utils.utils import SliceType, DataType
 
-
 RnnStateType = TypeVar('RnnStateType', torch.Tensor, Tuple[torch.Tensor, torch.Tensor])
 TensorData = TypeVar('TensorData', torch.Tensor, Tuple[torch.Tensor, ...], List[torch.Tensor])
 TensorIndex = TypeVar('TensorIndex', int, Sequence[int], torch.Tensor)
@@ -31,7 +30,7 @@ class DeviceMixin:
 
     @property
     def device(self: torch.nn.Module):
-        #return next(iter(self.parameters())).device  # hack if this turns out to be too much of a bottleneck
+        # return next(iter(self.parameters())).device  # hack if this turns out to be too much of a bottleneck
 
         ph = _Placeholder(None)
         first_param = reduce(lambda a, b: a if a.device == b.device else ph, self.parameters())
@@ -228,10 +227,10 @@ class GaussianBlock(FeedforwardBlock):
                 *xs: torch.Tensor):
         x = super().forward(*xs)
         mu, logvar = torch.tensor_split(x, 2, dim=-1)
-        #std = logvar.exp().pow(0.5) + 1.0
-        #std = torch.log(1 + logvar.exp()) + 1e-1
-        #std = torch.nn.functional.relu(logvar) + 0.01
-        #std = torch.distributions.transform_to(torch.distributions.Normal.arg_constraints['scale'])(logvar) + 0.01
+        # std = logvar.exp().pow(0.5) + 1.0
+        # std = torch.log(1 + logvar.exp()) + 1e-1
+        # std = torch.nn.functional.relu(logvar) + 0.01
+        # std = torch.distributions.transform_to(torch.distributions.Normal.arg_constraints['scale'])(logvar) + 0.01
         std = torch.abs(logvar) + self.epsilon
         x_dist = torch.distributions.Normal(mu, std)
 
@@ -265,7 +264,7 @@ def build_categorical(params: torch.Tensor,
 
 
 def sample_from_categorical(params: torch.Tensor,
-                            params_are_probs : bool = False,
+                            params_are_probs: bool = False,
                             gradient: bool = True):
     if params_are_probs:
         dist = torch.distributions.OneHotCategorical(probs=params)
@@ -283,7 +282,7 @@ def make_gaussian_params(params: torch.Tensor,
                          epsilon: float) -> torch.Tensor:
     assert params.shape[-1] % 2 == 0
     mu, logvar = torch.tensor_split(params, 2, dim=-1)
-    sigma = torch.exp(0.5 * logvar) + epsilon #torch.nn.functional.relu(logvar) + epsilon
+    sigma = torch.exp(0.5 * logvar) + epsilon  # torch.nn.functional.relu(logvar) + epsilon
     return torch.concat([mu, sigma], dim=-1)
 
 
@@ -323,7 +322,7 @@ def build_bernoulli(params: torch.Tensor) -> torch.distributions.ContinuousBerno
 
 
 def make_bernoulli_params(params: torch.Tensor) -> torch.Tensor:
-    #params = torch.nn.functional.sigmoid(params)
+    # params = torch.nn.functional.sigmoid(params)
     return params
 
 
@@ -347,14 +346,15 @@ def bin_every_k_steps(data: torch.Tensor,
     if padding_val is None:
         padding = torch.repeat_interleave(data[-1, None], d_padding, dim=0)
     else:
-        padding = torch.full((d_padding, d_batch, *d_data), fill_value=padding_val, dtype=data.dtype, device=data.device)
+        padding = torch.full((d_padding, d_batch, *d_data), fill_value=padding_val, dtype=data.dtype,
+                             device=data.device)
     data_padded = torch.concat([data, padding], dim=0)
     binned = data_padded.reshape((d_time + d_padding) // k, k, d_batch, *d_data)
 
-    #bins = []
-    #for i in range(0, d_time, k):
+    # bins = []
+    # for i in range(0, d_time, k):
     #    bins.append(data[:, i:i+k])
-    #binned2 = torch.stack(bins, dim=1)
+    # binned2 = torch.stack(bins, dim=1)
 
     return binned
 
@@ -461,7 +461,7 @@ def extract_sub_distribution(d: torch.distributions.Distribution,
         tmp = []
         for i in idx:
             if type(i) is int:
-                tmp.append(slice(i, i+1))
+                tmp.append(slice(i, i + 1))
             elif isinstance(i, torch.Tensor):
                 tmp.append(slice(i.detach().cpu().numpy().item(), i.detach().cpu().numpy().item() + 1))
             else:
@@ -577,10 +577,10 @@ def pack_rnn_state(rnn_state: RnnStateType):
         return torch.stack([rnn_state.transpose(0, 1)], dim=-2)
 
 
-def to_tensors(mem: List[Dict[str, DataType]],
-               device: torch.device,
-               dtypes: Sequence = None,
-               padding: Sequence = None):
+def to_tensors_old(mem: List[Dict[str, DataType]],
+                   device: torch.device,
+                   dtypes: Sequence = None,
+                   padding: Sequence = None):
     if dtypes is None:
         dtypes = (torch.float32, torch.float32, torch.float32, torch.float32, torch.float32)
     if padding is None:
@@ -626,6 +626,43 @@ def to_tensors(mem: List[Dict[str, DataType]],
             'mask': mask}
 
 
+def to_tensors(mem: List[Dict[str, DataType]],
+               device: torch.device,
+               dtypes: Union[List, Tuple] = None,
+               padding: Union[List, Tuple] = None):
+    fids = mem[0].keys()
+    assert 'mask' not in fids, 'found forbidden field id "mask" in mem'
+    if dtypes is None: dtypes = [torch.float32 for _ in range(len(fids))]
+    if padding is None: padding = [0.0 for _ in range(len(fids))]
+    dtypes = {fid: dtype for fid, dtype in zip(fids, dtypes)}
+    padding = {fid: pad for fid, pad in zip(fids, padding)}
+    shapes = {fid: fval.shape[1:] for fid, fval in mem[0].items()}
+
+    # collect trajectory data
+    data = {fid: [] for fid in fids}
+    lengths = []
+    for traj in mem:
+        for fid, fval in traj.items():
+            data[fid].append(torch.from_numpy(fval))
+        lengths.append(len(fval))
+    longest = max(lengths)
+    n_traj = len(mem)
+
+    # prepare memory containers
+    cont = {fid: torch.full((longest, n_traj, *shapes[fid]), fill_value=padding[fid], dtype=dtypes[fid], device=device)
+            for fid in fids}
+    cont['mask'] = torch.full((longest, n_traj), fill_value=True, dtype=torch.float32, device=device)
+
+    # copy data
+    for fid, fval in data.items():
+        for i in range(n_traj):
+            cont[fid][0:lengths[i], i] = data[fid][i]
+    for i in range(n_traj):
+        cont['mask'][0:lengths[i], i] = False
+
+    return cont
+
+
 def pad_first_timestep(o: torch.Tensor,
                        a: torch.Tensor,
                        r: torch.Tensor,
@@ -638,5 +675,3 @@ def pad_first_timestep(o: torch.Tensor,
     trunc = torch.cat([torch.zeros_like(trunc[0]), trunc], dim=0)
     mask = torch.cat([torch.zeros_like(mask[0]), mask], dim=0)
     return o, a, r, term, trunc, mask
-
-
