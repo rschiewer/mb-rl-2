@@ -642,9 +642,11 @@ def to_tensors(mem: List[Dict[str, DataType]],
     data = {fid: [] for fid in fids}
     lengths = []
     for traj in mem:
+        l_values = []
         for fid, fval in traj.items():
             data[fid].append(torch.from_numpy(fval))
-        lengths.append(len(fval))
+            l_values.append(len(fval))
+        lengths.append(max(l_values))
     longest = max(lengths)
     n_traj = len(mem)
 
