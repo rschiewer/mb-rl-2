@@ -231,18 +231,18 @@ def expand_shape_right(to_expand: Union[np.ndarray, torch.Tensor], target: Union
     return to_expand.reshape(*to_expand.shape, *[1 for _ in range(dim_diff)])
 
 
-def prepare_data(o: Union[np.ndarray, torch.Tensor],
-                 a: Union[np.ndarray, torch.Tensor],
-                 r: Union[np.ndarray, torch.Tensor],
-                 terminal: Union[np.ndarray, torch.Tensor],
-                 truncated: Union[np.ndarray, torch.Tensor],
-                 mask: Union[np.ndarray, torch.Tensor],
-                 subtrajectory_len: int = 0,
-                 a_discrete: bool = False,
-                 a_max: int = 0,
-                 o_discrete: bool = False,
-                 o_max: int = 0,
-                 swap_batch_time_dim: bool = False):
+def prepare_data_old(o: Union[np.ndarray, torch.Tensor],
+                     a: Union[np.ndarray, torch.Tensor],
+                     r: Union[np.ndarray, torch.Tensor],
+                     terminal: Union[np.ndarray, torch.Tensor],
+                     truncated: Union[np.ndarray, torch.Tensor],
+                     mask: Union[np.ndarray, torch.Tensor],
+                     subtrajectory_len: int = 0,
+                     a_discrete: bool = False,
+                     a_max: int = 0,
+                     o_discrete: bool = False,
+                     o_max: int = 0,
+                     swap_batch_time_dim: bool = False):
     assert o.ndim >= 2, f'Observation dim is {o.ndim}, but needs to be at least 2'
     assert a.ndim >= 2, f'Action dim is {a.ndim}, but needs to be at least 2'
     assert 2 <= r.ndim <= 3, f'Reward dim is {r.ndim}, but needs to be 2 or 3'
@@ -285,6 +285,33 @@ def prepare_data(o: Union[np.ndarray, torch.Tensor],
         mask = mask[t_start:t_end]
 
     return {'o': o, 'a': a, 'r': r, 'terminal': terminal, 'truncated': truncated, 'mask': mask}
+
+
+def prepare_data(data: Dict[str, Union[torch.Tensor, np.ndarray]],
+                 n_categories: Dict[str, int] = None,
+                 swap_batch_time_dim: bool = False):
+    if n_categories is None: n_categories = {}
+
+    # here go all the specific requirements for individual fields in the data dict
+    required_fids = {'o', 'a', 'r', 'terminal', 'truncated', 'mask'}
+    assert required_fids <= data.keys(), f'Missing required fields,\nfound:\t{data.keys()},\nneed:\t{required_fids}'
+    assert data['o'].ndim >= 2, f'Observation dim is {data["o"].ndim}, but needs to be at least 2'
+    assert data['a'].ndim >= 2, f'Action dim is {data["a"].ndim}, but needs to be at least 2'
+    assert 2 <= data['r'].ndim <= 3, f'Reward dim is {data["r"].ndim}, but needs to be 2 or 3'
+    assert 2 <= data['terminal'].ndim <= 3, f'Terminal dim is {data["terminal"].ndim}, but needs to be 2 or 3'
+    assert 2 <= data['truncated'].ndim <= 3, f'Truncated dim is {data["truncated"].ndim}, but needs to be 2 or 3'
+    assert 2 <= data['mask'].ndim <= 3, f'Mask dim is {data["mask"].ndim}, but needs to be 2 or 3'
+
+    # expand data dimensions to at least one, so e.g. rewards have shape (batch, time, 1)
+    for fid, fval in data.items():
+        if fval.ndim == 2:
+            data[fid] = fval[..., None]
+        if fid in n_categories.values():
+            data[fid] = to_onehot(fval, n_categories[fid])
+        if swap_batch_time_dim:
+            data[fid] = fval.swapaxes(0, 1)
+
+    return data
 
 
 def apply_mask(o: torch.Tensor,

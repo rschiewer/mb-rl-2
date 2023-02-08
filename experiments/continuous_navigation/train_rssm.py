@@ -1,3 +1,4 @@
+import copy
 import os.path
 import time
 from pathlib import Path
@@ -374,7 +375,7 @@ if __name__ == '__main__':
             model.eval()
             collect_env.reset()
             warmup_data_trajectories = collect_data(collect_env, n_wu_lvl_0, RandomPolicy(collect_env))
-            warmup_data = prepare_data(**to_tensors(warmup_data_trajectories, model.device))
+            warmup_data = prepare_data(to_tensors(warmup_data_trajectories, model.device))
             a_win, return_levels, plan_data = plan_hierarchical(model, warmup_data, planners,
                                                                 planning_cfg['n_plan_steps'] - n_wu_lvl_n,
                                                                 [planning_cfg['n_rollouts'],
@@ -392,14 +393,14 @@ if __name__ == '__main__':
 
         batch = train_driver.interact(d_batch)
         batch = to_tensors(batch, model.device)
-        batch = prepare_data(**batch)
+        batch = prepare_data(batch)
         return batch
 
 
     def get_batch_test(i_step):
         batch = test_driver.interact(d_batch)
         batch = to_tensors(batch, model.device)
-        batch = prepare_data(**batch)
+        batch = prepare_data(batch)
         return batch
 
 
@@ -432,7 +433,7 @@ if __name__ == '__main__':
         # do some planning and see how successfull the model is
         eval_env.reset()
         warmup_data_trajectories = collect_data(eval_env, n_wu_lvl_0, RandomPolicy(eval_env))
-        warmup_data = prepare_data(**to_tensors(warmup_data_trajectories, model.device))
+        warmup_data = prepare_data(to_tensors(warmup_data_trajectories, model.device))
         a_win, R_win, _ = plan_hierarchical(model, warmup_data, planners,
                                             planning_cfg['n_plan_steps'],
                                             [planning_cfg['n_rollouts'], planning_cfg['n_rollouts']],
