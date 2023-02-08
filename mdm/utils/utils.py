@@ -302,11 +302,11 @@ def prepare_data(data: Dict[str, Union[torch.Tensor, np.ndarray]],
     assert 2 <= data['truncated'].ndim <= 3, f'Truncated dim is {data["truncated"].ndim}, but needs to be 2 or 3'
     assert 2 <= data['mask'].ndim <= 3, f'Mask dim is {data["mask"].ndim}, but needs to be 2 or 3'
 
-    # expand data dimensions to at least one, so e.g. rewards have shape (batch, time, 1)
+    # take care of expanding dimensions to at least one data dim, one-hot transformations and axis swapping
     for fid, fval in data.items():
         if fval.ndim == 2:
             data[fid] = fval[..., None]
-        if fid in n_categories.values():
+        if fid in n_categories:
             data[fid] = to_onehot(fval, n_categories[fid])
         if swap_batch_time_dim:
             data[fid] = fval.swapaxes(0, 1)
