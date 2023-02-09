@@ -607,26 +607,26 @@ class LearnableUpwardsFilter(UpwardsFilter):
     def _prob_mdl_normal(self,
                          x: torch.Tensor,
                          sample: bool) -> torch.Tensor:
-        x = torch.flatten(x, start_dim=1)
+        x = x.transpose(1, 2)
+        x = torch.flatten(x, start_dim=2)
         x = self._mdl(x)
 
-        x = make_gaussian_params(x, 0.001)
-
-        # restrict mean of Gaussians to (-1, 1)
-        mu, sigma = torch.tensor_split(x, 2, dim=-1)
-        mu = torch.tanh(mu)
-        x = torch.concat([mu, sigma], dim=-1)
+        mu, logvar = torch.tensor_split(x, 2, dim=-1)
+        mu = torch.tanh(mu)  # restrict mean of Gaussians to (-1, 1)
+        sigma = torch.exp(0.5 * logvar) + 0.001
+        d = torch.distributions.Normal(loc=mu, scale=sigma)
 
         if sample:
-            x = sample_from_gaussian(x)
+            s = d.rsample()
         else:
-            x = mu
-        return x
+            s = d.loc
+        return s
 
     def _prob_mdl_categorical(self,
                               x: torch.Tensor,
                               sample: bool) -> torch.Tensor:
-        x = torch.flatten(x, start_dim=1)
+        x = x.transpose(1, 2)
+        x = torch.flatten(x, start_dim=2)
         x = self._mdl(x)
 
         if sample:
