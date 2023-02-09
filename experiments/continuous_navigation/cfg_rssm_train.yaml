@@ -110,12 +110,11 @@ optim:
 trainer:
    n_train_steps: 10000
    eval_interval: 100
-   d_batch: 1024
-   pad_last_terminal_flag: False
+   d_batch: 2048
    subtrajectory_len: 0
-   collect_envs: 10
-   collect_interval: 50
+   collect_envs: 50
+   collect_interval: 200
 
 eval:
    warmup_steps: [ 2, 1 ]
-   eval_envs: 10
+   eval_envs: 20

@@ -380,8 +380,7 @@ if __name__ == '__main__':
             warmup_data = prepare_data(to_tensors(warmup_data_trajectories, model.device))
             a_win, return_levels, plan_data = plan_hierarchical(model, warmup_data, planners,
                                                                 planning_cfg['n_plan_steps'] - n_wu_lvl_n,
-                                                                [planning_cfg['n_rollouts'],
-                                                                 planning_cfg['n_rollouts']],
+                                                                planning_cfg['n_rollouts'],
                                                                 planning_cfg['n_warmup'])
             collect_policy = PredefinedPolicy(collect_env, a_win.detach().cpu().numpy().swapaxes(0, 1))
             collected_data_trajectories = collect_data(collect_env, collect_policy.max_timestep, collect_policy)
@@ -439,7 +438,7 @@ if __name__ == '__main__':
             plt.plot(term_mean, label='mean')
             plt.plot(term_std, label='std')
             plt.legend()
-            logger.log_plot(fig_to_img(fig), Scope.PARAMETERS() / f'model_stats/prim_{i_lvl}', i_step)
+            logger.log_plot(fig_to_img(fig), Scope.PARAMETERS() / f'model_stats/term_{i_lvl}', i_step)
 
         # do some planning and see how successfull the model is
         eval_env.reset()
@@ -447,7 +446,7 @@ if __name__ == '__main__':
         warmup_data = prepare_data(to_tensors(warmup_data_trajectories, model.device))
         a_win, R_win, _ = plan_hierarchical(model, warmup_data, planners,
                                             planning_cfg['n_plan_steps'],
-                                            [planning_cfg['n_rollouts'], planning_cfg['n_rollouts']],
+                                            planning_cfg['n_rollouts'],
                                             planning_cfg['n_warmup'])
         collect_policy = PredefinedPolicy(eval_env, a_win.detach().cpu().numpy().swapaxes(0, 1))
         collected_data_trajectories = collect_data(eval_env, collect_policy.max_timestep, collect_policy)
