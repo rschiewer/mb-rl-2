@@ -300,6 +300,8 @@ if __name__ == '__main__':
                 s_o = cfg['mdm']['rssm_modules'][i_module - 1]['d_h']
             elif cfg['mdm']['links'][i_module - 1] == 's':
                 s_o = cfg['mdm']['rssm_modules'][i_module - 1]['d_z'] + cfg['mdm']['rssm_modules'][i_module - 1]['d_h']
+            elif cfg['mdm']['links'][i_module - 1] == 'o':
+                s_o = cfg['mdm']['rssm_modules'][i_module - 1]['o_decoder']['s_x_orig']
             else:
                 raise ValueError(f'Unknown link key: {cfg["mdm"]["links"][i_module - 1]}')
 
@@ -373,7 +375,7 @@ if __name__ == '__main__':
 
 
     def get_batch_train(i_step):
-        if i_step % cfg['trainer']['collect_interval'] == 0:# and i_step > 0:
+        if i_step % cfg['trainer']['collect_interval'] == 0:  # and i_step > 0:
             model.eval()
             collect_env.reset()
             warmup_data_trajectories = collect_data(collect_env, n_wu_lvl_0, RandomPolicy(collect_env))
