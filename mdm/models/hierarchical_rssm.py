@@ -402,9 +402,9 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 filtered_inp_level['a'] = training_data[f'a_{i_lvl}']
 
             # TODO: just a test, remove again later
-            filtered_inp_level['o'] = filtered_inp_level['o'].detach()
-            filtered_inp_level['r'] = filtered_inp_level['r'].detach()
-            filtered_inp_level['terminal'] = filtered_inp_level['terminal'].detach()
+            #filtered_inp_level['o'] = filtered_inp_level['o'].detach()
+            #filtered_inp_level['r'] = filtered_inp_level['r'].detach()
+            #filtered_inp_level['terminal'] = filtered_inp_level['terminal'].detach()
 
             n_warmup = random.randint(1, filtered_inp_level['o'].shape[0]) if n_warmup == 'rand' else n_warmup
             # do prediction
@@ -416,11 +416,13 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             else:
                 mem_ema = None
             # prep next lvl input
-            #inp_lvl = {'o': torch.stack(mem[link]), 'a': a_next_lvl, 'r': torch.stack(mem['r']),
-            #           'terminal': torch.stack(mem['terminal'])}
             # TODO: just a test, remove again later
-            inp_lvl = {'o': torch.stack(mem[link]), 'a': filtered_inp_level['a'], 'r': filtered_inp_level['r'],
-                       'terminal': filtered_inp_level['terminal']}
+            inp_lvl = {'o': torch.stack(mem[link]), 'a': filtered_inp_level['a'], 'r': torch.stack(mem['r']),
+                       'terminal': torch.stack(mem['terminal'])}
+            #inp_lvl = {'o': torch.stack(mem[link]), 'a': filtered_inp_level['a'], 'r': filtered_inp_level['r'],
+            #           'terminal': filtered_inp_level['terminal']}
+            #inp_lvl = {'o': filtered_inp_level['o'], 'a': filtered_inp_level['a'], 'r': filtered_inp_level['r'],
+            #           'terminal': filtered_inp_level['terminal']}
 
             pred.append(mem)
             pred_ema.append(mem_ema)
@@ -451,15 +453,17 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         rec_r = self._neg_log_prob(predictions['r_dist'], targets['r'], mask)
         rec_term = self._neg_log_prob(predictions['terminal_dist'], targets['terminal'], mask)
         kl_z = self._kl_div(predictions['z_post'], predictions['z_prior'], mask)
-        kl_reg_z = self._kl_reg(predictions['z_post'], mask)
+        kl_reg_z = self._kl_reg(predictions['z_post'], mask) * 0.0
+        contrastive_z = self._rand_contrastive_loss(predictions['z'], mask)
 
         mae_o = self._mae(predictions['o'], targets['o'], mask)
         mae_r = self._mae(predictions['r'], targets['r'], mask)
         mae_term = self._mae(predictions['terminal'], targets['terminal'], mask)
 
-        total = rec_o + rec_r + rec_term + kl_z * kl_beta + kl_reg_z * kl_reg_beta
+        total = rec_o + rec_r + rec_term + kl_z * kl_beta + kl_reg_z * kl_reg_beta + contrastive_z
         loss = {'total': total, 'o': rec_o, 'r': rec_r, 'term': rec_term, 'kl_z': kl_z, 'kl_reg_z': kl_reg_z,
-                'monitoring_o': mae_o, 'monitoring_r': mae_r, 'monitoring_term': mae_term}
+                'monitoring_o': mae_o, 'monitoring_r': mae_r, 'monitoring_term': mae_term,
+                'contrastive_z': contrastive_z}
 
         if self.ema_regularization:
             cons_o = self._kl_div(predictions['o_dist'], predictions_ema['o_dist'], mask)
@@ -471,6 +475,19 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             loss['total'] += loss['ema_reg']
 
         return loss
+
+    @staticmethod
+    def _rand_contrastive_loss(x: List[torch.Tensor],
+                               mask: torch.Tensor):
+        x = torch.stack(x)
+        d_time, d_batch = x.shape[:2]
+        t_offset = random.randint(1, d_time - 1)
+        b_offset = random.randint(1, d_batch - 1)
+        mask = expand_shape_right(mask, x)
+        diff = x - x.roll(shifts=[t_offset, b_offset], dims=[0, 1])
+        cont_loss = torch.mean(torch.maximum(torch.tensor(0.0, device=x.device), 1.0 - (diff ** 2) * mask))
+        return cont_loss
+
 
     @staticmethod
     def _neg_log_prob(distributions: List[torch.distributions.Distribution],
