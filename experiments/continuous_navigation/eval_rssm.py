@@ -18,68 +18,6 @@ from mdm.training.gym_driver import collect_data, CacheLastStepVecEnv
 from mdm.policies.random_policy import RandomPolicy
 from mdm.policies.predefined_policy import PredefinedPolicy
 
-"""
-def select_batch_items(mem: Dict[str, Union[torch.Tensor, torch.distributions.Distribution]],
-                       i: TensorIndex,
-                       keepdim: bool = False):
-    if keepdim and type(i) is not slice:
-        if isinstance(i, torch.Tensor):
-            i = i.detach().cpu().numpy().item()
-        i = slice(i, i + 1)
-
-    ret = {}
-    for name, val in mem.items():
-        ret[name] = []
-        for timestep in val:
-            if timestep is None:
-                ret[name].append(None)
-            elif isinstance(timestep, torch.Tensor):
-                ret[name].append(timestep[i])
-            elif isinstance(timestep, torch.distributions.Distribution):
-                ret[name].append(extract_sub_distribution(timestep, i))  # keepdim is handled by calling function
-            elif 'rnn_state' in name:
-                ret[name].append(unpack_rnn_state(pack_rnn_state(timestep)[i]))
-            else:
-                raise ValueError(f'Unknown memory content for key {name}: {timestep}')
-    return ret
-
-
-def plan_prim_with_warmup(model: DynamicsModel,
-                          planner_prim: CrossentropyPlanner,
-                          env_data: Dict[str, torch.Tensor],
-                          n_plan_steps: int,
-                          n_rollouts: int,
-                          n_warmup: int):
-    o_start_batch = env_data['o'].repeat(1, n_rollouts, 1)
-    a_start_batch = env_data['a'].repeat(1, n_rollouts, 1)
-    r_start_batch = env_data['r'].repeat(1, n_rollouts, 1)
-    term_start_batch = env_data['terminal'].repeat(1, n_rollouts, 1)
-
-    def _rollout_fn(_a: torch.Tensor):
-        _a = _a[0]  # remove redundant env dimension
-        _a = _a.swapaxes(0, 1)
-        _a = torch.cat([a_start_batch, _a], dim=0)
-        _mem, _ = model(a=_a, o=o_start_batch, r=r_start_batch, terminal=term_start_batch,
-                        n_warmup=n_warmup, sample_state=True, sample_output=True)
-        _criterion = torch.stack(_mem['r']).squeeze(-1).swapaxes(0, 1)
-        #_criterion -= torch.stack([d.scale / 2 for d in _mem['r_dist']]).squeeze(-1).swapaxes(0, 1)
-        _discount = torch.stack(_mem['terminal']).squeeze(-1).swapaxes(0, 1)
-
-        _criterion = _criterion.unsqueeze(0)  # add "env" dimension
-        _discount = _discount.unsqueeze(0)
-        return _criterion, _discount, _mem
-
-    a, a_dist, i_win, R_win, data = planner_prim.plan(rollout_fn=_rollout_fn, n_rollouts=n_rollouts,
-                                                      n_plan_steps=n_plan_steps)
-
-    # select winner batch item per per memory timestep
-    data = select_batch_items(data, i_win[0, 0], keepdim=True)
-    # CAUTION: the actions from planner are without the already performed warmup acitons!
-    a_win = planner_prim.get_winner_actions(a, a_dist, i_win, resample=False)
-    a_win = a_win[0]  # remove redundant "env" dimension
-    return a_win, data
-"""
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Provide neptune run_id for loading the correct model')
     parser.add_argument('id', type=str, nargs=1)
@@ -96,15 +34,16 @@ if __name__ == '__main__':
     else:
         model_path = f'{cfg["final_model_path"]}_{args.id[0]}.ptmdl'
 
-    map_version = 'VeryEasy'
-    env = gym.make(f'gym_nav2d:nav2d{map_version}-v0')
-    env = CacheLastStepEnv(env)
+    # env = gym.make(f'gym_nav2d:nav2d{map_version}-v0')
+    # env = CacheLastStepEnv(env)
     model = torch.load(here() / model_path).to('cuda')
     model.eval()  # deactivate dropout in RNN
 
-    # new planning
+    map_version = 'VeryEasy'
+
     def make_env_fn():
         return gym.make(f'gym_nav2d:nav2d{map_version}-v0')
+
     n_eval_envs = cfg['eval']['eval_envs']
     eval_env = gym.vector.AsyncVectorEnv([make_env_fn] * n_eval_envs)
     eval_env = CacheLastStepVecEnv(eval_env)
@@ -122,7 +61,7 @@ if __name__ == '__main__':
     logger.log(planning_cfg, Scope.HYPERPARAMETERS() / 'plan/flat')
 
     l0_steps = planning_cfg['n_plan_steps'] * np.prod(model.strides)
-    success, r_ep, l_ep = random_walk_success_rate(env, l0_steps, planning_cfg['n_rollouts'][0])
+    success, r_ep, l_ep = random_walk_success_rate(make_env_fn(), l0_steps, planning_cfg['n_rollouts'][0])
     print(f'Random walk statistics with planning parameters:')
     print(f'Steps taken in environment: {l0_steps}')
     print(f'Expected initial success rate: {success}')
