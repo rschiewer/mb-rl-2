@@ -30,32 +30,9 @@ from mdm.training.gym_driver import act_in_env, act_in_vector_env
 from mdm.utils.gym_wrappers import CacheLastStepEnv, CacheLastStepVecEnv
 from mdm.utils.torch_tools import extract_sub_distribution, pack_rnn_state, unpack_rnn_state, TensorIndex
 from mdm.training.gym_driver import collect_data
+from mdm.planning.planning_tools import plan_hierarchical
 
-
-def select_batch_items(mem: Dict[str, Union[torch.Tensor, torch.distributions.Distribution]],
-                       i: TensorIndex,
-                       keepdim: bool = False):
-    if keepdim and type(i) is not slice:
-        if isinstance(i, torch.Tensor) and i.size() == 1:
-            i = i.detach().cpu().numpy().item()
-            i = slice(i, i + 1)
-
-    ret = {name: [] for name in mem}
-    for name, trajectory_data in mem.items():
-        for x_t in trajectory_data:
-            if x_t is None:
-                ret[name].append(None)
-            elif isinstance(x_t, torch.Tensor):
-                ret[name].append(x_t[i])
-            elif isinstance(x_t, torch.distributions.Distribution):
-                ret[name].append(extract_sub_distribution(x_t, i))  # keepdim is handled by calling function
-            elif 'rnn_state' in name:
-                ret[name].append(unpack_rnn_state(pack_rnn_state(x_t)[i]))
-            else:
-                raise ValueError(f'Unknown memory content for key {name}: {x_t}')
-    return ret
-
-
+"""
 def select_winners(mem: Dict[str, Union[torch.Tensor, torch.distributions.Distribution]],
                    i_win: torch.Tensor,
                    n_envs: int,
@@ -262,6 +239,7 @@ def plan_hierarchical(model: HierarchicalRSSM,
 
     best_lvl_0_actions = best_actions[0]
     return best_lvl_0_actions, best_returns, planning_data
+"""
 
 
 if __name__ == '__main__':
