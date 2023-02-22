@@ -100,8 +100,8 @@ mdm:
             window_size: 2
    warmup_steps: [ 'rand', 'rand' ]
    kl_betas: [ 1.0, 1.0 ]
-   kl_reg_betas: [ 0.01, 0.01 ]
-   ema_regularization: True
+   kl_reg_betas: [ 0.0, 0.0 ]
+   ema_regularization: False
 
 optim:
    type: 'adam'  # 'adamW' 'adam'
@@ -110,10 +110,10 @@ optim:
 trainer:
    n_train_steps: 10000
    eval_interval: 100
-   d_batch: 2048
+   d_batch: 4096
    subtrajectory_len: 0
    collect_envs: 50
-   collect_interval: 200
+   collect_interval: 10
 
 eval:
    warmup_steps: [ 2, 1 ]

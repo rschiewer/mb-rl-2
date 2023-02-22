@@ -1,6 +1,6 @@
 ---
 n_episodes: 25
-n_rollouts: [512, 1024]
+n_rollouts: [1024, 2048]
 n_warmup: [2, 1]
 n_plan_steps: 25
 
@@ -10,7 +10,7 @@ planners:
       discount: 0.99
       act_noise: 0.000
       alpha: 1.0
-   -  n_evolution_steps: 50
+   -  n_evolution_steps: 40
       winning_perc: 0.1
       discount: 0.99
       act_noise: 0.000
