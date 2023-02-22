@@ -453,7 +453,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         rec_r = self._neg_log_prob(predictions['r_dist'], targets['r'], mask)
         rec_term = self._neg_log_prob(predictions['terminal_dist'], targets['terminal'], mask)
         kl_z = self._kl_div(predictions['z_post'], predictions['z_prior'], mask)
-        kl_reg_z = self._kl_reg(predictions['z_post'], mask) * 0.0
+        kl_reg_z = self._kl_reg(predictions['z_post'], mask)
         contrastive_z = self._rand_contrastive_loss(predictions['z'], mask)
 
         mae_o = self._mae(predictions['o'], targets['o'], mask)
