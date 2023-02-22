@@ -199,7 +199,7 @@ def plan_hierarchical(model: HierarchicalRSSM,
 
     # top level for all memories is already done, so fill it in
     planning_data[-1] = top_lvl_data
-    best_actions[-1] = a_win_top  # 0 is env/batch dimension, 1 is time dimension, 2 is action dimension
+    #best_actions[-1] = a_win_top  # 0 is env/batch dimension, 1 is time dimension, 2 is action dimension
     best_returns[-1] = return_win_top
 
     for level in reversed(range(model.levels - 1)):
@@ -240,7 +240,7 @@ def plan_hierarchical(model: HierarchicalRSSM,
                 tmp = planning_data[level].get(k, [])
                 tmp.extend(v)
                 planning_data[level][k] = tmp
-        best_actions[level] = torch.stack(a_win_level, dim=1)
+        #best_actions[level] = torch.stack(a_win_level, dim=1)
         best_returns[level] = torch.stack(return_win_level).sum(dim=0)
 
     # filter only valid time steps, super inefficient but I don't know any better solution right now
@@ -258,4 +258,4 @@ def plan_hierarchical(model: HierarchicalRSSM,
 
     #best_lvl_0_actions = best_actions[0]
     best_lvl_0_actions = valid_data[0]['a'][n_groundtruth_steps:].swapaxes(0, 1)
-    return best_lvl_0_actions, best_returns, planning_data
+    return best_lvl_0_actions, best_returns, valid_data
