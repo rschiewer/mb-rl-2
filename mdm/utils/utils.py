@@ -314,6 +314,38 @@ def prepare_data(data: Dict[str, Union[torch.Tensor, np.ndarray]],
     return data
 
 
+def subtrajectories(data: Dict[str, torch.Tensor],
+                    length: int):
+    assert length < data['o'].shape[0]
+
+    n_trajs = data['o'].shape[1]
+    l_trajs = (1 - data['mask']).sum(dim=0).detach().cpu().numpy().squeeze()
+    i_start = np.random.randint(low=[0 for _ in range(n_trajs)], high=np.maximum(l_trajs - length, 1))
+    i_matrix = np.tile(np.arange(0, length), (n_trajs, 1)) + i_start[..., None]
+    i_matrix = torch.from_numpy(i_matrix).to(device=data['o'].device)
+
+    for k, v in data.items():
+        v = v.swapaxes(0, 1)
+        i_matr_exp = expand_shape_right(i_matrix, v)
+        i_matr_exp = i_matr_exp.repeat(1, 1, *v.shape[2:])
+        v_new = torch.gather(v, dim=1, index=i_matr_exp)
+        data[k] = v_new.swapaxes(0, 1)
+
+    return data
+
+
+"""
+def subtrajectories(mem: List[Dict[str, DataType]],
+                    length: int):
+    for traj in mem:
+        l_traj = len(traj['o'])
+        i_start = random.randint(0, l_traj - length)
+        i_end = i_start + length
+        for k, v in traj:
+            traj[k] = v[i_start, i_end]
+    return mem
+"""
+
 def apply_mask(o: torch.Tensor,
                a: torch.Tensor,
                r: torch.Tensor,
