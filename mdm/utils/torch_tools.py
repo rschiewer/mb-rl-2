@@ -360,7 +360,9 @@ def bin_every_k_steps(data: torch.Tensor,
 
 
 def _get_act_fn(descr: str):
-    if descr == 'relu':
+    if descr == 'identity':
+        act_constr = torch.nn.Identity
+    elif descr == 'relu':
         act_constr = torch.nn.ReLU
     elif descr == 'gelu':
         act_constr = torch.nn.GELU
