@@ -359,27 +359,27 @@ def bin_every_k_steps(data: torch.Tensor,
     return binned
 
 
+def _get_act_fn(descr: str):
+    if descr == 'relu':
+        act_constr = torch.nn.ReLU
+    elif descr == 'gelu':
+        act_constr = torch.nn.GELU
+    elif descr == 'elu':
+        act_constr = torch.nn.ELU
+    elif descr == 'tanh':
+        act_constr = torch.nn.Tanh
+    elif descr == 'sigmoid':
+        act_constr = torch.nn.Sigmoid
+    else:
+        raise ValueError(f'Unkown descr function: {descr}')
+    return act_constr
+
+
 def layers_with_activation(lws: Sequence[int], activation: str = 'relu', layer_norm: bool = False, name: str = None,
                            final_activation_function: str = None):
     assert len(lws) >= 2, f'Need at least w_in and w_out for one layer, but lws contains less than 2 elements'
 
-    def get_act_fn(descr: str):
-        if descr == 'relu':
-            act_constr = torch.nn.ReLU
-        elif descr == 'gelu':
-            act_constr = torch.nn.GELU
-        elif descr == 'elu':
-            act_constr = torch.nn.ELU
-        elif descr == 'tanh':
-            act_constr = torch.nn.Tanh
-        elif descr == 'sigmoid':
-            act_constr = torch.nn.Sigmoid
-        else:
-            raise ValueError(f'Unkown descr function: {descr}')
-        return act_constr
-
-    act_constr = get_act_fn(activation)
-
+    act_constr = _get_act_fn(activation)
     layers = []
     for w_in, w_out in zip(lws[:-1], lws[1:-1]):
         if layer_norm:
@@ -389,13 +389,40 @@ def layers_with_activation(lws: Sequence[int], activation: str = 'relu', layer_n
     layers.append(torch.nn.Linear(lws[-2], lws[-1]))
 
     if final_activation_function:
-        final_act_constr = get_act_fn(final_activation_function)
+        final_act_constr = _get_act_fn(final_activation_function)
         layers.append(final_act_constr())
 
     if name:
         layers = OrderedDict([(f'{name}_{i}', l) for i, l in enumerate(layers)])
 
     return layers
+
+
+def conv_layers_with_activation(channels: Sequence[int], kernel_sizes: Sequence[Tuple[int, int]],
+                                strides: Sequence[int], activation: str = 'relu', layer_norm: bool = False,
+                                name: str = None, final_activation_function: str = None):
+    assert len(channels) >= 2, f'Need at least c_in and c_out for one layer, but lws contains less than 2 elements'
+
+    act_constr = _get_act_fn(activation)
+    layers = []
+    for w_in, w_out, ks, st in zip(channels[:-1], channels[1:-1], kernel_sizes, str):
+        if layer_norm:
+            layers += [torch.nn.Conv2d(in_channels=w_in, out_channels=w_out, kernel_size=ks, stride=st),
+                       torch.nn.LayerNorm(w_out), act_constr()]
+        else:
+            layers += [torch.nn.Conv2d(in_channels=w_in, out_channels=w_out, kernel_size=ks, stride=st), act_constr()]
+    layers.append(torch.nn.Conv2d(in_channels=channels[-2], out_channels=channels[-1], kernel_size=kernel_sizes[-1],
+                                  stride=strides[-1]))
+
+    if final_activation_function:
+        final_act_constr = _get_act_fn(final_activation_function)
+        layers.append(final_act_constr())
+
+    if name:
+        layers = OrderedDict([(f'{name}_{i}', l) for i, l in enumerate(layers)])
+
+    return layers
+
 
 
 def get_dist_params(d: torch.distributions.Distribution):
