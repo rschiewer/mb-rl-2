@@ -107,9 +107,12 @@ class CacheLastStepVecEnv(gym.Wrapper):
 
         done_now = np.bitwise_or(term, trunc)
         if done_now.any():
-            mask = np.bitwise_and(infos['_final_observation'], self.envs_done)
-            mask = expand_shape_right(mask, o)
-            self.last_o = np.where(~mask, expand_shape_right(infos['final_observation'], o), o)  # TODO: check this
+            for i_env, final_obs_available in enumerate(infos['_final_observation']):
+                if final_obs_available:
+                    self.last_o[i_env] = infos['final_observation'][i_env]
+            #mask = np.bitwise_and(infos['_final_observation'], self.envs_done)
+            #mask = expand_shape_right(mask, o)
+            #self.last_o = np.where(~mask, expand_shape_right(infos['final_observation'], o), o)  # TODO: check this
         self.envs_done = np.bitwise_or(self.envs_done, done_now)
 
         if self.envs_done.all():
