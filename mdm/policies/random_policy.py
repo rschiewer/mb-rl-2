@@ -7,4 +7,4 @@ class RandomPolicy:
         self.env = env
 
     def __call__(self, *args):
-        return {'a': self.env.action_space.sample()}
+        return self.env.action_space.sample()
