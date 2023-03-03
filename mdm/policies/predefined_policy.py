@@ -15,6 +15,6 @@ class PredefinedPolicy:
         if self.current_timestep < self.max_timestep:
             a = self.action_list[self.current_timestep]
             self.current_timestep += 1
-            return a
+            return {'a': a}
         else:
             raise StopIteration(f'No more actions available')

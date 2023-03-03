@@ -127,7 +127,7 @@ def act_in_vector_env(env: CacheLastStepVecEnv,
             all_actions_done = False
             break
 
-        a = policy(env.last_o, env.last_r, env.last_term, env.last_trunc, env.current_step == 0)
+        a = policy(env.last_o, env.last_r, env.last_term, env.last_trunc, env.current_step == 0)['a']
         o_, r, terminal, truncated, info = env.step(a)
 
         traj_o.append(o_)
@@ -175,7 +175,7 @@ def act_in_env(env: CacheLastStepEnv,
 
     all_actions_done = True
     for t in range(n_steps):
-        a = policy(env.last_o, env.last_r, env.last_term, env.last_trunc, env.current_step == 0)
+        a = policy(env.last_o, env.last_r, env.last_term, env.last_trunc, env.current_step == 0)['a']
         o_, r, terminal, truncated, info = env.step(a)
         env_done = env.last_term or env.last_trunc or env_done
 
