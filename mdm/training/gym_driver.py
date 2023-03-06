@@ -112,7 +112,7 @@ def act_in_vector_env(env: CacheLastStepVecEnv,
 
     if env.current_step == 0:
         n_steps -= 1
-        o, _ = env.reset(seed=seed)
+        _, _ = env.reset(seed=seed)
         traj_o.append(env.last_o)
         traj_mask.append(env.envs_done.copy())
         if pad_data:  # by convention, make (a_0, r_0, t_0) = 0
@@ -128,13 +128,13 @@ def act_in_vector_env(env: CacheLastStepVecEnv,
             break
 
         a = policy(env.last_o, env.last_r, env.last_term, env.last_trunc, env.current_step == 0)
-        o_, r, terminal, truncated, info = env.step(a)
+        env.step(a)
 
-        traj_o.append(o_)
-        traj_a.append(a)
-        traj_r.append(r)
-        traj_term.append(terminal)
-        traj_trunc.append(truncated)
+        traj_o.append(env.last_o)
+        traj_a.append(env.last_a)
+        traj_r.append(env.last_r)
+        traj_term.append(env.last_term)
+        traj_trunc.append(env.last_trunc)
         traj_mask.append(env.envs_done.copy())
 
     # roll the mask one to the right to prevent it from masking the final reward
@@ -176,17 +176,17 @@ def act_in_env(env: CacheLastStepEnv,
     all_actions_done = True
     for t in range(n_steps):
         a = policy(env.last_o, env.last_r, env.last_term, env.last_trunc, env.current_step == 0)
-        o_, r, terminal, truncated, info = env.step(a)
+        env.step(a)
         env_done = env.last_term or env.last_trunc or env_done
 
-        traj_o.append(o_)
-        traj_a.append(a)
-        traj_r.append(r)
-        traj_term.append(terminal)
-        traj_trunc.append(truncated)
+        traj_o.append(env.last_o)
+        traj_a.append(env.last_a)
+        traj_r.append(env.last_r)
+        traj_term.append(env.last_term)
+        traj_trunc.append(env.last_trunc)
         traj_mask.append(env.last_term or env.last_trunc)
 
-        if terminal or truncated:
+        if env.last_term or env.last_trunc:
             all_actions_done = False
             break
     # roll the mask one to the right to prevent it from masking the final reward
