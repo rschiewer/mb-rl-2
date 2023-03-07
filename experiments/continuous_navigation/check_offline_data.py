@@ -17,7 +17,7 @@ if __name__ == '__main__':
     map_version = 'VeryEasy'
     env = gym.make(f'gym_nav2d:nav2d{map_version}-v0')
 
-    success, r_ep, l_ep = random_walk_success_rate(env, 50, planning_cfg['n_rollouts'])
+    success, r_ep, l_ep = random_walk_success_rate(env, 50, planning_cfg['n_rollouts'][0])
     print(f'Random walk statistics with planning parameters:')
     print(f'Expected initial success rate: {success}')
     print(f'Expected initial average return: {r_ep.mean()}')

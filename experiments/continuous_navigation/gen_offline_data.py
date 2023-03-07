@@ -16,7 +16,8 @@ from mdm.utils.utils import here, to_np_arrays, store_memory
 from mdm.utils.gym_wrappers import CacheLastStepEnv
 
 
-def expert_collect_policy(o, r, term, trunc, new_episode):
+def expert_collect_policy(env: CacheLastStepEnv):
+    o = env.last_o
     agent_pos = o[:2]
     goal_pos = o[2:4]
     distance = o[4]

@@ -1,7 +1,10 @@
 import gym
 
 
-class RandomPolicy:
+from mdm.policies.policy import Policy
+
+
+class RandomPolicy(Policy):
 
     def __init__(self, env: gym.Env):
         self.env = env

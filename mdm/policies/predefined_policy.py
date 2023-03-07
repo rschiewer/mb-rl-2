@@ -1,7 +1,9 @@
 import gym
 
+from mdm.policies.policy import Policy
 
-class PredefinedPolicy:
+
+class PredefinedPolicy(Policy):
 
     def __init__(self,
                  env: gym.Env,
