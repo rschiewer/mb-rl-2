@@ -356,7 +356,8 @@ class GaussianDecoder(OutputDecoder):
         # if self.s_x_orig != (1,):
         #    params = params.reshape(*params.shape[:-1], *self.s_x_orig, 2)
         mu, logvar = torch.tensor_split(params, 2, dim=-1)
-        sigma = torch.exp(0.5 * logvar) + self.epsilon
+        #sigma = torch.exp(0.5 * logvar) + self.epsilon
+        sigma = torch.log(1 + torch.exp(logvar)) + self.epsilon
         d = torch.distributions.Normal(loc=mu, scale=sigma)
         if sample:
             s = d.rsample()
