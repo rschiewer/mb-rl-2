@@ -659,7 +659,10 @@ def to_tensors(mem: List[Dict[str, DataType]],
                device: torch.device,
                dtypes: Union[List, Tuple] = None,
                padding: Union[List, Tuple] = None):
-    fids = reduce(lambda a, b: set(a) | set(b), mem)
+    if len(mem) > 1:
+        fids = reduce(lambda a, b: set(a) | set(b), mem)
+    else:
+        fids = set(mem[0])
     assert 'mask' not in fids, 'found forbidden field id "mask" in mem'
     if dtypes is None: dtypes = [torch.float32 for _ in range(len(fids))]
     if padding is None: padding = [0.0 for _ in range(len(fids))]
