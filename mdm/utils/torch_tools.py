@@ -426,7 +426,6 @@ def conv_layers_with_activation(channels: Sequence[int], kernel_sizes: Sequence[
     return layers
 
 
-
 def get_dist_params(d: torch.distributions.Distribution):
     if isinstance(d, (torch.distributions.Normal, torch.distributions.Cauchy, torch.distributions.Gumbel,
                       torch.distributions.Laplace, torch.distributions.LogNormal)):
@@ -447,10 +446,14 @@ def detach_dist(d: torch.distributions.Distribution):
         return type(d)(loc=d.loc.detach(), scale=d.scale.detach())
     elif isinstance(d, torch.distributions.RelaxedOneHotCategorical):
         return type(d)(temperature=d.temperature.detach(), logits=d.logits.detach())
-    elif hasattr(d, 'logits'):
+    elif isinstance(d, torch.distributions.ContinuousBernoulli):
         return type(d)(logits=d.logits.detach())
-    elif hasattr(d, 'probs'):
+    elif isinstance(d, torch.distributions.Bernoulli):
         return type(d)(probs=d.probs.detach())
+    #elif hasattr(d, 'logits'):
+    #    return type(d)(logits=d.logits.detach())
+    #elif hasattr(d, 'probs'):
+    #    return type(d)(probs=d.probs.detach())
     else:
         raise RuntimeError(f'Can\'t detach the given distribution: {d}')
 
@@ -712,3 +715,18 @@ def pad_first_timestep(o: torch.Tensor,
     trunc = torch.cat([torch.zeros_like(trunc[0]), trunc], dim=0)
     mask = torch.cat([torch.zeros_like(mask[0]), mask], dim=0)
     return o, a, r, term, trunc, mask
+
+
+@torch.jit.script
+def update_ema_modules(modules: List[Dict[str, torch.Tensor]], ema_modules: List[Dict[str, torch.Tensor]],
+                       coeff: float):
+    # with torch.no_grad():
+    #    for m, ema_m in zip(modules, ema_modules):
+    #        params_m = OrderedDict(m.named_parameters())
+    #        params_ema_m = OrderedDict(ema_m.named_parameters())
+    #        for name, param_m in params_m.items():
+    #            params_ema_m[name].sub_(0.99 * (params_ema_m[name] - param_m))
+    with torch.no_grad():
+        for params_m, params_ema_m in zip(modules, ema_modules):
+            for name, param_m in params_m.items():
+                params_ema_m[name].sub_(coeff * (params_ema_m[name] - param_m))
