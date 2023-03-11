@@ -175,85 +175,6 @@ class RecurrentBlock(torch.nn.Module, DeviceMixin):
                 torch.zeros(self.n_layers, d_batch, self.d_hidden, device=d))
 
 
-class FeedforwardBlock(torch.nn.Module, DeviceMixin):
-
-    def __init__(self,
-                 *d_inputs: int,
-                 lws: Union[Iterable[int], int]):
-        super(FeedforwardBlock, self).__init__()
-
-        if type(lws) is int:
-            lws = [lws]
-
-        self.d_inputs = d_inputs
-        self.lws = (sum(d_inputs), *lws)
-        self.layer_list = torch.nn.ModuleList([torch.nn.Linear(lw_in, lw_out)
-                                               for lw_in, lw_out in zip(self.lws, self.lws[1:])])
-        self.d_output = lws[-1]
-
-    def forward(self,
-                *xs: torch.Tensor):
-        x = torch.concat(xs, dim=-1)
-        for l in self.layer_list[:-1]:
-            x = l(x)
-            x = torch.nn.functional.gelu(x)
-        x = self.layer_list[-1](x)
-
-        return x
-
-
-class GaussianBlock(FeedforwardBlock):
-
-    def __init__(self,
-                 *d_inputs: int,
-                 lws: Union[Iterable[int], int],
-                 epsilon: float = 0.01):
-        if type(lws) is int:
-            lws = [lws]
-        lws = (*lws[:-1], lws[-1] * 2)  # double last layer to have params for loc and scale
-
-        super(GaussianBlock, self).__init__(*d_inputs, lws=lws)
-
-        self.d_output = lws[-1] // 2
-        self.epsilon = epsilon
-
-        min_var = torch.pow(torch.tensor(epsilon, dtype=torch.float32), lws[-1])
-        log_min_var = torch.log(min_var)
-        if torch.isinf(log_min_var):
-            raise ValueError(f'The minimal covariance matrix determinant of a {lws[-1]}d independent gaussian with '
-                             f'epsilon={epsilon} is prone to numerical underflow, choose a larger epsilon.')
-
-    def forward(self,
-                *xs: torch.Tensor):
-        x = super().forward(*xs)
-        mu, logvar = torch.tensor_split(x, 2, dim=-1)
-        # std = logvar.exp().pow(0.5) + 1.0
-        # std = torch.log(1 + logvar.exp()) + 1e-1
-        # std = torch.nn.functional.relu(logvar) + 0.01
-        # std = torch.distributions.transform_to(torch.distributions.Normal.arg_constraints['scale'])(logvar) + 0.01
-        std = torch.abs(logvar) + self.epsilon
-        x_dist = torch.distributions.Normal(mu, std)
-
-        return x_dist
-
-
-class ContinuousBernoulliBlock(FeedforwardBlock):
-
-    def __init__(self,
-                 *d_inputs: int,
-                 lws: Union[Iterable[int], int] = None):
-        super(ContinuousBernoulliBlock, self).__init__(*d_inputs, lws=lws)
-
-    def forward(self,
-                *xs: torch.Tensor):
-        x = super().forward(*xs)
-        x = torch.sigmoid(x)
-
-        x_dist = torch.distributions.ContinuousBernoulli(probs=x)
-
-        return x_dist
-
-
 def build_categorical(params: torch.Tensor,
                       params_are_probs: bool = False):
     if params_are_probs:
@@ -458,31 +379,6 @@ def detach_dist(d: torch.distributions.Distribution):
         raise RuntimeError(f'Can\'t detach the given distribution: {d}')
 
 
-def add_time_dim(*xs: torch.Tensor,
-                 batch_first: bool = False):
-    i_unsqueeze = 1 if batch_first else 0
-    unsqueezed = [x.unsqueeze(i_unsqueeze) if x.ndim > 1 else x.unsqueeze(0) for x in xs]
-    if len(unsqueezed) == 1:
-        unsqueezed = unsqueezed[0]
-    return unsqueezed
-
-
-def remove_time_dim(*xs: torch.Tensor,
-                    batch_first: bool = False):
-    i_unsqueeze = 1 if batch_first else 0
-    squeezed = [x.squeeze(i_unsqueeze) for x in xs]
-    if len(squeezed) == 1:
-        squeezed = squeezed[0]
-    return squeezed
-
-
-def add_data_dim(*xs: torch.Tensor):
-    unsqueezed = [x.unsqueeze(-1) for x in xs]
-    if len(unsqueezed) == 1:
-        unsqueezed = unsqueezed[0]
-    return unsqueezed
-
-
 def extract_sub_distribution(d: torch.distributions.Distribution,
                              *idx: TensorIndex,
                              keepdim: bool = False):
@@ -531,64 +427,6 @@ def repeat_distribution(d: torch.distributions.Distribution,
     return d_repeated
 
 
-def reconstruction_loss(y_hat: torch.Tensor, y_true: torch.Tensor):
-    l = torch.mean((y_hat - y_true) ** 2)
-    return l
-
-
-def kl_loss_normal(priors: List[torch.distributions.Normal],
-                   posteriors: List[torch.distributions.Normal],
-                   detach_posterior: bool = False):
-    l = torch.zeros_like(priors[0].loc)
-    for prior, posterior in zip(priors, posteriors):
-        if detach_posterior:
-            posterior = torch.distributions.Normal(loc=posterior.loc.detach(), scale=posterior.scale.detach())
-        l += torch.distributions.kl.kl_divergence(posterior, prior)
-    return torch.mean(l)
-
-
-def kl_loss_bernolli(priors: List[torch.distributions.ContinuousBernoulli],
-                     posteriors: List[torch.distributions.ContinuousBernoulli],
-                     detach_posterior: bool = False):
-    if priors[0].probs is None:
-        l = torch.zeros_like(priors[0].logits)
-    else:
-        l = torch.zeros_like(priors[0].probs)
-
-    for prior, posterior in zip(priors, posteriors):
-        if detach_posterior:
-            if posterior.probs is None:
-                posterior = torch.distributions.ContinuousBernoulli(logits=posterior.logits)
-            else:
-                posterior = torch.distributions.ContinuousBernoulli(probs=posterior.probs)
-        l += torch.distributions.kl.kl_divergence(posterior, prior)
-    return torch.mean(l)
-
-
-def kl_regularizer_normal(priors: List[torch.distributions.Normal]):
-    uniform_gauss = torch.distributions.Normal(loc=torch.zeros_like(priors[0].loc, requires_grad=False),
-                                               scale=torch.ones_like(priors[0].scale, requires_grad=False))
-    l = torch.zeros_like(priors[0].loc)
-    for prior in priors:
-        l += torch.distributions.kl.kl_divergence(prior, uniform_gauss)
-    return torch.mean(l)
-
-
-def kl_regularizer_bernoulli(priors: List[torch.distributions.ContinuousBernoulli]):
-    if priors[0].probs is None:
-        uniform_bernoulli = torch.distributions.ContinuousBernoulli(logits=torch.ones_like(priors[0].logits))
-        l = torch.zeros_like(priors[0].logits)
-    else:
-        probs = torch.ones_like(priors[0].probs)
-        probs /= probs.sum()
-        uniform_bernoulli = torch.distributions.ContinuousBernoulli(probs=probs)
-        l = torch.zeros_like(priors[0].probs)
-
-    for prior in priors:
-        l += torch.distributions.kl.kl_divergence(prior, uniform_bernoulli)
-    return torch.mean(l)
-
-
 def unpack_rnn_state(rnn_state_packed: torch.Tensor):
     if rnn_state_packed.shape[-2] == 2:
         h, c = rnn_state_packed.unbind(-2)
@@ -607,55 +445,6 @@ def pack_rnn_state(rnn_state: RnnStateType):
         return torch.stack([rnn_state[0].transpose(0, 1), rnn_state[1].transpose(0, 1)], dim=-2)
     else:
         return torch.stack([rnn_state.transpose(0, 1)], dim=-2)
-
-
-def to_tensors_old(mem: List[Dict[str, DataType]],
-                   device: torch.device,
-                   dtypes: Sequence = None,
-                   padding: Sequence = None):
-    if dtypes is None:
-        dtypes = (torch.float32, torch.float32, torch.float32, torch.float32, torch.float32)
-    if padding is None:
-        padding = (0.0, 0.0, 0.0, 0.0, 0.0)
-    n_trajectories = len(mem)
-
-    # find out shapes
-    s_o = mem[0]['o'].shape[1:]
-    s_a = mem[0]['a'].shape[1:]
-    s_r = mem[0]['r'].shape[1:]
-    s_term = mem[0]['terminal'].shape[1:]
-    s_trunc = mem[0]['truncated'].shape[1:]
-
-    # collect data
-    o, a, r, term, trunc, lengths = [], [], [], [], [], []
-    for traj in mem:
-        o.append(torch.from_numpy(traj['o']))
-        a.append(torch.from_numpy(traj['a']))
-        r.append(torch.from_numpy(traj['r']))
-        term.append(torch.from_numpy(traj['terminal']))
-        trunc.append(torch.from_numpy(traj['truncated']))
-        lengths.append(len(traj['o']))
-    longest = max(lengths)
-
-    # prepare memory containers
-    o_torch = torch.full((longest, n_trajectories, *s_o), fill_value=padding[0], dtype=dtypes[0], device=device)
-    a_torch = torch.full((longest, n_trajectories, *s_a), fill_value=padding[1], dtype=dtypes[1], device=device)
-    r_torch = torch.full((longest, n_trajectories, *s_r), fill_value=padding[2], dtype=dtypes[2], device=device)
-    term_torch = torch.full((longest, n_trajectories, *s_term), fill_value=padding[3], dtype=dtypes[3], device=device)
-    trunc_torch = torch.full((longest, n_trajectories, *s_trunc), fill_value=padding[4], dtype=dtypes[4], device=device)
-    mask = torch.full_like(r_torch, True)
-
-    # copy data
-    for i in range(n_trajectories):
-        o_torch[0:lengths[i], i] = o[i]
-        a_torch[0:lengths[i], i] = a[i]
-        r_torch[0:lengths[i], i] = r[i]
-        term_torch[0:lengths[i], i] = term[i]
-        trunc_torch[0:lengths[i], i] = trunc[i]
-        mask[0:lengths[i], i] = False
-
-    return {'o': o_torch, 'a': a_torch, 'r': r_torch, 'terminal': term_torch, 'truncated': trunc_torch,
-            'mask': mask}
 
 
 def to_tensors(mem: List[Dict[str, DataType]],
