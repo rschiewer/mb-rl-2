@@ -5,12 +5,8 @@ from enum import Enum
 
 import torch
 import numpy as np
-from mdm.utils.torch_tools import (layers_with_activation as lwa, add_time_dim, remove_time_dim, sample_from_gaussian,
-                                   make_gaussian_params, get_dist_params, RnnStateType, sample_from_categorical,
-                                   ManagedStatefulTrainingModule)
-from mdm.utils.utils import DistributionType
-
-
+from mdm.utils.torch_tools import (layers_with_activation as lwa, get_dist_params, RnnStateType,
+                                   sample_from_categorical, ManagedStatefulTrainingModule)
 
 
 class RSSM(torch.nn.Module):
@@ -432,19 +428,24 @@ class BinomialDecoder(OutputDecoder):
 
         lws = (d_x_encoded, *lws, np.prod(s_x_orig))
         self._mdl = torch.nn.Sequential(*lwa(lws, activation, layer_norm=layer_norm))
-        self._temperature = torch.tensor(0.1, dtype=torch.float32)
 
     def forward(self,
                 x_enc: torch.Tensor,
                 sample: bool = True):
         params = self._mdl(x_enc)
         params = params.reshape(*params.shape[:-1], *self.s_x_orig)
-        d = torch.distributions.ContinuousBernoulli(logits=params, lims=(0.49999, 0.50001))
-        #d = torch.distributions.RelaxedBernoulli(temperature=self._temperature, logits=params)
+        #d = torch.distributions.ContinuousBernoulli(logits=params, lims=(0.49999, 0.50001))
+        ##d = torch.distributions.RelaxedBernoulli(temperature=self._temperature, logits=params)
+        #if sample:
+        #    s = d.rsample()
+        #else:
+        #    s = d.probs.round().to(torch.float32) + d.probs - d.probs.detach()
+        #return d, s
+        d = torch.distributions.Bernoulli(logits=params)
         if sample:
-            s = d.rsample()
+            s = d.sample() + d.probs - d.probs.detach()
         else:
-            s = d.probs.round().to(torch.float32) + d.probs - d.probs.detach()
+            s = torch.argmax(d.probs).round().to(torch.float32) + d.probs - d.probs.detach()
         return d, s
 
 
