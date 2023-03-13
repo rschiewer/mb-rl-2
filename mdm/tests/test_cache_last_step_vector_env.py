@@ -70,7 +70,38 @@ class TestCacheLastStepVecEnv(unittest.TestCase):
         vec_env = gym.vector.AsyncVectorEnv(env_fns)
         vec_env = CacheLastStepVecEnv(vec_env)
 
-        mem = collect_data(vec_env, -1, lambda a, b, c, d, e: vec_env.action_space.sample())
+        mem = collect_data(vec_env, -1, lambda x: vec_env.action_space.sample())
+
+        for i_env in range(n_envs):
+            env = my_own_envs[i_env]
+            env_a = mem[i_env]['a']
+            env_o = mem[i_env]['o']
+            env_r = mem[i_env]['r']
+            env_term = mem[i_env]['terminal']
+            env_trunc = mem[i_env]['truncated']
+
+            env.reset()
+            for t, a in enumerate(env_a):
+                o, r, term, trunc, info = env.step(a)
+                self.assertTrue(np.isclose(o, env_o[t]))
+                self.assertTrue(np.isclose(r, env_r[t]))
+                self.assertTrue(np.isclose(term, env_term[t]))
+                self.assertTrue(np.isclose(trunc, env_trunc[t]))
+                if term or trunc:
+                    break
+
+    def test_toy_text_collect_data_limited_steps(self):
+        n_envs = 10
+        n_steps = 10
+
+        map_layouts = [generate_random_map(size=8) for _ in range(n_envs)]
+        env_fns = [lambda: gym.make('FrozenLake-v1', is_slippery=False, desc=l) for l in map_layouts]
+        my_own_envs = [fn() for fn in env_fns]
+
+        vec_env = gym.vector.AsyncVectorEnv(env_fns)
+        vec_env = CacheLastStepVecEnv(vec_env)
+
+        mem = collect_data(vec_env, n_steps, lambda x: vec_env.action_space.sample())
 
         for i_env in range(n_envs):
             env = my_own_envs[i_env]
