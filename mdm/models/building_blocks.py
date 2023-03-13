@@ -434,19 +434,19 @@ class BinomialDecoder(OutputDecoder):
                 sample: bool = True):
         params = self._mdl(x_enc)
         params = params.reshape(*params.shape[:-1], *self.s_x_orig)
-        #d = torch.distributions.ContinuousBernoulli(logits=params, lims=(0.49999, 0.50001))
-        ##d = torch.distributions.RelaxedBernoulli(temperature=self._temperature, logits=params)
-        #if sample:
-        #    s = d.rsample()
-        #else:
-        #    s = d.probs.round().to(torch.float32) + d.probs - d.probs.detach()
-        #return d, s
-        d = torch.distributions.Bernoulli(logits=params)
+        d = torch.distributions.ContinuousBernoulli(logits=params, lims=(0.49999, 0.50001))
+        #d = torch.distributions.RelaxedBernoulli(temperature=self._temperature, logits=params)
         if sample:
-            s = d.sample() + d.probs - d.probs.detach()
+            s = d.rsample()
         else:
-            s = torch.argmax(d.probs).round().to(torch.float32) + d.probs - d.probs.detach()
+            s = d.probs.round().to(torch.float32) + d.probs - d.probs.detach()
         return d, s
+        #d = torch.distributions.Bernoulli(logits=params)
+        #if sample:
+        #    s = d.sample() + d.probs - d.probs.detach()
+        #else:
+        #    s = torch.argmax(d.probs).round().to(torch.float32) + d.probs - d.probs.detach()
+        #return d, s
 
 
 class MLPDecoder(OutputDecoder):
