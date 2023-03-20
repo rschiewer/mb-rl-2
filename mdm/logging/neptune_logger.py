@@ -2,10 +2,9 @@ from typing import Dict, Any, Union
 import os
 from pathlib import Path
 
-from neptune.new.types import File
-import neptune.new as neptune
+import neptune
 from matplotlib.figure import Figure
-from neptune.new.run import Run, InactiveRunException
+from neptune import Run
 import numpy as np
 from PIL import Image
 
@@ -49,10 +48,10 @@ class NeptuneLogger(Logger):
     def start_session(self):
         if not self._run:
             if self._run_id:
-                self._run = neptune.init(project=self._project, run=self._run_id, api_token=self.token,
+                self._run = neptune.init_run(project=self._project, run=self._run_id, api_token=self.token,
                                          capture_stdout=False, capture_stderr=False)
             else:
-                self._run = neptune.init(project=self._project, api_token=self.token, capture_stdout=False,
+                self._run = neptune.init_run(project=self._project, api_token=self.token, capture_stdout=False,
                                          capture_stderr=False)
                 self._run_id = self._run['sys/id'].fetch()
                 if self._run_id.startswith('https'):
