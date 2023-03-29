@@ -139,7 +139,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         performed_actions = []
         mocel_uncertainties = []
         mem, env_state = sim_env(o=init_data['o'], a=init_data['a'], r=init_data['r'], terminal=init_data['terminal'],
-                                 level=self.level, use_ema_modules=True)
+                                 level=self.level, use_ema_modules=False)
         for t in range(n_steps):
             a_dist, a, v = self(mem[self.link][-1])
             ema_a_dist, _, ema_v = self(mem[self.link][-1], use_ema_modules=True)
@@ -148,7 +148,6 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                                      n_warmup=0, start_state=env_state, level=self.level, use_ema_modules=False)
             mem_ema, _ = sim_env(o=empty_tensor, a=a.unsqueeze(0), r=empty_tensor, terminal=empty_tensor,
                                    n_warmup=0, start_state=env_state, level=self.level, use_ema_modules=True)
-            env_state = next_env_state
             rewards.append(mem['r'][-1])
             terminals.append(mem['terminal'][-1])
             vs.append(v)
@@ -158,8 +157,8 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             ema_vs.append(ema_v)
             disagreement = torch.distributions.kl_divergence(detach_dist(mem_ema['z_prior'][-1]),
                                                              mem['z_prior'][-1]).mean(dim=-1)
-            # model_disagreement.append(mem['o_dist'][-1].entropy().mean(dim=-1, keepdim=True))
             mocel_uncertainties.append(disagreement)
+            env_state = next_env_state
 
         # if a terminal transition occurs, the terminal flag is close to 1 and would block out the reward in that step
         # so shift terminals list one to the right and make first element zeros
@@ -190,10 +189,10 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                                                                                            mocel_uncertainties,
                                                                                            discounts):
             action_dist_entropies.append(a_dist.entropy())
-            advantage = R - v.detach()
-            policy_losses.append(-advantage)
+            #advantage = R - v.detach()
+            #policy_losses.append(-advantage)
             #policy_losses.append(-gae_advantage)
-            # policy_losses.append(-R)
+            policy_losses.append(-R)
             # ppo_r = a_dist.log_prob(a.detach()) / detach_dist(ema_a_dist).log_prob(a.detach())
             # ppo_actor_loss = -((R.detach() - v.detach()) * torch.clip(ppo_r, torch.tensor(0.8, device=sim_env.device),
             #                                                          torch.tensor(1.2, device=sim_env.device)))
@@ -201,6 +200,10 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             # regular_actor_loss = -((R.detach() - v.detach()) * a_dist.log_prob(a.detach()))
             # policy_losses.append(-((R.detach() - v.detach()) * a_dist.log_prob(a.detach())))
             value_target = R.detach()
+            if self.entropy_exploration:
+                value_target += 0.01 * discount * a_dist.entropy().sum(dim=-1, keepdims=True)
+            if self.model_uncertainty_exploration:
+                value_target += discount * model_uncertainty.unsqueeze(-1)
             value_losses.append(torch.nn.functional.smooth_l1_loss(v, value_target, reduction='none'))
             model_uncertainty_losses.append(model_uncertainty)
             ema_losses.append(torch.distributions.kl_divergence(detach_dist(ema_a_dist), a_dist).sum(-1, keepdim=True))
@@ -213,7 +216,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         else:
             ema_loss = torch.tensor(0.0, device=self.device, dtype=torch.float32)
         if self.entropy_exploration:
-            entropy_loss = - torch.mean(torch.stack(action_dist_entropies))
+            entropy_loss = - 0.01 * torch.mean(torch.stack(action_dist_entropies))
         else:
             entropy_loss = torch.tensor(0.0, device=self.device, dtype=torch.float32)
         if self.model_uncertainty_exploration:
@@ -221,21 +224,19 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         else:
             model_uncertainty_loss = torch.tensor(0.0, device=self.device, dtype=torch.float32)
 
-        # before = [p.detach().cpu().numpy() for p in self._net_body.parameters()]
-        # ema_before = [p.detach().cpu().numpy() for p in self._ema_net_body.parameters()]
+        #before = [p.detach().cpu().numpy() for p in self._ema_actor_net.parameters()]
         # update model
         actor_optimizer.zero_grad(set_to_none=True)
         critic_optimizer.zero_grad(set_to_none=True)
-        loss = policy_loss + value_loss + ema_loss + entropy_loss + model_uncertainty_loss
+        loss = policy_loss + value_loss + ema_loss #+ model_uncertainty_loss + entropy_loss
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
         actor_optimizer.step()
         critic_optimizer.step()
-        # after = [p.detach().cpu().numpy() for p in self._net_body.parameters()]
-        # ema_after = [p.detach().cpu().numpy() for p in self._ema_net_body.parameters()]
+        #after = [p.detach().cpu().numpy() for p in self._ema_actor_net.parameters()]
 
-        # diff = np.sum([np.abs(x - y).sum() for x, y in zip(before, after)])
-        # ema_diff = np.sum([np.abs(x - y).sum() for x, y in zip(ema_before, ema_after)])
+        #diff = np.sum([np.abs(x - y).sum() for x, y in zip(before, after)])
+        #print(diff)
 
         agent_params = [OrderedDict(m.named_parameters()) for m in (self.actor_net, self.critic_net)]
         ema_params = [OrderedDict(m.named_parameters()) for m in (self._ema_actor_net, self._ema_critic_net)]
@@ -247,8 +248,8 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         return {'total': loss, 'policy': policy_loss, 'value': value_loss, 'exploration': model_uncertainty_loss,
                 'ema': ema_loss, 'action_entropy': entropy_loss}
 
-    #@staticmethod
-    @torch.compile
+    @staticmethod
+    #@torch.compile
     def _calc_returns(rewards, state_values, timestep_mask, gamma):
         returns = []
         discounts = []
@@ -260,8 +261,8 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             discounts.insert(0, gamma_final)
         return returns, discounts
 
-    #@staticmethod
-    @torch.compile
+    @staticmethod
+    #@torch.compile
     def _calc_gae(rewards, state_values, timestep_mask, gamma, lambda_):
         advantages = []
         discounts = []
