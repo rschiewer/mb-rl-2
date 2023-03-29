@@ -248,7 +248,7 @@ if __name__ == '__main__':
     parser.add_argument('-log', default=False, action='store_true')
     args = parser.parse_args()
 
-    cfg = load_yaml(here() / 'cfg_rssm_train.yaml')
+    cfg = load_yaml(here() / 'cfg_simple_rssm_train.yaml')
     planning_cfg = load_yaml(here() / 'cfg_rssm_plan.yaml')
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
@@ -354,47 +354,50 @@ if __name__ == '__main__':
 
 
     def get_batch_train(i_step):
-        if i_step % cfg['trainer']['collect_interval'] == 0:  # and i_step > 0:
+        if i_step % cfg['trainer']['collect_interval'] == 0:# and i_step > 0:
             collect_env.reset()
-            if False: #random.random() > (i_step / cfg['trainer']['n_train_steps']):
-                mem = collect_data(collect_env, -1, RandomPolicy(collect_env))
-                current_factor = 1
-                for i_level in range(1, model.levels):
-                    current_factor /= model.strides[i_level]
-                    for traj in mem:
-                        l = len(traj['o']) * current_factor
-                        rand_actions = (np.random.rand(l, model.rssm_modules[i_level].d_a) - 0.5) * 2
-                        traj[f'a_{i_level}'] = rand_actions
-            else:
-                model.eval()
-                warmup_data_trajectories = collect_data(collect_env, n_wu_lvl_0, RandomPolicy(collect_env))
-                warmup_data = prepare_data(to_tensors(warmup_data_trajectories, model.device))
-                a_win, return_levels, plan_data = plan_hierarchical(model, warmup_data, planners,
-                                                                    planning_cfg['n_plan_steps'] - n_wu_lvl_n,
-                                                                    planning_cfg['n_rollouts'],
-                                                                    planning_cfg['n_warmup'])
-                collect_policy = PredefinedPolicy(collect_env, a_win.detach().cpu().numpy().swapaxes(0, 1))
-                collected_data_trajectories = collect_data(collect_env, collect_policy.max_timestep, collect_policy)
-                # on the environment level, we want to record the real data to the train memory
-                mem = [{k: np.concatenate([wu[k], col[k]]) for k in wu}
-                       for wu, col in zip(warmup_data_trajectories, collected_data_trajectories)]
-                # for all other levels, only store the actions proposed by the planner
-                for i_level, level in enumerate(plan_data[1:]):
-                    a_level = level['a'].detach().cpu().numpy()
-                    for i_traj, traj in enumerate(mem):
-                        traj[f'a_{i_level + 1}'] = a_level[:, i_traj]
-                for level, return_level in enumerate(return_levels):
-                    avg_score = return_level.mean().detach().cpu().numpy()
-                    logger.log({'top_planning_score': avg_score}, Scope.TRAIN() / f'planning/level_{level}', i_step)
-                model.train()
+            #if random.random() > (i_step / cfg['trainer']['n_train_steps']):
+            #    mem = collect_data(collect_env, -1, RandomPolicy(collect_env))
+            #    current_factor = 1
+            #    for i_level in range(1, model.levels):
+            #        current_factor /= model.strides[i_level]
+            #        for traj in mem:
+            #            l = len(traj['o']) * current_factor
+            #            rand_actions = (np.random.rand(l, model.rssm_modules[i_level].d_a) - 0.5) * 2
+            #            traj[f'a_{i_level}'] = rand_actions
+            #else:
+            model.eval()
+            warmup_data_trajectories = collect_data(collect_env, n_wu_lvl_0, RandomPolicy(collect_env))
+            warmup_data = prepare_data(to_tensors(warmup_data_trajectories, model.device))
+            a_win, return_levels, plan_data = plan_hierarchical(model, warmup_data, planners,
+                                                                planning_cfg['n_plan_steps'] - n_wu_lvl_n,
+                                                                planning_cfg['n_rollouts'],
+                                                                planning_cfg['n_warmup'])
+            collect_policy = PredefinedPolicy(collect_env, a_win.detach().cpu().numpy().swapaxes(0, 1))
+            collected_data_trajectories = collect_data(collect_env, collect_policy.max_timestep, collect_policy)
+            # on the environment level, we want to record the real data to the train memory
+            mem = [{k: np.concatenate([wu[k], col[k]]) for k in wu}
+                   for wu, col in zip(warmup_data_trajectories, collected_data_trajectories)]
+            # for all other levels, only store the actions proposed by the planner
+            for i_level, level in enumerate(plan_data[1:]):
+                a_level = torch.stack(level['a']).detach().cpu().numpy()
+                for i_traj, traj in enumerate(mem):
+                    traj[f'a_{i_level + 1}'] = a_level[:, i_traj]
+            for level, return_level in enumerate(return_levels):
+                avg_score = return_level.mean().detach().cpu().numpy()
+                logger.log({'top_planning_score': avg_score}, Scope.TRAIN() / f'planning/level_{level}', i_step)
+            model.train()
             online_mem.extend(mem)
 
         if random.random() > 0.5 and len(online_mem) > 0:
             batch = online_driver.interact(d_batch)
+            #if len(online_mem) == 4 * n_eval_envs:  # avoid old combinations of abstract and primitive actions in mem
+            #    online_mem.clear()
         else:
             batch = offline_driver.interact(d_batch)
         batch = to_tensors(batch, model.device)
         batch = prepare_data(batch)
+        #batch = subtrajectories(batch, 15)
         return batch
 
 
