@@ -61,6 +61,8 @@ def plan(model: HierarchicalRSSM,
     if goal_data is None:
         def _calc_criterion(_mem):
             _criterion = torch.stack(_mem['r']).squeeze(-1).swapaxes(0, 1)
+            #_exploration_bonus = torch.stack([x.scale for x in _mem['o_dist']]).mean(dim=2).swapaxes(0, 1)
+            #_criterion += _exploration_bonus
             # _criterion -= torch.stack([d.scale / 2 for d in _mem['r_dist']]).squeeze(-1).swapaxes(0, 1)
             _discount = torch.stack(_mem['terminal']).squeeze(-1).swapaxes(0, 1)
             # _discount = torch.where(_discount > 0.75, 1.0, 0.0)
@@ -79,26 +81,27 @@ def plan(model: HierarchicalRSSM,
             _criterion = torch.zeros(n_envs * n_rollouts, 1, device=model.device)
             _discount = torch.ones_like(_criterion)
             # hack: support planning lengths shorter than n_plan_steps
-            _criterion = _criterion.reshape(n_envs, n_rollouts, 1)
+            #_criterion = _criterion.reshape(n_envs, n_rollouts, 1)
             first_third = n_rollouts // 3
             second_third = first_third * 2
             third_third = n_rollouts
             for k, v in goal_data.items():
-                _target = goal_data[k].reshape(n_envs, n_rollouts, goal_data[k].shape[-1])
-                _first_goal = _mem[k][-3].reshape(n_envs, n_rollouts, *_mem[k][-3].shape[1:])
-                _second_goal = _mem[k][-2].reshape(n_envs, n_rollouts, *_mem[k][-2].shape[1:])
-                _third_goal = _mem[k][-1].reshape(n_envs, n_rollouts, *_mem[k][-1].shape[1:])
-                _criterion[:, 0:first_third] -= torch.mean((_first_goal[:, 0:first_third] - _target[:, 0:first_third]) ** 2, dim=-1, keepdim=True)
-                _criterion[:, first_third:second_third] -= torch.mean((_second_goal[:, first_third:second_third] - _target[:, first_third:second_third]) ** 2, dim=-1, keepdim=True)
-                _criterion[:, second_third:third_third] -= torch.mean((_third_goal[:, second_third:third_third] - _target[:, second_third:third_third]) ** 2, dim=-1, keepdim=True)
-                #_criterion -= torch.mean((_mem[k][-1] - goal_data[k]) ** 2, dim=-1, keepdim=True)
-            _a_counted = torch.zeros(n_envs, n_rollouts, n_plan_steps + 1, device=model.device)
-            _a_counted[:, 0:first_third, :] = 1
-            _a_counted[:, first_third:second_third, :-1] = 1
-            _a_counted[:, second_third:third_third, :-2] = 1
-            _a_counted = _a_counted.reshape(n_envs * n_rollouts, n_plan_steps + 1)
+                #_target = goal_data[k].reshape(n_envs, n_rollouts, goal_data[k].shape[-1])
+                #_first_goal = _mem[k][-3].reshape(n_envs, n_rollouts, *_mem[k][-3].shape[1:])
+                #_second_goal = _mem[k][-2].reshape(n_envs, n_rollouts, *_mem[k][-2].shape[1:])
+                #_third_goal = _mem[k][-1].reshape(n_envs, n_rollouts, *_mem[k][-1].shape[1:])
+                #_criterion[:, 0:first_third] -= torch.mean((_first_goal[:, 0:first_third] - _target[:, 0:first_third]) ** 2, dim=-1, keepdim=True)
+                #_criterion[:, first_third:second_third] -= torch.mean((_second_goal[:, first_third:second_third] - _target[:, first_third:second_third]) ** 2, dim=-1, keepdim=True)
+                #_criterion[:, second_third:third_third] -= torch.mean((_third_goal[:, second_third:third_third] - _target[:, second_third:third_third]) ** 2, dim=-1, keepdim=True)
+                _target = goal_data[k].reshape(n_envs * n_rollouts, *goal_data[k].shape[1:])
+                _criterion -= torch.mean((_mem[k][-1] - goal_data[k]) ** 2, dim=-1, keepdim=True)
+            #_a_counted = torch.zeros(n_envs, n_rollouts, n_plan_steps + 1, device=model.device)
+            #_a_counted[:, 0:first_third, :] = 1
+            #_a_counted[:, first_third:second_third, :-1] = 1
+            #_a_counted[:, second_third:third_third, :-2] = 1
+            #_a_counted = _a_counted.reshape(n_envs * n_rollouts, n_plan_steps + 1)
             #_a_counted = torch.ones(n_envs * n_rollouts, n_plan_steps, device=model.device)
-            _mem['valid_steps'] = list(_a_counted.unbind(1))
+            #_mem['valid_steps'] = list(_a_counted.unbind(1))
 
             _criterion = _criterion.reshape(n_envs * n_rollouts, 1)
             return _criterion, _discount
@@ -118,7 +121,7 @@ def plan(model: HierarchicalRSSM,
 
     # hack: support planning lengths one step longer than n_plan_steps
     a, a_dist, i_win, R_win, data = planner.plan(rollout_fn=_rollout_fn, n_rollouts=n_rollouts,
-                                                 n_plan_steps=n_plan_steps + 1, n_envs=n_envs)
+                                                 n_plan_steps=n_plan_steps, n_envs=n_envs)
 
     # select winner batch item per per memory timestep
     select_winners(data, i_win[:, 0], n_envs, n_rollouts)
@@ -138,7 +141,7 @@ def run_model(model: DynamicsModel,
     disc_mat[0, :, :] = 1
     R_win = torch.sum(step_rewards * disc_mat, dim=0).squeeze()
     a_win = env_data['a']
-    mem['valid_steps'] = list(torch.ones_like(step_rewards).squeeze(-1).unbind(0))
+    #mem['valid_steps'] = list(torch.ones_like(step_rewards).squeeze(-1).unbind(0))
     return a_win, R_win, mem
 
 
@@ -199,7 +202,7 @@ def plan_hierarchical(model: HierarchicalRSSM,
 
     # top level for all memories is already done, so fill it in
     planning_data[-1] = top_lvl_data
-    #best_actions[-1] = a_win_top  # 0 is env/batch dimension, 1 is time dimension, 2 is action dimension
+    best_actions[-1] = a_win_top  # 0 is env/batch dimension, 1 is time dimension, 2 is action dimension
     best_returns[-1] = return_win_top
 
     for level in reversed(range(model.levels - 1)):
@@ -225,13 +228,13 @@ def plan_hierarchical(model: HierarchicalRSSM,
                                            n_plan_steps=n_plan_steps_level, n_rollouts=n_rollouts[level],
                                            n_warmup=0, model_state=model_state,
                                            goal_data=goal_data)
-            #model_state = {'rnn_state': data['rnn_state'][-1], 'z': data['z'][-1]}
-            last_valid = torch.stack(data['valid_steps']).sum(dim=0).to(torch.long) - 1
-            rnn_state = torch.stack([pack_rnn_state(x) for x in data['rnn_state']])
-            rnn_state = rnn_state.swapaxes(0, 1)[torch.arange(n_envs), last_valid]
-            z = torch.stack(data['z']).swapaxes(0, 1)[torch.arange(n_envs), last_valid]
-            model_state['rnn_state'] = unpack_rnn_state(rnn_state)
-            model_state['z'] = z
+            model_state = {'rnn_state': data['rnn_state'][-1], 'z': data['z'][-1]}
+            #last_valid = torch.stack(data['valid_steps']).sum(dim=0).to(torch.long) - 1
+            #rnn_state = torch.stack([pack_rnn_state(x) for x in data['rnn_state']])
+            #rnn_state = rnn_state.swapaxes(0, 1)[torch.arange(n_envs), last_valid]
+            #z = torch.stack(data['z']).swapaxes(0, 1)[torch.arange(n_envs), last_valid]
+            #model_state['rnn_state'] = unpack_rnn_state(rnn_state)
+            #model_state['z'] = z
 
             # bookkeeping
             a_win_level.extend(list(a_win.unbind(1)))  # 0 is env dimension, 1 is time dimension, 2 is action dimension
@@ -240,22 +243,22 @@ def plan_hierarchical(model: HierarchicalRSSM,
                 tmp = planning_data[level].get(k, [])
                 tmp.extend(v)
                 planning_data[level][k] = tmp
-        #best_actions[level] = torch.stack(a_win_level, dim=1)
+        best_actions[level] = torch.stack(a_win_level, dim=1)
         best_returns[level] = torch.stack(return_win_level).sum(dim=0)
 
     # filter only valid time steps, super inefficient but I don't know any better solution right now
-    valid_data = [{} for _ in range(model.levels)]
-    for i_level, raw_level_data in enumerate(planning_data):
-        valid = torch.stack(raw_level_data['valid_steps']).squeeze().to(torch.bool)
-        longest = valid.sum(dim=0).max()
-        for k, v in raw_level_data.items():
-            if isinstance(v[0], torch.Tensor):
-                v = torch.stack(v)
-                valid_data[i_level][k] = torch.zeros(longest, *v.shape[1:])
-                for i_env in range(n_envs):
-                    valid_env_data = v[:, i_env][valid[:, i_env].nonzero(as_tuple=True)]
-                    valid_data[i_level][k][:len(valid_env_data), i_env] = valid_env_data
+    #valid_data = [{} for _ in range(model.levels)]
+    #for i_level, raw_level_data in enumerate(planning_data):
+    #    valid = torch.stack(raw_level_data['valid_steps']).squeeze().to(torch.bool)
+    #    longest = valid.sum(dim=0).max()
+    #    for k, v in raw_level_data.items():
+    #        if isinstance(v[0], torch.Tensor):
+    #            v = torch.stack(v)
+    #            valid_data[i_level][k] = torch.zeros(longest, *v.shape[1:])
+    #            for i_env in range(n_envs):
+    #                valid_env_data = v[:, i_env][valid[:, i_env].nonzero(as_tuple=True)]
+    #                valid_data[i_level][k][:len(valid_env_data), i_env] = valid_env_data
 
-    #best_lvl_0_actions = best_actions[0]
-    best_lvl_0_actions = valid_data[0]['a'][n_groundtruth_steps:].swapaxes(0, 1)
-    return best_lvl_0_actions, best_returns, valid_data
+    best_lvl_0_actions = best_actions[0]
+    #best_lvl_0_actions = valid_data[0]['a'][n_groundtruth_steps:].swapaxes(0, 1)
+    return best_lvl_0_actions, best_returns, planning_data
