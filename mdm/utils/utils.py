@@ -316,13 +316,22 @@ def prepare_data(data: Dict[str, Union[torch.Tensor, np.ndarray]],
 
 def subtrajectories(data: Dict[str, torch.Tensor],
                     length: int):
+    d_t = data['o'].shape[0]
+    assert length < d_t
+    i_start = random.randint(0, d_t - length)
+    data = {k: v[i_start:] for k, v in data.items()}
+    return data
+
+
+def valid_subtrajectories(data: Dict[str, torch.Tensor],
+                          length: int):
     assert length < data['o'].shape[0]
 
     n_trajs = data['o'].shape[1]
     l_trajs = (1 - data['mask']).sum(dim=0).detach().cpu().numpy().squeeze()
     i_start = np.random.randint(low=[0 for _ in range(n_trajs)], high=np.maximum(l_trajs - length, 1))
     i_matrix = np.tile(np.arange(0, length), (n_trajs, 1)) + i_start[..., None]
-    i_matrix = torch.from_numpy(i_matrix).to(device=data['o'].device)
+    i_matrix = torch.from_numpy(i_matrix).to(device=data['o'].device, dtype=torch.int64)
 
     for k, v in data.items():
         v = v.swapaxes(0, 1)
