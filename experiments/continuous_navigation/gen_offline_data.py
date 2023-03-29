@@ -54,7 +54,7 @@ if __name__ == '__main__':
     env = CacheLastStepEnv(env)
     n_episodes_train = 5000
     perc_test = 0.1
-    expert_trajectories = 0.3
+    expert_trajectories = 0.0
 
     train_mem = []
     if expert_trajectories > 0:
