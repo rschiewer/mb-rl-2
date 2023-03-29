@@ -260,7 +260,6 @@ class StandardRSSM(torch.nn.Module):
         return z_post, z_smpl
 
 
-
 class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
     _filter_names = ('o', 'a', 'r', 'terminal', 'mask')
 
@@ -290,11 +289,10 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             level.update(mask_filter)
         upwards_filters = [ModuleDict(lvl_0_filters)] + [ModuleDict(x) for x in upwards_filters]
 
-        #if ema_regularization:
         # generate EMA shadow copies of the RSSMs
         self._ema_rssm_modules = ModuleList([copy.deepcopy(m) for m in rssm_modules])
-        for ema_mod in self._ema_rssm_modules:  # disable gradient computation in the ema shadow copies
-            for param in ema_mod.parameters():
+        for i_mod, ema_mod in enumerate(self._ema_rssm_modules):  # disable gradient computation in ema shadow copies
+            for i_param, param in enumerate(ema_mod.parameters()):
                 param.detach_()
 
         self.rssm_modules = ModuleList(list(rssm_modules))
@@ -355,6 +353,15 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                     training_data: Dict[str, torch.Tensor],
                     optimizer: torch.optim.Optimizer,
                     **kwargs) -> Dict[str, torch.Tensor]:
+        #before = []
+        #for m in self.rssm_modules:
+        #    for p in m.parameters():
+        #        before.append(p.detach().cpu().numpy())
+        #ema_before = []
+        #for m in self._ema_rssm_modules:
+        #    for p in m.parameters():
+        #        ema_before.append(p.detach().cpu().numpy())
+
         optimizer.zero_grad(set_to_none=True)
         losses_tf = self.eval_step(training_data, force_warmup=[-1 for _ in self.rssm_modules])
         losses_one = self.eval_step(training_data, force_warmup=[1 for _ in self.rssm_modules])
@@ -363,11 +370,21 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         for k in losses_tf:
             losses[k] = (losses_tf[k] + losses_wu[k] + losses_one[k]) / 3
         losses['total'].backward()
-        # torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
         optimizer.step()
 
+        #after = []
+        #for m in self.rssm_modules:
+        #    for p in m.parameters():
+        #        after.append(p.detach().cpu().numpy())
+        #ema_after = []
+        #for m in self._ema_rssm_modules:
+        #    for p in m.parameters():
+        #        ema_after.append(p.detach().cpu().numpy())
+        #diff = np.sum([np.abs(x - y).sum() for x, y in zip(before, after)])
+        #ema_diff = np.sum([np.abs(x - y).sum() for x, y in zip(ema_before, ema_after)])
+
         # update ema modules
-        #if self.ema_regularization:
         rssm_params = [OrderedDict(m.named_parameters()) for m in self.rssm_modules]
         ema_params = [OrderedDict(m.named_parameters()) for m in self._ema_rssm_modules]
         update_ema_modules(rssm_params, ema_params, self.ema_coeff)
@@ -438,13 +455,13 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         rec_term = self._neg_log_prob(predictions['terminal_dist'], targets['terminal'], mask)
         kl_z = self._kl_div(predictions['z_post'], predictions['z_prior'], mask)
         kl_reg_z = self._kl_reg(predictions['z_post'], mask)
-        contrastive_z = self._rand_contrastive_loss(predictions['z'], mask)
+        contrastive_z = self.ema_regularization * self._contrastive_loss(predictions['z'], mask)
 
         mae_o = self._mae(predictions['o'], targets['o'], mask)
         mae_r = self._mae(predictions['r'], targets['r'], mask)
         mae_term = self._mae(predictions['terminal'], targets['terminal'], mask)
 
-        total = rec_o + rec_r + rec_term + kl_z * kl_beta + kl_reg_z * kl_reg_beta #+ contrastive_z
+        total = rec_o + rec_r + rec_term + kl_z * kl_beta + kl_reg_z * kl_reg_beta + contrastive_z
         loss = {'total': total, 'o': rec_o, 'r': rec_r, 'term': rec_term, 'kl_z': kl_z, 'kl_reg_z': kl_reg_z,
                 'monitoring_o': mae_o, 'monitoring_r': mae_r, 'monitoring_term': mae_term,
                 'contrastive_z': contrastive_z}
@@ -461,17 +478,18 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         return loss
 
     @staticmethod
-    def _rand_contrastive_loss(x: List[torch.Tensor],
-                               mask: torch.Tensor):
+    def _contrastive_loss(x: List[torch.Tensor],
+                          mask: torch.Tensor):
         x = torch.stack(x)
         d_time, d_batch = x.shape[:2]
-        t_offset = random.randint(1, d_time - 1)
-        b_offset = random.randint(1, d_batch - 1)
+        #t_offset = random.randint(1, d_time - 1)
+        #b_offset = random.randint(1, d_batch - 1)
+        t_offset = 1
+        b_offset = 0
         mask = expand_shape_right(mask, x)
         diff = x - x.roll(shifts=[t_offset, b_offset], dims=[0, 1])
         cont_loss = torch.mean(torch.maximum(torch.tensor(0.0, device=x.device), 1.0 - (diff ** 2) * mask))
         return cont_loss
-
 
     @staticmethod
     def _neg_log_prob(distributions: List[torch.distributions.Distribution],
