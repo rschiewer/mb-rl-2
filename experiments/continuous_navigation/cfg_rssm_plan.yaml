@@ -1,8 +1,8 @@
 ---
 n_episodes: 25
-n_rollouts: [1024, 2048]
+n_rollouts: [512, 2048]
 n_warmup: [2, 1]
-n_plan_steps: 25
+n_plan_steps: 15
 
 planners:
    -  n_evolution_steps: 10
