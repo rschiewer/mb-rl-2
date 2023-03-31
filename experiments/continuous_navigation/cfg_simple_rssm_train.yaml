@@ -58,10 +58,11 @@ trainer:
    n_train_steps: 5000
    eval_interval: 20
    d_batch: 4096
-   subtrajectory_len: 10
+   subtrajectory_len: 15
    collect_envs: 50
    collect_interval: 100
    agent_train_interval: 5
+   agent_world_model_warmup: [ 2 ]
 
 eval:
    warmup_steps: [ 2 ]

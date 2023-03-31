@@ -141,9 +141,6 @@ if __name__ == '__main__':
     eval_env = gym.vector.AsyncVectorEnv([make_env_fn] * n_eval_envs)
     eval_env = CacheLastStepVecEnv(eval_env)
 
-    n_wu_lvl_0 = planning_cfg['n_warmup'][0]
-    n_wu_lvl_n = planning_cfg['n_warmup'][-1]
-
     agent_lvl = 0
     agent = ActorCriticAgent(level=agent_lvl, link='z', s_a=(model.rssm_modules[agent_lvl].d_a,),
                              s_o=(model.rssm_modules[agent_lvl].d_z,), min_a=(-1.0, -1.0), max_a=(1.0, 1.0),
@@ -177,13 +174,14 @@ if __name__ == '__main__':
         batch = prepare_data(batch)
         if i_step % cfg['trainer']['agent_train_interval'] == 0:
             agent.train()
-            init_data_agent = {k: v[:n_wu_lvl_0] for k, v in batch.items()}
+            n_wu = cfg['trainer']['agent_world_model_warmup'][0]
+            init_data_agent = {k: v[:n_wu] for k, v in batch.items()}
             agent_loss = agent.sim_train_step(sim_env=model, init_data=init_data_agent, n_steps=25,
                                               actor_optimizer=actor_optimizer, critic_optimizer=critic_optimizer)
             agent.update_exploration()
             logger.log(agent_loss, Scope.TRAIN() / 'agent')
         # batch = valid_subtrajectories(batch, 15)
-        batch = subtrajectories(batch, 15)
+        batch = subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
         return batch
 
 
