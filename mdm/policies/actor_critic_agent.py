@@ -6,6 +6,7 @@ from copy import deepcopy
 
 import gymnasium as gym
 import torch
+import torch.distributions as torchd
 import numpy as np
 
 from mdm.utils.torch_tools import layers_with_activation as lwa
@@ -23,34 +24,19 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                  s_o: Tuple[int],
                  min_a: Sequence[float] = None,
                  max_a: Sequence[float] = None,
-                 eps: float = 0,
-                 eps_mul: float = 0,
-                 ema_reg: bool = False,
-                 entropy_exploration: bool = False,
-                 model_novelty_exploration: bool = False,
+                 ema_coeff: float = 0.99,
+                 trust_region_policy_update_beta: float = 0.0,
+                 eps_exploration: float = 0,
+                 eps_exploration_mul: float = 0,
+                 action_entropy_exploration: float = 0.0,
+                 model_novelty_exploration: float = 0.0,
                  use_ema_world_model: bool = False):
         super().__init__()
+
         self.level = level
         self.link = link
         self.s_a = s_a
         self.s_o = s_o
-        self.actor_net = torch.nn.Sequential(lwa(lws=[np.prod(s_o).item(), 64, 64, np.prod(s_a).item() * 2],
-                                                 activation='relu', layer_norm=True, name='actor_net'))
-        self.critic_net = torch.nn.Sequential(lwa(lws=[np.prod(s_o).item(), 64, 64, 1],
-                                                  activation='relu', layer_norm=True, name='actor_net'))
-
-        self._ema_actor_net = copy.deepcopy(self.actor_net)
-        self._ema_critic_net = copy.deepcopy(self.critic_net)
-        for param in self._ema_actor_net.parameters(): param.detach_()
-        for param in self._ema_critic_net.parameters(): param.detach_()
-
-        self.eps = eps
-        self.eps_mul = eps_mul
-        self.ema_reg = ema_reg
-        self.entropy_exploration = entropy_exploration
-        self.model_uncertainty_exploration = model_novelty_exploration
-        self.use_ema_world_model = use_ema_world_model
-
         if min_a:
             self.min_a = torch.nn.Parameter(torch.tensor(min_a))
             self.min_a.requires_grad = False
@@ -62,6 +48,23 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             self.max_a.requires_grad = False
         else:
             self.max_a = None
+        self.ema_coeff = ema_coeff
+        self.beta = trust_region_policy_update_beta
+        self.eps = eps_exploration
+        self.eps_mul = eps_exploration_mul
+        self.alpha = action_entropy_exploration
+        self.mu = model_novelty_exploration
+        self.use_slow_world_model = use_ema_world_model
+
+        self.actor_net = torch.nn.Sequential(lwa(lws=[np.prod(s_o).item(), 64, 64, np.prod(s_a).item() * 2],
+                                                 activation='relu', layer_norm=True, name='actor_net'))
+        self.critic_net = torch.nn.Sequential(lwa(lws=[np.prod(s_o).item(), 64, 64, 1],
+                                                  activation='relu', layer_norm=True, name='actor_net'))
+
+        self._ema_actor_net = copy.deepcopy(self.actor_net)
+        self._ema_critic_net = copy.deepcopy(self.critic_net)
+        for param in self._ema_actor_net.parameters(): param.detach_()
+        for param in self._ema_critic_net.parameters(): param.detach_()
 
     # @torch.compile
     def scale_action(self, action):
@@ -104,8 +107,8 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         #    a_smpl = a_smpl + torch.distributions.Normal(loc=torch.zeros_like(a_smpl), scale=torch.full_like(a_smpl, 0.1)).sample()
         #    a_dist = torch.distributions.Normal(loc=a_smpl, scale=a_dist.scale)
         if self.eps > 0 and self.training:
-            a_smpl = a_smpl + torch.distributions.Normal(loc=torch.zeros_like(a_smpl),
-                                                         scale=torch.full_like(a_smpl, self.eps)).sample()
+            noise = torchd.Normal(loc=torch.zeros_like(a_smpl), scale=torch.full_like(a_smpl, self.eps)).sample()
+            a_smpl = a_smpl + noise
 
         a_smpl = self.scale_action(a_smpl)
         # a_dist = torch.distributions.Normal(loc=self.scale_action(a_dist.loc), scale=a_dist.scale)
@@ -141,17 +144,17 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         performed_actions = []
         model_novelties = []
         mem, env_state = sim_env(o=init_data['o'], a=init_data['a'], r=init_data['r'], terminal=init_data['terminal'],
-                                 level=self.level, use_ema_modules=self.use_ema_world_model)
+                                 level=self.level, use_ema_modules=self.use_slow_world_model)
         for t in range(n_steps):
             a_dist, a, v = self(mem[self.link][-1])
             ema_a_dist, _, ema_v = self(mem[self.link][-1], use_ema_modules=True)
             empty_tensor = torch.zeros_like(a)
             mem, next_env_state = sim_env(o=empty_tensor, a=a.unsqueeze(0), r=empty_tensor, terminal=empty_tensor,
                                           n_warmup=0, start_state=env_state, level=self.level,
-                                          use_ema_modules=self.use_ema_world_model)
+                                          use_ema_modules=self.use_slow_world_model)
             mem_ema, _ = sim_env(o=empty_tensor, a=a.unsqueeze(0), r=empty_tensor, terminal=empty_tensor,
                                  n_warmup=0, start_state=env_state, level=self.level,
-                                 use_ema_modules=self.use_ema_world_model)
+                                 use_ema_modules=self.use_slow_world_model)
             rewards.append(mem['r'][-1])
             terminals.append(mem['terminal'][-1])
             vs.append(v)
@@ -159,9 +162,8 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             a_dists.append(a_dist)
             ema_a_dists.append(ema_a_dist)
             ema_vs.append(ema_v)
-            disagreement = torch.distributions.kl_divergence(detach_dist(mem_ema['z_prior'][-1]),
-                                                             mem['z_prior'][-1]).mean(dim=-1)
-            model_novelties.append(disagreement)
+            novelty = torchd.kl_divergence(detach_dist(mem_ema['z_prior'][-1]), mem['z_prior'][-1]).mean(dim=-1)
+            model_novelties.append(novelty)
             env_state = next_env_state
 
         # if a terminal transition occurs, the terminal flag is close to 1 and would block out the reward in that step
@@ -181,9 +183,9 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
 
         policy_losses = []
         value_losses = []
-        model_uncertainty_losses = []
-        ema_losses = []
-        action_dist_entropies = []
+        ppo_losses = []
+        act_entropy_reward_augs = []
+        model_novelty_reward_augs = []
         for a_dist, ema_a_dist, a, v, R, gae_advantage, model_uncertainty, discount in zip(a_dists,
                                                                                            ema_a_dists,
                                                                                            performed_actions,
@@ -192,7 +194,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                                                                                            gae_advantages,
                                                                                            model_novelties,
                                                                                            discounts):
-            action_dist_entropies.append(a_dist.entropy())
+            # ACTOR
             # advantage = R - v.detach()
             # policy_losses.append(-advantage)
             # policy_losses.append(-gae_advantage)
@@ -203,36 +205,30 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             # policy_losses.append(ppo_actor_loss)
             # regular_actor_loss = -((R.detach() - v.detach()) * a_dist.log_prob(a.detach()))
             # policy_losses.append(-((R.detach() - v.detach()) * a_dist.log_prob(a.detach())))
-            value_target = R.detach()
-            if self.entropy_exploration:
-                value_target += 0.01 * discount * a_dist.entropy().sum(dim=-1, keepdims=True)
-            if self.model_uncertainty_exploration:
-                value_target += discount * model_uncertainty.unsqueeze(-1)
+            # CRITIC
+            act_entropy_reward_aug = self.alpha * discount * a_dist.entropy().sum(dim=-1, keepdims=True)
+            model_novelty_reward_aug = self.mu * discount * model_uncertainty.unsqueeze(-1)
+            value_target = R.detach() + act_entropy_reward_aug + model_novelty_reward_aug
             value_losses.append(torch.nn.functional.smooth_l1_loss(v, value_target, reduction='none'))
-            model_uncertainty_losses.append(model_uncertainty)
-            ema_losses.append(torch.distributions.kl_divergence(detach_dist(ema_a_dist), a_dist).sum(-1, keepdim=True))
-            # ema_losses.append(torch.nn.functional.mse_loss(v, ema_v.detach(), reduction='none'))
-            # exploration_losses.append(- 0.001 * a_dist.entropy().mean(dim=-1, keepdim=True) * discount)
+
+            # TRUST REGION POLICY UPDATE REGULARIZATION
+            ppo_losses.append(torch.distributions.kl_divergence(detach_dist(ema_a_dist), a_dist).sum(-1, keepdim=True))
+
+            # BOOKKEEPING
+            act_entropy_reward_augs.append(act_entropy_reward_aug)
+            model_novelty_reward_augs.append(model_novelty_reward_aug)
+
         policy_loss = torch.mean(torch.stack(policy_losses))
         value_loss = torch.mean(torch.stack(value_losses))
-        if self.ema_reg:
-            ema_loss = torch.mean(torch.stack(ema_losses))
-        else:
-            ema_loss = torch.tensor(0.0, device=self.device, dtype=torch.float32)
-        if self.entropy_exploration:
-            entropy_loss = - 0.01 * torch.mean(torch.stack(action_dist_entropies))
-        else:
-            entropy_loss = torch.tensor(0.0, device=self.device, dtype=torch.float32)
-        if self.model_uncertainty_exploration:
-            model_uncertainty_loss = - torch.mean(torch.stack(model_uncertainty_losses))
-        else:
-            model_uncertainty_loss = torch.tensor(0.0, device=self.device, dtype=torch.float32)
+        ppo_loss = self.beta * torch.mean(torch.stack(ppo_losses))
+        entropy_reward_aug = torch.mean(torch.stack(act_entropy_reward_augs))
+        model_novelty_reward_aug = torch.mean(torch.stack(model_novelties))
 
         # before = [p.detach().cpu().numpy() for p in self._ema_actor_net.parameters()]
         # update model
         actor_optimizer.zero_grad(set_to_none=True)
         critic_optimizer.zero_grad(set_to_none=True)
-        loss = policy_loss + value_loss + ema_loss  # + model_uncertainty_loss + entropy_loss
+        loss = policy_loss + value_loss + ppo_loss
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
         actor_optimizer.step()
@@ -245,12 +241,12 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         agent_params = [OrderedDict(m.named_parameters()) for m in (self.actor_net, self.critic_net)]
         ema_params = [OrderedDict(m.named_parameters()) for m in (self._ema_actor_net, self._ema_critic_net)]
         # ema_before = [p.detach().cpu().numpy() for p in self._ema_net_body.parameters()]
-        update_ema_modules(agent_params, ema_params, 0.99)
+        update_ema_modules(agent_params, ema_params, self.ema_coeff)
         # ema_after = [p.detach().cpu().numpy() for p in self._ema_net_body.parameters()]
         # ema_diff = np.sum([np.abs(x - y).sum() for x, y in zip(ema_before, ema_after)])
 
-        return {'total': loss, 'policy': policy_loss, 'value': value_loss, 'exploration': model_uncertainty_loss,
-                'ema': ema_loss, 'action_entropy': entropy_loss}
+        return {'total': loss, 'policy': policy_loss, 'value': value_loss, 'policy_trust_region_loss': ppo_loss,
+                'model_novelty_reward_aug': model_novelty_reward_aug, 'action_entropy_reward_aug': entropy_reward_aug}
 
     @staticmethod
     # @torch.compile

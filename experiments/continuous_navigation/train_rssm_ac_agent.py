@@ -35,7 +35,6 @@ from mdm.planning.planning_tools import plan_hierarchical
 from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.policies.agent_policy import *
 
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-log', default=False, action='store_true')
@@ -147,28 +146,30 @@ if __name__ == '__main__':
 
     agent_lvl = 0
     agent = ActorCriticAgent(level=agent_lvl, link='z', s_a=(model.rssm_modules[agent_lvl].d_a,),
-                             s_o=(model.rssm_modules[agent_lvl].d_z,), min_a=(-1.0, -1.0), max_a=(1.0, 1.0), eps=0.0,
-                             eps_mul=0.999, ema_reg=True, entropy_exploration=False,
-                             model_novelty_exploration=True, use_ema_world_model=False)
+                             s_o=(model.rssm_modules[agent_lvl].d_z,), min_a=(-1.0, -1.0), max_a=(1.0, 1.0),
+                             ema_coeff=0.99, trust_region_policy_update_beta=0.5, eps_exploration=0.0,
+                             eps_exploration_mul=0.0, action_entropy_exploration=0.00, model_novelty_exploration=0.1,
+                             use_ema_world_model=False)
     agent = agent.to('cuda')
     actor_optimizer = torch.optim.Adam(agent.actor_net.parameters(), lr=0.001)
     critic_optimizer = torch.optim.Adam(agent.critic_net.parameters(), lr=0.01)
+
 
     def get_batch_train(i_step):
         if i_step % cfg['trainer']['collect_interval'] == 0:
             agent.eval()
             collect_env.reset()
             policy = LatentAgentPolicy(agent, model)
-            #policy = AgentPolicy(agent)
+            # policy = AgentPolicy(agent)
             collected_data_trajectories = collect_data(collect_env, 25, policy)
-            #online_mem.extend(collected_data_trajectories)
+            # online_mem.extend(collected_data_trajectories)
             offline_mem.extend(collected_data_trajectories)
             avg_score = np.mean([traj['r'].mean() for traj in collected_data_trajectories])
             logger.log({'top_planning_score': avg_score}, Scope.TRAIN() / f'planning/level_0', i_step)
 
-        #if random.random() > 0.3 and len(online_mem) > 0:
+        # if random.random() > 0.3 and len(online_mem) > 0:
         #    batch = online_driver.interact(d_batch)
-        #else:
+        # else:
         #    batch = offline_driver.interact(d_batch)
 
         batch = offline_driver.interact(d_batch)
@@ -181,7 +182,7 @@ if __name__ == '__main__':
                                               actor_optimizer=actor_optimizer, critic_optimizer=critic_optimizer)
             agent.update_exploration()
             logger.log(agent_loss, Scope.TRAIN() / 'agent')
-        #batch = valid_subtrajectories(batch, 15)
+        # batch = valid_subtrajectories(batch, 15)
         batch = subtrajectories(batch, 15)
         return batch
 
@@ -223,7 +224,7 @@ if __name__ == '__main__':
         # do some planning and see how successfull the model is
         eval_env.reset()
         policy = LatentAgentPolicy(agent, model)
-        #policy = AgentPolicy(agent)
+        # policy = AgentPolicy(agent)
         mem = collect_data(eval_env, 25, policy)
         ep_len = 0
         success = 0
