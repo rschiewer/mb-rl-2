@@ -47,8 +47,8 @@ mdm:
    warmup_steps: [ 'rand' ]
    kl_betas: [ 1.0 ]
    kl_reg_betas: [ 0.001 ]
-   ema_regularization: 0.1
-   ema_coeff: 0.99
+   ema_regularization: 0.01
+   ema_coeff: 0.9
 
 optim:
    type: 'adam'  # 'adamW' 'adam'
@@ -60,7 +60,7 @@ trainer:
    d_batch: 4096
    subtrajectory_len: 10
    collect_envs: 50
-   collect_interval: 10
+   collect_interval: 100
    agent_train_interval: 5
 
 eval:

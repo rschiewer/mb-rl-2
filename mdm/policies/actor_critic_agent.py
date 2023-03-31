@@ -27,7 +27,8 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                  eps_mul: float = 0,
                  ema_reg: bool = False,
                  entropy_exploration: bool = False,
-                 model_uncertainty_exploration: bool = False):
+                 model_uncertainty_exploration: bool = False,
+                 use_ema_world_model: bool = False):
         super().__init__()
         self.level = level
         self.link = link
@@ -48,6 +49,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         self.ema_reg = ema_reg
         self.entropy_exploration = entropy_exploration
         self.model_uncertainty_exploration = model_uncertainty_exploration
+        self.use_ema_world_model = use_ema_world_model
 
         if min_a:
             self.min_a = torch.nn.Parameter(torch.tensor(min_a))
@@ -61,7 +63,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         else:
             self.max_a = None
 
-    #@torch.compile
+    # @torch.compile
     def scale_action(self, action):
         if self.min_a is not None and self.max_a is not None:
             a_scaled = torch.tanh(action) * (self.max_a - self.min_a) / 2 + (self.min_a + self.max_a) / 2
@@ -69,7 +71,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             a_scaled = action
         return a_scaled
 
-    #@torch.compile
+    # @torch.compile
     def _act_dist(self,
                   actor_head: torch.nn.Module,
                   x: torch.Tensor):
@@ -80,7 +82,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         d = torch.distributions.Normal(loc=mu, scale=sigma)
         return d
 
-    #@torch.compile
+    # @torch.compile
     def forward(self,
                 o: torch.Tensor,
                 use_ema_modules: bool = False,
@@ -119,7 +121,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
 
         return a_dist, a_smpl, state_values
 
-    #@torch.compile
+    # @torch.compile
     def update_exploration(self):
         self.eps *= self.eps_mul
 
@@ -139,15 +141,17 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         performed_actions = []
         mocel_uncertainties = []
         mem, env_state = sim_env(o=init_data['o'], a=init_data['a'], r=init_data['r'], terminal=init_data['terminal'],
-                                 level=self.level, use_ema_modules=False)
+                                 level=self.level, use_ema_modules=self.use_ema_world_model)
         for t in range(n_steps):
             a_dist, a, v = self(mem[self.link][-1])
             ema_a_dist, _, ema_v = self(mem[self.link][-1], use_ema_modules=True)
             empty_tensor = torch.zeros_like(a)
             mem, next_env_state = sim_env(o=empty_tensor, a=a.unsqueeze(0), r=empty_tensor, terminal=empty_tensor,
-                                     n_warmup=0, start_state=env_state, level=self.level, use_ema_modules=False)
+                                          n_warmup=0, start_state=env_state, level=self.level,
+                                          use_ema_modules=self.use_ema_world_model)
             mem_ema, _ = sim_env(o=empty_tensor, a=a.unsqueeze(0), r=empty_tensor, terminal=empty_tensor,
-                                   n_warmup=0, start_state=env_state, level=self.level, use_ema_modules=True)
+                                 n_warmup=0, start_state=env_state, level=self.level,
+                                 use_ema_modules=self.use_ema_world_model)
             rewards.append(mem['r'][-1])
             terminals.append(mem['terminal'][-1])
             vs.append(v)
@@ -165,7 +169,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         del terminals[-1]
         terminals.insert(0, torch.zeros_like(terminals[0]))
 
-        #if self.ema_reg:
+        # if self.ema_reg:
         #    vs = [torch.min(v, ema_v) for v, ema_v in zip(vs, ema_vs)]
 
         # calculate losses
@@ -189,9 +193,9 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                                                                                            mocel_uncertainties,
                                                                                            discounts):
             action_dist_entropies.append(a_dist.entropy())
-            #advantage = R - v.detach()
-            #policy_losses.append(-advantage)
-            #policy_losses.append(-gae_advantage)
+            # advantage = R - v.detach()
+            # policy_losses.append(-advantage)
+            # policy_losses.append(-gae_advantage)
             policy_losses.append(-R)
             # ppo_r = a_dist.log_prob(a.detach()) / detach_dist(ema_a_dist).log_prob(a.detach())
             # ppo_actor_loss = -((R.detach() - v.detach()) * torch.clip(ppo_r, torch.tensor(0.8, device=sim_env.device),
@@ -224,19 +228,19 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         else:
             model_uncertainty_loss = torch.tensor(0.0, device=self.device, dtype=torch.float32)
 
-        #before = [p.detach().cpu().numpy() for p in self._ema_actor_net.parameters()]
+        # before = [p.detach().cpu().numpy() for p in self._ema_actor_net.parameters()]
         # update model
         actor_optimizer.zero_grad(set_to_none=True)
         critic_optimizer.zero_grad(set_to_none=True)
-        loss = policy_loss + value_loss + ema_loss #+ model_uncertainty_loss + entropy_loss
+        loss = policy_loss + value_loss + ema_loss  # + model_uncertainty_loss + entropy_loss
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
         actor_optimizer.step()
         critic_optimizer.step()
-        #after = [p.detach().cpu().numpy() for p in self._ema_actor_net.parameters()]
+        # after = [p.detach().cpu().numpy() for p in self._ema_actor_net.parameters()]
 
-        #diff = np.sum([np.abs(x - y).sum() for x, y in zip(before, after)])
-        #print(diff)
+        # diff = np.sum([np.abs(x - y).sum() for x, y in zip(before, after)])
+        # print(diff)
 
         agent_params = [OrderedDict(m.named_parameters()) for m in (self.actor_net, self.critic_net)]
         ema_params = [OrderedDict(m.named_parameters()) for m in (self._ema_actor_net, self._ema_critic_net)]
@@ -249,7 +253,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                 'ema': ema_loss, 'action_entropy': entropy_loss}
 
     @staticmethod
-    #@torch.compile
+    # @torch.compile
     def _calc_returns(rewards, state_values, timestep_mask, gamma):
         returns = []
         discounts = []
@@ -262,7 +266,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         return returns, discounts
 
     @staticmethod
-    #@torch.compile
+    # @torch.compile
     def _calc_gae(rewards, state_values, timestep_mask, gamma, lambda_):
         advantages = []
         discounts = []
