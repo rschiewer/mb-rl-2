@@ -173,11 +173,14 @@ if __name__ == '__main__':
         batch = to_tensors(batch, model.device)
         batch = prepare_data(batch)
         if i_step % cfg['trainer']['agent_train_interval'] == 0:
-            agent.train()
             n_wu = cfg['trainer']['agent_world_model_warmup'][0]
+            n_t = cfg['trainer']['agent_sim_steps'][agent_lvl]
+
+            agent.train()
             init_data_agent = {k: v[:n_wu] for k, v in batch.items()}
-            agent_loss = agent.sim_train_step(sim_env=model, init_data=init_data_agent, n_steps=25,
-                                              actor_optimizer=actor_optimizer, critic_optimizer=critic_optimizer)
+            interact_data = agent.act_in_sim(init_data=init_data_agent, n_steps=n_t, sim_env=model)
+            agent_loss = agent.sim_train_step(**interact_data, actor_optimizer=actor_optimizer,
+                                              critic_optimizer=critic_optimizer)
             agent.update_exploration()
             logger.log(agent_loss, Scope.TRAIN() / 'agent')
         # batch = valid_subtrajectories(batch, 15)
