@@ -27,7 +27,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                  eps_mul: float = 0,
                  ema_reg: bool = False,
                  entropy_exploration: bool = False,
-                 model_uncertainty_exploration: bool = False,
+                 model_novelty_exploration: bool = False,
                  use_ema_world_model: bool = False):
         super().__init__()
         self.level = level
@@ -48,7 +48,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         self.eps_mul = eps_mul
         self.ema_reg = ema_reg
         self.entropy_exploration = entropy_exploration
-        self.model_uncertainty_exploration = model_uncertainty_exploration
+        self.model_uncertainty_exploration = model_novelty_exploration
         self.use_ema_world_model = use_ema_world_model
 
         if min_a:
@@ -139,7 +139,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         a_dists = []
         ema_a_dists = []
         performed_actions = []
-        mocel_uncertainties = []
+        model_novelties = []
         mem, env_state = sim_env(o=init_data['o'], a=init_data['a'], r=init_data['r'], terminal=init_data['terminal'],
                                  level=self.level, use_ema_modules=self.use_ema_world_model)
         for t in range(n_steps):
@@ -161,7 +161,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             ema_vs.append(ema_v)
             disagreement = torch.distributions.kl_divergence(detach_dist(mem_ema['z_prior'][-1]),
                                                              mem['z_prior'][-1]).mean(dim=-1)
-            mocel_uncertainties.append(disagreement)
+            model_novelties.append(disagreement)
             env_state = next_env_state
 
         # if a terminal transition occurs, the terminal flag is close to 1 and would block out the reward in that step
@@ -190,7 +190,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                                                                                            vs,
                                                                                            returns,
                                                                                            gae_advantages,
-                                                                                           mocel_uncertainties,
+                                                                                           model_novelties,
                                                                                            discounts):
             action_dist_entropies.append(a_dist.entropy())
             # advantage = R - v.detach()

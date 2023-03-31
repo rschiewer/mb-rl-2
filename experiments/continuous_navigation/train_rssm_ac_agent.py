@@ -149,7 +149,7 @@ if __name__ == '__main__':
     agent = ActorCriticAgent(level=agent_lvl, link='z', s_a=(model.rssm_modules[agent_lvl].d_a,),
                              s_o=(model.rssm_modules[agent_lvl].d_z,), min_a=(-1.0, -1.0), max_a=(1.0, 1.0), eps=0.0,
                              eps_mul=0.999, ema_reg=True, entropy_exploration=False,
-                             model_uncertainty_exploration=True, use_ema_world_model=False)
+                             model_novelty_exploration=True, use_ema_world_model=False)
     agent = agent.to('cuda')
     actor_optimizer = torch.optim.Adam(agent.actor_net.parameters(), lr=0.001)
     critic_optimizer = torch.optim.Adam(agent.critic_net.parameters(), lr=0.01)
