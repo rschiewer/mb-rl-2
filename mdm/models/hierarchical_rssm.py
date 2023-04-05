@@ -7,7 +7,7 @@ from collections import OrderedDict
 import torch
 from torch.nn import ModuleList, ModuleDict
 
-from mdm.utils.torch_tools import layers_with_activation, RnnStateType, FuzzyDeviceMixin
+from mdm.utils.torch_tools import FuzzyDeviceMixin
 from mdm.models.building_blocks import *
 from mdm.models.dynamics_model import DynamicsModel
 from mdm.utils.torch_tools import get_dist_params, detach_dist, update_ema_modules
@@ -391,12 +391,9 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
         return losses
 
-    def _eval_step(self,
-                   training_data: Dict[str, torch.Tensor],
-                   **kwargs) -> Dict[str, torch.Tensor]:
-        warmup_steps = kwargs.get('force_warmup', self.warmup_steps)
-
-        # execute all levels
+    def forward_all_hierarchies(self,
+                                training_data: Dict[str, torch.Tensor],
+                                warmup_steps: List[int]):
         pred = []
         pred_ema = []
         targets = []
@@ -418,16 +415,23 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 mem_ema = None
             # prep next lvl input
             # TODO: just a test, remove again later
-            #inp_lvl = {'o': torch.stack(mem[link]), 'a': filtered_inp_level['a'], 'r': torch.stack(mem['r']),
+            # inp_lvl = {'o': torch.stack(mem[link]), 'a': filtered_inp_level['a'], 'r': torch.stack(mem['r']),
             #           'terminal': torch.stack(mem['terminal'])}
             inp_lvl = {'o': torch.stack(mem[link]).detach(), 'a': filtered_inp_level['a'], 'r': filtered_inp_level['r'],
                        'terminal': filtered_inp_level['terminal']}
-            #inp_lvl = {'o': filtered_inp_level['o'], 'a': filtered_inp_level['a'], 'r': filtered_inp_level['r'],
+            # inp_lvl = {'o': filtered_inp_level['o'], 'a': filtered_inp_level['a'], 'r': filtered_inp_level['r'],
             #           'terminal': filtered_inp_level['terminal']}
 
             pred.append(mem)
             pred_ema.append(mem_ema)
             targets.append(filtered_inp_level)
+        return pred, pred_ema, targets
+
+    def _eval_step(self,
+                   training_data: Dict[str, torch.Tensor],
+                   **kwargs) -> Dict[str, torch.Tensor]:
+        warmup_steps = kwargs.get('force_warmup', self.warmup_steps)
+        pred, pred_ema, targets = self.forward_all_hierarchies(training_data, warmup_steps)
 
         # compute losses
         losses = {}
@@ -543,3 +547,5 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         y_hats = torch.stack(y_hats, dim=0)
         mask = mask.reshape(*mask.shape + (1,) * (y_hats.ndim - mask.ndim))  # append size 1 dimensions for broadcasting
         return torch.mean(torch.abs(ys - y_hats) * mask)
+
+
