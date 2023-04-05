@@ -187,8 +187,8 @@ if __name__ == '__main__':
     prim_obs_dec = MLPDecoder(s_x_orig=o_shape, d_x_encoded=d_prim_s, final_activation='tanh', **cfg['prim_o_dec'])
     prim_r_dec = MLPDecoder(s_x_orig=1, d_x_encoded=d_prim_s, **cfg['prim_r_dec'])
     prim_term_dec = MLPDecoder(s_x_orig=1, d_x_encoded=d_prim_s, final_activation='sigmoid', **cfg['prim_term_dec'])
-    prim_mdl = RSSM(obs_encoder=prim_obs_enc, obs_decoder=prim_obs_dec, r_decoder=prim_r_dec,
-                    term_decoder=prim_term_dec, **cfg['prim_mdl'])
+    prim_mdl = DeprecatedRSSM(obs_encoder=prim_obs_enc, obs_decoder=prim_obs_dec, r_decoder=prim_r_dec,
+                              term_decoder=prim_term_dec, **cfg['prim_mdl'])
 
     #abstr_obs_enc = MLPEncoder(s_x_orig=abstr_o_shape, **cfg['abstr_o_enc'])
     #abstr_obs_dec = GaussianDecoder(s_x_orig=abstr_o_shape, d_x_encoded=d_abstr_s, **cfg['abstr_o_dec'])

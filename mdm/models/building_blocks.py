@@ -9,7 +9,7 @@ from mdm.utils.torch_tools import (layers_with_activation as lwa, get_dist_param
                                    sample_from_categorical, ManagedStatefulTrainingModule)
 
 
-class RSSM(torch.nn.Module):
+class DeprecatedRSSM(torch.nn.Module):
 
     def __init__(self,
                  d_z: int,

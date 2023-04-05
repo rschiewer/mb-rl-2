@@ -7,7 +7,7 @@ from math import ceil
 import torch
 import torch.jit as jit
 
-from mdm.utils.utils import SliceType, DataType
+from mdm.utils.utils import DataType
 
 RnnStateType = TypeVar('RnnStateType', torch.Tensor, Tuple[torch.Tensor, torch.Tensor])
 TensorData = TypeVar('TensorData', torch.Tensor, Tuple[torch.Tensor, ...], List[torch.Tensor])

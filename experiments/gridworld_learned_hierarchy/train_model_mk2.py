@@ -12,7 +12,7 @@ from PIL import Image
 from mdm.gridworld.gridworld import Gridworld, FullyObservableGridworld
 from mdm.utils.utils import *
 from mdm.utils.torch_tools import get_mu, get_sigma, bin_every_k_steps, to_tensors
-from mdm.models.building_blocks import RSSM, LearnableUpwardsFilter, OneHotDecoder, OneHotEncoder, GaussianDecoder, BinomialDecoder
+from mdm.models.building_blocks import DeprecatedRSSM, LearnableUpwardsFilter, OneHotDecoder, OneHotEncoder, GaussianDecoder, BinomialDecoder
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
 from mdm.training.dynamics_model_trainer import DynamicsModelTrainer
 from mdm.memory.trajectory_memory import TrajectoryMemory
@@ -64,15 +64,15 @@ if __name__ == '__main__':
     prim_obs_dec = OneHotDecoder(s_x_orig=o_shape, d_x_encoded=d_prim_s, **cfg['prim_o_dec'])
     prim_r_dec = GaussianDecoder(s_x_orig=1, d_x_encoded=d_prim_s, **cfg['prim_r_dec'])
     prim_term_dec = BinomialDecoder(s_x_orig=1, d_x_encoded=d_prim_s, **cfg['prim_term_dec'])
-    prim_mdl = RSSM(obs_encoder=prim_obs_enc, obs_decoder=prim_obs_dec, r_decoder=prim_r_dec,
-                    term_decoder=prim_term_dec, **cfg['prim_mdl'])
+    prim_mdl = DeprecatedRSSM(obs_encoder=prim_obs_enc, obs_decoder=prim_obs_dec, r_decoder=prim_r_dec,
+                              term_decoder=prim_term_dec, **cfg['prim_mdl'])
 
     abstr_obs_enc = OneHotEncoder(s_x_orig=abstr_o_shape, **cfg['abstr_o_enc'])
     abstr_obs_dec = OneHotDecoder(s_x_orig=abstr_o_shape, d_x_encoded=d_abstr_s, **cfg['abstr_o_dec'])
     abstr_r_dec = GaussianDecoder(s_x_orig=1, d_x_encoded=d_abstr_s, **cfg['abstr_r_dec'])
     abstr_term_dec = BinomialDecoder(s_x_orig=1, d_x_encoded=d_abstr_s, **cfg['abstr_term_dec'])
-    abstr_mdl = RSSM(obs_encoder=abstr_obs_enc, obs_decoder=abstr_obs_dec, r_decoder=abstr_r_dec,
-                     term_decoder=abstr_term_dec, **cfg['abstr_mdl'])
+    abstr_mdl = DeprecatedRSSM(obs_encoder=abstr_obs_enc, obs_decoder=abstr_obs_dec, r_decoder=abstr_r_dec,
+                               term_decoder=abstr_term_dec, **cfg['abstr_mdl'])
 
     abstr_act_mdl = LearnableUpwardsFilter(**cfg['abstr_act_mdl'])
 
