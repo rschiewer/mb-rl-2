@@ -28,13 +28,17 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                  eps_exploration_mul: float = 0,
                  action_entropy_exploration: float = 0.0,
                  model_novelty_exploration: float = 0.0,
-                 use_ema_world_model: bool = False):
+                 use_ema_world_model: bool = False,
+                 goal_seeking: bool = False):
         super().__init__()
+
+        if goal_seeking:
+            d_o = 2 * d_o
 
         self.level = level
         self.observation_key = observation_key
-        self.s_a = d_a
-        self.s_o = d_o
+        self.d_a = d_a
+        self.d_o = d_o
         if min_a:
             self.min_a = torch.nn.Parameter(torch.tensor(min_a))
             self.min_a.requires_grad = False
@@ -53,6 +57,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         self.alpha = action_entropy_exploration
         self.mu = model_novelty_exploration
         self.use_slow_world_model = use_ema_world_model
+        self.goal_seeking = goal_seeking
 
         self.actor_net = torch.nn.Sequential(lwa(lws=[d_o, 64, 64, d_a * 2], activation='relu', layer_norm=True,
                                                  name='actor_net'))
@@ -88,7 +93,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                 o: torch.Tensor,
                 use_ema_modules: bool = False,
                 **kwargs):
-        if o.shape == self.s_o:  # add batch dim if not there already
+        if o.shape == self.d_o:  # add batch dim if not there already
             o = o.unsqueeze(0)
 
         if use_ema_modules:
@@ -199,7 +204,11 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         return {'total': loss, 'policy': policy_loss, 'value': value_loss, 'policy_trust_region_loss': ppo_loss,
                 'model_novelty_reward_aug': model_novelty_reward_aug, 'action_entropy_reward_aug': entropy_reward_aug}
 
-    def act_in_sim(self, init_data, n_steps, sim_env):
+    def act_in_sim(self,
+                   init_data: Dict[str, torch.Tensor],
+                   n_steps: int,
+                   sim_env: torch.nn.Module,
+                   goal: torch.Tensor = None):
         sim_env.train()  # needed to propagate gradients through env
         rewards, terminals, observations = [], [], []
         vs, ema_vs = [], []
@@ -208,7 +217,10 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         mem, env_state = sim_env(o=init_data['o'], a=init_data['a'], r=init_data['r'], terminal=init_data['terminal'],
                                  level=self.level, use_ema_modules=self.use_slow_world_model)
         for t in range(n_steps):
-            agent_o = mem[self.observation_key][-1]
+            if self.goal_seeking:
+                agent_o = torch.concat([mem[self.observation_key][-1], goal], dim=-1)
+            else:
+                agent_o = mem[self.observation_key][-1]
             a_dist, a, v = self(agent_o)
             ema_a_dist, _, ema_v = self(agent_o, use_ema_modules=True)
             empty_tensor = torch.zeros_like(a)
@@ -218,7 +230,10 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             mem_ema, _ = sim_env(o=empty_tensor, a=a.unsqueeze(0), r=empty_tensor, terminal=empty_tensor,
                                  n_warmup=0, start_state=env_state, level=self.level,
                                  use_ema_modules=self.use_slow_world_model)
-            rewards.append(mem['r'][-1])
+            if self.goal_seeking:
+                rewards.append(self._goal_similarity(mem[self.observation_key][-1], goal))
+            else:
+                rewards.append(mem['r'][-1])
             terminals.append(mem['terminal'][-1])
             observations.append(agent_o)
             vs.append(v)
@@ -261,48 +276,6 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             discounts.insert(0, gamma_final)
         return advantages, discounts
 
-
-class GoalSeekingActorCriticAgent(ActorCriticAgent):
-
-    def __init__(self,
-                 **kwargs):
-        kwargs['s_o'] = 2 * kwargs['s_o']
-        super().__init__(**kwargs)
-
     @staticmethod
-    def goal_similarity(o: torch.Tensor, goal: torch.Tensor):
+    def _goal_similarity(o: torch.Tensor, goal: torch.Tensor):
         return torch.mean((o - goal) ** 2, dim=-1)
-
-    def act_in_sim(self, init_data, n_steps, sim_env, goal):
-        sim_env.train()  # needed to propagate gradients through env
-        rewards, terminals, observations = [], [], []
-        vs, ema_vs = [], []
-        a_dists, ema_a_dists, performed_actions = [], [], []
-        model_novelties = []
-        mem, env_state = sim_env(o=init_data['o'], a=init_data['a'], r=init_data['r'], terminal=init_data['terminal'],
-                                 level=self.level, use_ema_modules=self.use_slow_world_model)
-        for t in range(n_steps):
-            agent_o = torch.concat(mem[self.observation_key][-1], goal)
-            a_dist, a, v = self(agent_o)
-            ema_a_dist, _, ema_v = self(agent_o, use_ema_modules=True)
-            empty_tensor = torch.zeros_like(a)
-            mem, next_env_state = sim_env(o=empty_tensor, a=a.unsqueeze(0), r=empty_tensor, terminal=empty_tensor,
-                                          n_warmup=0, start_state=env_state, level=self.level,
-                                          use_ema_modules=self.use_slow_world_model)
-            mem_ema, _ = sim_env(o=empty_tensor, a=a.unsqueeze(0), r=empty_tensor, terminal=empty_tensor,
-                                 n_warmup=0, start_state=env_state, level=self.level,
-                                 use_ema_modules=self.use_slow_world_model)
-            rewards.append(self.goal_similarity(mem[self.observation_key][-1], goal))
-            terminals.append(mem['terminal'][-1])
-            observations.append(agent_o)
-            vs.append(v)
-            performed_actions.append(a)
-            a_dists.append(a_dist)
-            ema_a_dists.append(ema_a_dist)
-            ema_vs.append(ema_v)
-            novelty = torchd.kl_divergence(detach_dist(mem_ema['z_prior'][-1]), mem['z_prior'][-1]).mean(dim=-1)
-            model_novelties.append(novelty)
-            env_state = next_env_state
-        return {'a_dist': a_dists, 'ema_a_dist': ema_a_dists, 'model_novelty': model_novelties, 'o': observations,
-                'a': performed_actions, 'r': rewards, 'terminal': terminals, 'v': vs}
-

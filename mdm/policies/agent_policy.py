@@ -30,7 +30,7 @@ class LatentAgentPolicy(Policy):
                  model: HierarchicalRSSM,
                  init_data: Dict[str, torch.Tensor] = None,
                  use_ema_modules: bool = False):
-        assert np.prod(agent.s_o) == model.rssm_modules[agent.level].d_z
+        assert np.prod(agent.d_o) == model.rssm_modules[agent.level].d_z
 
         self.agent = agent
         self.model = model
@@ -66,5 +66,5 @@ class LatentAgentPolicy(Policy):
         mem, self._current_env_state = self.model(o=env_data['o'], a=env_data['a'], r=env_data['r'],
                                                   terminal=env_data['terminal'], start_state=self._current_env_state,
                                                   level=self.agent.level, use_ema_modules=self._use_ema_modules)
-        a_dist, a, v = self.agent(mem[self.agent.link][-1])
+        a_dist, a, v = self.agent(mem[self.agent.observation_key][-1])
         return a.detach().cpu().numpy()

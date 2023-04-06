@@ -142,8 +142,8 @@ if __name__ == '__main__':
     eval_env = CacheLastStepVecEnv(eval_env)
 
     agent_lvl = 0
-    agent = ActorCriticAgent(level=agent_lvl, link='z', s_a=(model.rssm_modules[agent_lvl].d_a,),
-                             s_o=(model.rssm_modules[agent_lvl].d_z,), min_a=(-1.0, -1.0), max_a=(1.0, 1.0),
+    agent = ActorCriticAgent(level=agent_lvl, observation_key='z', d_a=model.rssm_modules[agent_lvl].d_a,
+                             d_o=model.rssm_modules[agent_lvl].d_z, min_a=(-1.0, -1.0), max_a=(1.0, 1.0),
                              ema_coeff=0.99, trust_region_policy_update_beta=0.5, eps_exploration=0.0,
                              eps_exploration_mul=0.0, action_entropy_exploration=0.00, model_novelty_exploration=0.1,
                              use_ema_world_model=False)
@@ -173,7 +173,7 @@ if __name__ == '__main__':
         batch = to_tensors(batch, model.device)
         batch = prepare_data(batch)
         if i_step % cfg['trainer']['agent_train_interval'] == 0:
-            n_wu = cfg['trainer']['agent_world_model_warmup'][0]
+            n_wu = cfg['trainer']['agent_world_model_warmup'][0]  # should actually be 1 to let the agent train the first steps of the environment as well
             n_t = cfg['trainer']['agent_sim_steps'][agent_lvl]
 
             agent.train()
