@@ -10,8 +10,6 @@ import torch.distributions as torchd
 import numpy as np
 
 from mdm.utils.torch_tools import layers_with_activation as lwa
-from mdm.models.building_blocks import GaussianDecoder
-from mdm.models.hierarchical_rssm import HierarchicalRSSM
 from mdm.utils.torch_tools import FuzzyDeviceMixin, update_ema_modules, detach_dist
 
 
@@ -19,9 +17,9 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
 
     def __init__(self,
                  level: int,
-                 link: str,
-                 s_a: Tuple[int],
-                 s_o: Tuple[int],
+                 observation_key: str,
+                 d_a: int,
+                 d_o: int,
                  min_a: Sequence[float] = None,
                  max_a: Sequence[float] = None,
                  ema_coeff: float = 0.99,
@@ -34,9 +32,9 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         super().__init__()
 
         self.level = level
-        self.link = link
-        self.s_a = s_a
-        self.s_o = s_o
+        self.observation_key = observation_key
+        self.s_a = d_a
+        self.s_o = d_o
         if min_a:
             self.min_a = torch.nn.Parameter(torch.tensor(min_a))
             self.min_a.requires_grad = False
@@ -56,10 +54,10 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         self.mu = model_novelty_exploration
         self.use_slow_world_model = use_ema_world_model
 
-        self.actor_net = torch.nn.Sequential(lwa(lws=[np.prod(s_o).item(), 64, 64, np.prod(s_a).item() * 2],
-                                                 activation='relu', layer_norm=True, name='actor_net'))
-        self.critic_net = torch.nn.Sequential(lwa(lws=[np.prod(s_o).item(), 64, 64, 1],
-                                                  activation='relu', layer_norm=True, name='actor_net'))
+        self.actor_net = torch.nn.Sequential(lwa(lws=[d_o, 64, 64, d_a * 2], activation='relu', layer_norm=True,
+                                                 name='actor_net'))
+        self.critic_net = torch.nn.Sequential(lwa(lws=[d_o, 64, 64, 1], activation='relu', layer_norm=True,
+                                                  name='actor_net'))
 
         self._ema_actor_net = copy.deepcopy(self.actor_net)
         self._ema_critic_net = copy.deepcopy(self.critic_net)
@@ -96,31 +94,15 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         if use_ema_modules:
             state_values = self._ema_critic_net(o)
             a_dist = self._act_dist(self._ema_actor_net, o)
-            # a_dist, a_smpl = self._ema_actor_head(x)
         else:
             state_values = self.critic_net(o)
             a_dist = self._act_dist(self.actor_net, o)
-            # a_dist, a_smpl = self._actor_head(x)
         a_smpl = a_dist.rsample()
 
-        # if self.eps > random.random():
-        #    a_smpl = a_smpl + torch.distributions.Normal(loc=torch.zeros_like(a_smpl), scale=torch.full_like(a_smpl, 0.1)).sample()
-        #    a_dist = torch.distributions.Normal(loc=a_smpl, scale=a_dist.scale)
         if self.eps > 0 and self.training:
             noise = torchd.Normal(loc=torch.zeros_like(a_smpl), scale=torch.full_like(a_smpl, self.eps)).sample()
             a_smpl = a_smpl + noise
-
         a_smpl = self.scale_action(a_smpl)
-        # a_dist = torch.distributions.Normal(loc=self.scale_action(a_dist.loc), scale=a_dist.scale)
-
-        # if self.min_a is not None:
-        #   # loc = torch.maximum(self.min_a, a_dist.loc)
-        #   # a_dist = torch.distributions.Normal(loc=loc, scale=a_dist.scale)
-        #   a_smpl = torch.maximum(self.min_a, a_smpl)
-        # if self.max_a is not None:
-        #   # loc = torch.minimum(self.max_a, a_dist.loc)
-        #   # a_dist = torch.distributions.Normal(loc=loc, scale=a_dist.scale)
-        #   a_smpl = torch.minimum(self.max_a, a_smpl)
 
         return a_dist, a_smpl, state_values
 
@@ -132,12 +114,14 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                        a_dist: list[torch.Tensor],
                        ema_a_dist: list[torch.Tensor],
                        model_novelty: list[torch.Tensor],
+                       o: list[torch.Tensor],
                        a: list[torch.Tensor],
                        r: list[torch.Tensor],
                        terminal: list[torch.Tensor],
                        v: list[torch.Tensor],
                        actor_optimizer: torch.optim.Optimizer,
-                       critic_optimizer: torch.optim.Optimizer):
+                       critic_optimizer: torch.optim.Optimizer,
+                       **kwargs):
         # if a terminal transition occurs, the terminal flag is close to 1 and would block out the reward in that step
         # so shift terminals list one to the right and make first element zeros
         del terminal[-1]
@@ -162,10 +146,10 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                                                                                               returns, gae_advantages,
                                                                                               model_novelty, discount):
             # ACTOR
-            # advantage = R - v.detach()
-            # policy_losses.append(-advantage)
-            # policy_losses.append(-gae_advantage)
-            policy_losses.append(-R)
+            #advantage = R - v_.detach()
+            #policy_losses.append(-advantage)
+            policy_losses.append(-gae_advantage_)
+            #policy_losses.append(-R)
             # ppo_r = a_dist.log_prob(a.detach()) / detach_dist(ema_a_dist).log_prob(a.detach())
             # ppo_actor_loss = -((R.detach() - v.detach()) * torch.clip(ppo_r, torch.tensor(0.8, device=sim_env.device),
             #                                                          torch.tensor(1.2, device=sim_env.device)))
@@ -217,19 +201,16 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
 
     def act_in_sim(self, init_data, n_steps, sim_env):
         sim_env.train()  # needed to propagate gradients through env
-        rewards = []
-        terminals = []
-        vs = []
-        ema_vs = []
-        a_dists = []
-        ema_a_dists = []
-        performed_actions = []
+        rewards, terminals, observations = [], [], []
+        vs, ema_vs = [], []
+        a_dists, ema_a_dists, performed_actions = [], [], []
         model_novelties = []
         mem, env_state = sim_env(o=init_data['o'], a=init_data['a'], r=init_data['r'], terminal=init_data['terminal'],
                                  level=self.level, use_ema_modules=self.use_slow_world_model)
         for t in range(n_steps):
-            a_dist, a, v = self(mem[self.link][-1])
-            ema_a_dist, _, ema_v = self(mem[self.link][-1], use_ema_modules=True)
+            agent_o = mem[self.observation_key][-1]
+            a_dist, a, v = self(agent_o)
+            ema_a_dist, _, ema_v = self(agent_o, use_ema_modules=True)
             empty_tensor = torch.zeros_like(a)
             mem, next_env_state = sim_env(o=empty_tensor, a=a.unsqueeze(0), r=empty_tensor, terminal=empty_tensor,
                                           n_warmup=0, start_state=env_state, level=self.level,
@@ -239,6 +220,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                                  use_ema_modules=self.use_slow_world_model)
             rewards.append(mem['r'][-1])
             terminals.append(mem['terminal'][-1])
+            observations.append(agent_o)
             vs.append(v)
             performed_actions.append(a)
             a_dists.append(a_dist)
@@ -247,8 +229,8 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             novelty = torchd.kl_divergence(detach_dist(mem_ema['z_prior'][-1]), mem['z_prior'][-1]).mean(dim=-1)
             model_novelties.append(novelty)
             env_state = next_env_state
-        return {'a_dist': a_dists, 'ema_a_dist': ema_a_dists, 'model_novelty': model_novelties, 'a': performed_actions,
-                'r': rewards, 'terminal': terminals, 'v': vs}
+        return {'a_dist': a_dists, 'ema_a_dist': ema_a_dists, 'model_novelty': model_novelties, 'o': observations,
+                'a': performed_actions, 'r': rewards, 'terminal': terminals, 'v': vs}
 
     @staticmethod
     # @torch.compile
@@ -278,3 +260,49 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             advantages.insert(0, last_advantage)
             discounts.insert(0, gamma_final)
         return advantages, discounts
+
+
+class GoalSeekingActorCriticAgent(ActorCriticAgent):
+
+    def __init__(self,
+                 **kwargs):
+        kwargs['s_o'] = 2 * kwargs['s_o']
+        super().__init__(**kwargs)
+
+    @staticmethod
+    def goal_similarity(o: torch.Tensor, goal: torch.Tensor):
+        return torch.mean((o - goal) ** 2, dim=-1)
+
+    def act_in_sim(self, init_data, n_steps, sim_env, goal):
+        sim_env.train()  # needed to propagate gradients through env
+        rewards, terminals, observations = [], [], []
+        vs, ema_vs = [], []
+        a_dists, ema_a_dists, performed_actions = [], [], []
+        model_novelties = []
+        mem, env_state = sim_env(o=init_data['o'], a=init_data['a'], r=init_data['r'], terminal=init_data['terminal'],
+                                 level=self.level, use_ema_modules=self.use_slow_world_model)
+        for t in range(n_steps):
+            agent_o = torch.concat(mem[self.observation_key][-1], goal)
+            a_dist, a, v = self(agent_o)
+            ema_a_dist, _, ema_v = self(agent_o, use_ema_modules=True)
+            empty_tensor = torch.zeros_like(a)
+            mem, next_env_state = sim_env(o=empty_tensor, a=a.unsqueeze(0), r=empty_tensor, terminal=empty_tensor,
+                                          n_warmup=0, start_state=env_state, level=self.level,
+                                          use_ema_modules=self.use_slow_world_model)
+            mem_ema, _ = sim_env(o=empty_tensor, a=a.unsqueeze(0), r=empty_tensor, terminal=empty_tensor,
+                                 n_warmup=0, start_state=env_state, level=self.level,
+                                 use_ema_modules=self.use_slow_world_model)
+            rewards.append(self.goal_similarity(mem[self.observation_key][-1], goal))
+            terminals.append(mem['terminal'][-1])
+            observations.append(agent_o)
+            vs.append(v)
+            performed_actions.append(a)
+            a_dists.append(a_dist)
+            ema_a_dists.append(ema_a_dist)
+            ema_vs.append(ema_v)
+            novelty = torchd.kl_divergence(detach_dist(mem_ema['z_prior'][-1]), mem['z_prior'][-1]).mean(dim=-1)
+            model_novelties.append(novelty)
+            env_state = next_env_state
+        return {'a_dist': a_dists, 'ema_a_dist': ema_a_dists, 'model_novelty': model_novelties, 'o': observations,
+                'a': performed_actions, 'r': rewards, 'terminal': terminals, 'v': vs}
+
