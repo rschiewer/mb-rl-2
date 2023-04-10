@@ -12,9 +12,10 @@ from mdm.models.building_blocks import *
 from mdm.models.dynamics_model import DynamicsModel
 from mdm.utils.torch_tools import get_dist_params, detach_dist, update_ema_modules
 from mdm.utils.utils import expand_shape_right
+from mdm.policies.actor_critic_agent import ActorCriticAgent
 
 
-class StandardRSSM(torch.nn.Module):
+class RSSMCell(torch.nn.Module):
 
     def __init__(self,
                  d_z: int,
@@ -264,7 +265,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
     _filter_names = ('o', 'a', 'r', 'terminal', 'mask')
 
     def __init__(self,
-                 rssm_modules: Sequence[StandardRSSM],
+                 rssm_modules: Sequence[RSSMCell],
                  links: Sequence[str],  # links associate output from one lvl below with inputs on this lvl
                  upwards_filters: Sequence[Dict[str, UpwardsFilter]],
                  warmup_steps: Sequence[Union[int, str]],
@@ -547,5 +548,3 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         y_hats = torch.stack(y_hats, dim=0)
         mask = mask.reshape(*mask.shape + (1,) * (y_hats.ndim - mask.ndim))  # append size 1 dimensions for broadcasting
         return torch.mean(torch.abs(ys - y_hats) * mask)
-
-

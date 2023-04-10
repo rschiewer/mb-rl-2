@@ -16,7 +16,7 @@ from PIL import Image
 from mdm.utils.utils import *
 from mdm.utils.torch_tools import to_tensors
 from mdm.models.building_blocks import *
-from mdm.models.hierarchical_rssm import HierarchicalRSSM, StandardRSSM
+from mdm.models.hierarchical_rssm import HierarchicalRSSM, RSSMCell
 from mdm.models.dynamics_model import DynamicsModel
 from mdm.models.rnn_baseline import RnnBaselineModel
 from mdm.training.dynamics_model_trainer import DynamicsModelTrainer
@@ -310,7 +310,7 @@ if __name__ == '__main__':
                 cls_name = v.pop('class')
                 instance = globals()[cls_name](**v)
                 module_args[k] = instance
-        cfg['mdm']['rssm_modules'][i_module] = StandardRSSM(**module_args)  # generate RSSM
+        cfg['mdm']['rssm_modules'][i_module] = RSSMCell(**module_args)  # generate RSSM
     for i_filter, filter_args in enumerate(cfg['mdm']['upwards_filters']):  # generate filter objects
         for k, v in filter_args.items():
             cls_name = v.pop('class')
