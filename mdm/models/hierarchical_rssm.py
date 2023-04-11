@@ -1,18 +1,16 @@
-import random
-import re
-from typing import Sequence, List, Dict
 import copy
+import random
 from collections import OrderedDict
+from typing import List, Dict
 
-import torch
 from torch.nn import ModuleList, ModuleDict
 
-from mdm.utils.torch_tools import FuzzyDeviceMixin
 from mdm.models.building_blocks import *
 from mdm.models.dynamics_model import DynamicsModel
+from mdm.policies.actor_critic_agent import ActorCriticAgent
+from mdm.utils.torch_tools import FuzzyDeviceMixin
 from mdm.utils.torch_tools import get_dist_params, detach_dist, update_ema_modules
 from mdm.utils.utils import expand_shape_right
-from mdm.policies.actor_critic_agent import ActorCriticAgent
 
 
 class RSSMCell(torch.nn.Module):
@@ -183,15 +181,18 @@ class RSSMCell(torch.nn.Module):
 
     def forward(self,
                 a: torch.Tensor,
-                o_current: torch.Tensor,
-                r_current: torch.Tensor,
-                term_current: torch.Tensor,
-                last_state: Dict[str, torch.Tensor],
+                o_current: torch.Tensor | None = None,
+                r_current: torch.Tensor | None = None,
+                term_current: torch.Tensor | None = None,
+                last_state: Dict[str, torch.Tensor] | None = None,
                 context: Optional[torch.Tensor] = None,
                 use_posterior: bool = True,
                 reconstruct: bool = True,
                 sample_state: bool = True,
                 sample_output: bool = True):
+        if o_current is None and last_state is None:
+            raise ValueError('Need at least (o_current, r_current, term_current) or last_state')
+
         # compute next world state
         if use_posterior:
             h, next_state = self.observe(a, o_current, r_current, term_current, last_state, context, sample_state)
@@ -207,8 +208,8 @@ class RSSMCell(torch.nn.Module):
         else:
             o_dist, o_smpl = None, None
 
-        reconstruction = {'o': o_smpl, 'o_dist': o_dist, 'r_dist': r_dist, 'r': r_smpl, 'terminal_dist': term_dist,
-                          'terminal': term_smpl, 's': s, 'h': h}
+        reconstruction = {'o': o_smpl, 'o_dist': o_dist, 'a': a, 'r_dist': r_dist, 'r': r_smpl,
+                          'terminal_dist': term_dist, 'terminal': term_smpl, 's': s, 'h': h}
 
         return reconstruction, next_state
 
@@ -271,6 +272,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                  warmup_steps: Sequence[Union[int, str]],
                  kl_betas: Sequence[float],
                  kl_reg_betas: Sequence[float],
+                 r_max_agents: Sequence[ActorCriticAgent] = (None,),
+                 goal_seeking_agents: Sequence[ActorCriticAgent] = (None,),
                  ema_regularization: float = 0.0,
                  ema_coeff: float = 0.0):
         super(HierarchicalRSSM, self).__init__()
@@ -284,10 +287,10 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         lvl_k_link = 'o'  # only here to make the loop in eval_step() method work
         lvl_0_filters = {k: IdentityUpwardsFilter() for k in self._filter_names}
         for level in upwards_filters:
-            assert level.keys() <= set(
-                self._filter_names), f'Allowed filter names: {self._filter_names}, found filter names: {level.keys()}'
-            mask_filter = {'mask': MinUpwardsFilter(level['o'].window_size)}
-            level.update(mask_filter)
+            assert level.keys() <= set(self._filter_names), (f'Allowed filter names: {self._filter_names}, found'
+                                                             f'filter names: {level.keys()}')
+            mask_and_action_filters = {'mask': MinUpwardsFilter(level['o'].window_size), 'a': IdentityUpwardsFilter()}
+            level.update(mask_and_action_filters)
         upwards_filters = [ModuleDict(lvl_0_filters)] + [ModuleDict(x) for x in upwards_filters]
 
         # generate EMA shadow copies of the RSSMs
@@ -302,6 +305,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         self.warmup_steps = tuple(warmup_steps)
         self.kl_betas = tuple(kl_betas)
         self.kl_reg_betas = tuple(kl_reg_betas)
+        self.r_max_agents = tuple(r_max_agents)  # no module list to shield the agents from any pytorch functions
+        self.goal_seeking_agents = tuple(goal_seeking_agents)
         self.ema_regularization = ema_regularization
         self.ema_coeff = ema_coeff
 
@@ -313,9 +318,9 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
     def strides(self) -> List[int]:
         return [filters['o'].window_size for filters in self.upwards_filters]
 
-    def forward(self, o, a, r, terminal, n_warmup: int = -1, level: int = 0, memory: Optional[dict] = None,
-                start_state: Optional[dict] = None, sample_state: bool = True, sample_output: bool = True,
-                reconstruct: bool = True, use_ema_modules: bool = False):
+    def forward_old(self, o, a, r, terminal, n_warmup: int = -1, level: int = 0,
+                    memory: Optional[dict] = None, start_state: Optional[dict] = None, sample_state: bool = True,
+                    sample_output: bool = True, reconstruct: bool = True, use_ema_modules: bool = False):
         assert o.shape[0] == r.shape[0] == terminal.shape[0]
 
         device = self.device
@@ -350,40 +355,213 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
         return mem, state
 
+    def observe(self,
+                o: torch.Tensor,
+                a: torch.Tensor,
+                r: torch.Tensor,
+                terminal: torch.Tensor,
+                level: int = 0,
+                memory: Dict[str, torch.Tensor] | None = None,
+                start_state: Dict[str, torch.Tensor] | None = None,
+                sample_state: bool = True,
+                sample_output: bool = True,
+                reconstruct: bool = True,
+                use_ema_modules: bool = False):
+        assert o.shape[0] == a.shape[0] == r.shape[0] == terminal.shape[0], 'Only complete trajectories are supported'
+
+        n_steps, d_batch = a.shape[:2]
+        device = self.device
+        mdl = self._ema_rssm_modules[level] if use_ema_modules else self.rssm_modules[level]
+        memory = {} if memory is None else memory
+        state = mdl.init_state(d_batch, device) if start_state is None else start_state
+
+        # absorb given ground truth data to warmup the model
+        for t in range(n_steps):
+            o_t, a_t, r_t, term_t = o[t], a[t], r[t], terminal[t]
+            pred, state = mdl(a=a_t, o_current=o_t, r_current=r_t, term_current=term_t, last_state=state,
+                              use_posterior=True, sample_state=sample_state, sample_output=sample_output,
+                              reconstruct=reconstruct)
+
+            for k, v in {**pred, **state}.items():
+                data = memory.get(k, [])
+                data.append(v)
+                memory[k] = data
+
+        return memory, state
+
+    def imagine(self,
+                a: torch.Tensor,
+                start_state: Dict[str, torch.Tensor],
+                level: int = 0,
+                memory: Dict[str, torch.Tensor] | None = None,
+                sample_state: bool = True,
+                sample_output: bool = True,
+                reconstruct: bool = True,
+                use_ema_modules: bool = False):
+        n_steps, d_batch = a.shape[:2]
+        mdl = self._ema_rssm_modules[level] if use_ema_modules else self.rssm_modules[level]
+        memory = {} if memory is None else memory
+        state = start_state
+
+        # imagine a trajectory RSSMCell's prior and given actions
+        for t in range(n_steps):
+            a_t = a[t]
+            pred, state = mdl(a=a_t, last_state=state, use_posterior=True, sample_state=sample_state,
+                              sample_output=sample_output, reconstruct=reconstruct)
+
+            for k, v in {**pred, **state}.items():
+                data = memory.get(k, [])
+                data.append(v)
+                memory[k] = data
+
+        return memory, state
+
+    def simulate(self,
+                 o: torch.Tensor,
+                 a: torch.Tensor,
+                 r: torch.Tensor,
+                 terminal: torch.Tensor,
+                 n_steps: int,
+                 start_state: Dict[str, torch.Tensor] | None = None,
+                 agent_goal: torch.Tensor | None = None,
+                 level: int = 0,
+                 memory: Dict[str, torch.Tensor] | None = None,
+                 sample_state: bool = True,
+                 sample_output: bool = True,
+                 reconstruct: bool = True,
+                 use_ema_modules: bool = False):
+        mdl = self._ema_rssm_modules[level] if use_ema_modules else self.rssm_modules[level]
+        memory = {} if memory is None else memory
+
+        # determine whether we need goal-augmented observations or not
+        if agent_goal is None:
+            def get_a(_mem):
+                agent_o = _mem[self.r_max_agents[level][0].observation_key][-1]
+                a_dist, a, v = self.r_max_agents[level][0](agent_o)
+                return a
+        else:
+            def get_a(_mem):
+                agent_o = _mem[self.goal_seeking_agents[level][0].observation_key][-1]
+                a_dist, a, v = self.goal_seeking_agents[level][0](torch.concat([agent_o, agent_goal], dim=-1))
+                return a
+
+        # model warmup, also makes sure we have at least one observation in pred to base action selection on
+        pred, state = self.observe(o=o, a=a, r=r, terminal=terminal, level=level,
+                                   start_state=start_state, sample_state=sample_state, sample_output=sample_output,
+                                   reconstruct=reconstruct, use_ema_modules=use_ema_modules)
+
+        # start simulation using the current agent for action selection
+        for t in range(n_steps):
+            a_t = get_a(pred)
+            pred, state = mdl(a=a_t, last_state=state, use_posterior=False, sample_state=sample_state,
+                              sample_output=sample_output, reconstruct=reconstruct)
+
+            for k, v in {**pred, **state}.items():
+                data = memory.get(k, [])
+                data.append(v)
+                memory[k] = data
+
+        return memory, state
+
+    def forward(self, o, a, r, terminal, n_warmup: int = -1, n_agent_steps: int = 0, level: int = 0,
+                memory: Optional[dict] = None, start_state: Optional[dict] = None, sample_state: bool = True,
+                sample_output: bool = True, reconstruct: bool = True, use_ema_modules: bool = False,
+                agent_goal: torch.Tensor = None):
+        """
+        Implements core functionality of this class. Can continue earlier calls if a start state is provided.
+        The length of the rollout is controlled by the amount of action time steps and :n_agent_steps:.
+        The final rollout length is the amount of provided actions plus the requested :n_agent_steps: on top. After
+        all predefined actions are used up, the internal agent is used for :n_agent_steps:. If ground truth
+        data is provided for a time step, and this time step is within the warmup period, the ground truth data is used.
+        :param o: observations to warm up world model
+        :param a: predefined actions for the rollout
+        :param r: rewards to warm up world model
+        :param terminal: terminal flags to warm up model
+        :param n_warmup: amount of steps where the warm up data is actually used (can be less steps than data is there)
+        :param n_agent_steps: amount of steps where actions are chosen by the internal agent, those are executed after
+        all predefined actions are used up
+        :param level: world model hierarchy index
+        :param memory: optional memory to use for storing generated rollout data, a blank one is created otherwise
+        :param start_state: optional start state for the RSSMCell to continue a previous rollout
+        :param sample_state: toggles sampling of z in RSSMCell
+        :param sample_output: toggles sampling of o, r, terminal predictions in RSSMCell
+        :param reconstruct: toggles generation of o in RSSMCell
+        :param use_ema_modules: toggles whether the live (trained by gradient descent) or EMA RSSMCell should be used
+        :param agent_goal: optional goal to determine whether the actions for :n_agent_steps: come from the reward
+        maximizing or the goal maximizing agent, in case of the latter this is the goal the agent should achieve
+        during this rollout
+        :return: a memory with all the world model related generated data
+        """
+
+        assert o.shape[0] == r.shape[0] == terminal.shape[0]
+
+        device = self.device
+        mdl = self._ema_rssm_modules[level] if use_ema_modules else self.rssm_modules[level]
+        n_predefined_actions, d_batch = a.shape[:2]
+        n_groundtruth_steps = o.shape[0]
+        mem = {} if memory is None else memory
+        state = mdl.init_state(d_batch, device) if start_state is None else start_state
+        n_warmup = n_warmup if n_warmup >= 0 else n_predefined_actions
+        total_steps = n_predefined_actions + n_agent_steps
+
+        assert n_warmup <= n_predefined_actions
+
+        # configure correct agent for action making
+        if n_agent_steps > 0:
+            if agent_goal is None:
+                def get_a(mem):
+                    agent_o = mem[self.r_max_agents[level][0].observation_key][-1]
+                    a_dist, a, v = self.r_max_agents[level][0](agent_o)
+                    return a
+            else:
+                def get_a(mem):
+                    agent_o = mem[self.goal_seeking_agents[level][0].observation_key][-1]
+                    a_dist, a, v = self.goal_seeking_agents[level][0](torch.concat([agent_o, agent_goal], dim=-1))
+                    return a
+
+        # perform simulation
+        for t in range(total_steps):
+            if t < n_groundtruth_steps and t < n_warmup:
+                o_t, r_t, term_t = o[t], r[t], terminal[t]
+                use_posterior = True
+            else:
+                o_t, r_t, term_t = None, None, None
+                use_posterior = False
+
+            a_t = a[t] if t < n_predefined_actions else get_a(mem)
+
+            pred, state = mdl(a=a_t, o_current=o_t, r_current=r_t, term_current=term_t, last_state=state,
+                              use_posterior=use_posterior, sample_state=sample_state, sample_output=sample_output,
+                              reconstruct=reconstruct)
+
+            for k, v in {**pred, **state}.items():
+                data = mem.get(k, [])
+                data.append(v)
+                mem[k] = data
+
+            # store a as well for the record
+            actions = mem.get('a', [])
+            actions.append(a_t)
+            mem['a'] = actions
+
+        return mem, state
+
+
     def _train_step(self,
                     training_data: Dict[str, torch.Tensor],
                     optimizer: torch.optim.Optimizer,
                     **kwargs) -> Dict[str, torch.Tensor]:
-        #before = []
-        #for m in self.rssm_modules:
-        #    for p in m.parameters():
-        #        before.append(p.detach().cpu().numpy())
-        #ema_before = []
-        #for m in self._ema_rssm_modules:
-        #    for p in m.parameters():
-        #        ema_before.append(p.detach().cpu().numpy())
-
         optimizer.zero_grad(set_to_none=True)
         losses_tf = self.eval_step(training_data, force_warmup=[-1 for _ in self.rssm_modules])
-        losses_one = self.eval_step(training_data, force_warmup=[1 for _ in self.rssm_modules])
-        losses_wu = self.eval_step(training_data)
-        losses = {}
-        for k in losses_tf:
-            losses[k] = (losses_tf[k] + losses_wu[k] + losses_one[k]) / 3
+        # losses_one = self.eval_step(training_data, force_warmup=[1 for _ in self.rssm_modules])
+        # losses_wu = self.eval_step(training_data)
+        # losses = {}
+        # for k in losses_tf:
+        #    losses[k] = (losses_tf[k] + losses_wu[k] + losses_one[k]) / 3
+        losses = losses_tf
         losses['total'].backward()
         torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
         optimizer.step()
-
-        #after = []
-        #for m in self.rssm_modules:
-        #    for p in m.parameters():
-        #        after.append(p.detach().cpu().numpy())
-        #ema_after = []
-        #for m in self._ema_rssm_modules:
-        #    for p in m.parameters():
-        #        ema_after.append(p.detach().cpu().numpy())
-        #diff = np.sum([np.abs(x - y).sum() for x, y in zip(before, after)])
-        #ema_diff = np.sum([np.abs(x - y).sum() for x, y in zip(ema_before, ema_after)])
 
         # update ema modules
         rssm_params = [OrderedDict(m.named_parameters()) for m in self.rssm_modules]
@@ -392,9 +570,9 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
         return losses
 
-    def forward_all_hierarchies(self,
-                                training_data: Dict[str, torch.Tensor],
-                                warmup_steps: List[int]):
+    def forward_all_hierarchies_old(self,
+                                    training_data: Dict[str, torch.Tensor],
+                                    warmup_steps: List[int]):
         pred = []
         pred_ema = []
         targets = []
@@ -402,8 +580,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         for i_lvl, (filters, link, n_warmup) in enumerate(zip(self.upwards_filters, self.links, warmup_steps)):
             # prep current lvl input
             filtered_inp_level = {k: filters[k](inp_lvl[k]) for k in inp_lvl}
-            if f'a_{i_lvl}' in training_data:
-                filtered_inp_level['a'] = training_data[f'a_{i_lvl}']
+            # if f'a_{i_lvl}' in training_data:
+            #    filtered_inp_level['a'] = training_data[f'a_{i_lvl}']
 
             n_warmup = random.randint(1, filtered_inp_level['o'].shape[0]) if n_warmup == 'rand' else n_warmup
             # do prediction
@@ -428,6 +606,73 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             targets.append(filtered_inp_level)
         return pred, pred_ema, targets
 
+    def forward_all_hierarchies(self,
+                                training_data: Dict[str, torch.Tensor],
+                                warmup_steps: List[int]):
+        # go through hierarchies
+        # 1. prepare input data
+        # 2. compute targets (only take input data for lvl 0, compute for all other)
+        d_batch = training_data['o'].shape[1]
+        pred = []
+        pred_ema = []
+        targets = []
+        next_input = {k: v for k, v in training_data.items() if k in ('o', 'a', 'r', 'terminal')}
+        for i_lvl, (filters, n_warmup) in enumerate(zip(self.upwards_filters, warmup_steps)):
+            # prep current lvl input
+            if i_lvl == 0:
+                n_agent_steps = 0
+                n_warmup = random.randint(1, next_input['o'].shape[0]) if n_warmup == 'rand' else n_warmup
+            else:  # for all abstract levels, take only init o, r, term and zero action per definition
+                next_input = {k: filters[k](v) for k, v in next_input.items()}
+                n_agent_steps = next_input['o'].shape[0] - 1
+                # remove everything but first time step for levels larger than 0
+                next_input = {k: v[:1] for k, v in next_input.items()}
+                next_input['a'] = torch.zeros((1, d_batch, self.rssm_modules[i_lvl].d_a), device=self.device)
+                n_warmup = 1
+
+            # do prediction
+            mem, _ = self(**next_input, n_warmup=n_warmup, n_agent_steps=n_agent_steps, level=i_lvl,
+                          sample_state=True, sample_output=True, reconstruct=True)
+            if self.ema_regularization:
+                mem_ema, _ = self(**next_input, n_warmup=n_warmup, n_agent_steps=n_agent_steps, level=i_lvl,
+                                  sample_state=True, sample_output=True, reconstruct=True, use_ema_modules=True)
+            else:
+                mem_ema = None
+
+            if i_lvl == 0:  # targets are groundtruth data from real env
+                targets.append(next_input)
+            else:  # targets have to be computed with goal seeking agent on lower level model
+                simulation_groundtruth = self.compute_targets(i_lvl, mem, pred[i_lvl - 1])
+                simulation_groundtruth = {'o': torch.stack(simulation_groundtruth[self.links[i_lvl - 1]]),
+                                          'r': torch.stack(simulation_groundtruth['r']),
+                                          'terminal': torch.stack(simulation_groundtruth['terminal'])}
+                simulation_groundtruth = {k: filters[k](v) for k, v in simulation_groundtruth.items()}
+                simulation_groundtruth = {k: v.detach() for k, v in simulation_groundtruth.items()}
+                targets.append(simulation_groundtruth)
+
+            # temporally abstract for next level
+            next_input = {'o': torch.stack(mem[self.links[i_lvl]]).detach(), 'r': torch.stack(mem['r']),
+                          'terminal': torch.stack(mem['terminal'])}
+
+            pred.append(mem)
+            pred_ema.append(mem_ema)
+        return pred, pred_ema, targets
+
+    def compute_targets(self,
+                        lvl_current: int,
+                        r_max_mem_current: Dict[str, torch.Tensor],
+                        r_max_mem_below: Dict[str, torch.Tensor]):
+        lvl_below = lvl_current - 1
+        chunk_size = self.strides[lvl_current]
+        init_mem = {k: torch.stack(r_max_mem_below[k][:chunk_size]) for k in ('o', 'a', 'r', 'terminal')}  # first chunk
+        # we need these placeholders to call forward()
+        dummies = {k: torch.zeros((0, v.shape[1]), device=self.device) for k, v in init_mem.items()}
+        mem_below, start_state_below = self(**init_mem, level=lvl_below)
+        for intermediate_goal in r_max_mem_current['o'][1:]:
+            mem_below, start_state_below = self(**dummies, start_state=start_state_below, n_agent_steps=chunk_size,
+                                                agent_goal=intermediate_goal, memory=mem_below, level=lvl_below)
+        return mem_below
+
     def _eval_step(self,
                    training_data: Dict[str, torch.Tensor],
                    **kwargs) -> Dict[str, torch.Tensor]:
@@ -448,23 +693,23 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         return losses
 
     def calc_loss(self,
-                  predictions: Dict[str, List[Union[torch.Tensor, torch.distributions.Distribution]]],
-                  predictions_ema: Dict[str, List[Union[torch.Tensor, torch.distributions.Distribution]]],
+                  pred: Dict[str, List[Union[torch.Tensor, torch.distributions.Distribution]]],
+                  pred_ema: Dict[str, List[Union[torch.Tensor, torch.distributions.Distribution]]],
                   targets: Dict[str, torch.Tensor],
                   mask: torch.Tensor,
                   kl_beta: float,
                   kl_reg_beta: float = 0.0):
         mask = 1 - mask  # use mask to multiply irrelevant steps with zero
-        rec_o = self._neg_log_prob(predictions['o_dist'], targets['o'], mask)
-        rec_r = self._neg_log_prob(predictions['r_dist'], targets['r'], mask)
-        rec_term = self._neg_log_prob(predictions['terminal_dist'], targets['terminal'], mask)
-        kl_z = self._kl_div(predictions['z_post'], predictions['z_prior'], mask)
-        kl_reg_z = self._kl_reg(predictions['z_post'], mask)
-        contrastive_z = self.ema_regularization * self._contrastive_loss(predictions['z'], mask)
+        rec_o = self._neg_log_prob(pred['o_dist'], targets['o'], mask)
+        rec_r = self._neg_log_prob(pred['r_dist'], targets['r'], mask)
+        rec_term = self._neg_log_prob(pred['terminal_dist'], targets['terminal'], mask)
+        kl_z = self._kl_div(pred['z_post'], pred['z_prior'], mask)
+        kl_reg_z = self._kl_reg(pred['z_post'], mask)
+        contrastive_z = self.ema_regularization * self._contrastive_loss(pred['z'], mask)
 
-        mae_o = self._mae(predictions['o'], targets['o'], mask)
-        mae_r = self._mae(predictions['r'], targets['r'], mask)
-        mae_term = self._mae(predictions['terminal'], targets['terminal'], mask)
+        mae_o = self._mae(pred['o'], targets['o'], mask)
+        mae_r = self._mae(pred['r'], targets['r'], mask)
+        mae_term = self._mae(pred['terminal'], targets['terminal'], mask)
 
         total = rec_o + rec_r + rec_term + kl_z * kl_beta + kl_reg_z * kl_reg_beta + contrastive_z
         loss = {'total': total, 'o': rec_o, 'r': rec_r, 'term': rec_term, 'kl_z': kl_z, 'kl_reg_z': kl_reg_z,
@@ -472,11 +717,11 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 'contrastive_z': contrastive_z}
 
         if self.ema_regularization:
-            cons_o = self._kl_div(predictions['o_dist'], predictions_ema['o_dist'], mask, detach_qs=True)
-            cons_r = self._kl_div(predictions['r_dist'], predictions_ema['r_dist'], mask, detach_qs=True)
-            cons_term = self._kl_div(predictions['terminal_dist'], predictions_ema['terminal_dist'], mask, detach_qs=True)
-            cons_z_prior = self._kl_div(predictions['z_prior'], predictions_ema['z_prior'], mask, detach_qs=True)
-            cons_z_post = self._kl_div(predictions['z_post'], predictions_ema['z_post'], mask, detach_qs=True)
+            cons_o = self._kl_div(pred['o_dist'], pred_ema['o_dist'], mask, detach_qs=True)
+            cons_r = self._kl_div(pred['r_dist'], pred_ema['r_dist'], mask, detach_qs=True)
+            cons_term = self._kl_div(pred['terminal_dist'], pred_ema['terminal_dist'], mask, detach_qs=True)
+            cons_z_prior = self._kl_div(pred['z_prior'], pred_ema['z_prior'], mask, detach_qs=True)
+            cons_z_post = self._kl_div(pred['z_post'], pred_ema['z_post'], mask, detach_qs=True)
             loss['ema_reg'] = self.ema_regularization * (cons_o + cons_r + cons_term + cons_z_prior + cons_z_post)
             loss['total'] += loss['ema_reg']
 
@@ -487,8 +732,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                           mask: torch.Tensor):
         x = torch.stack(x)
         d_time, d_batch = x.shape[:2]
-        #t_offset = random.randint(1, d_time - 1)
-        #b_offset = random.randint(1, d_batch - 1)
+        # t_offset = random.randint(1, d_time - 1)
+        # b_offset = random.randint(1, d_batch - 1)
         t_offset = 1
         b_offset = 0
         mask = expand_shape_right(mask, x)
