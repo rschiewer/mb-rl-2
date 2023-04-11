@@ -541,11 +541,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 data.append(v)
                 mem[k] = data
 
-            # store a as well for the record
-            actions = mem.get('a', [])
-            actions.append(a_t)
-            mem['a'] = actions
-
         return mem, state
 
     def forward(self, o, a, r, terminal, n_warmup: int = -1, n_agent_steps: int = 0, level: int = 0,
@@ -624,11 +619,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 data.append(v)
                 mem[k] = data
 
-            # store a as well for the record
-            actions = mem.get('a', [])
-            actions.append(a_t)
-            mem['a'] = actions
-
         return mem, state
 
     def _train_step(self,
@@ -693,16 +683,11 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
     def forward_all_hierarchies(self,
                                 training_data: Dict[str, torch.Tensor],
                                 warmup_steps: List[int]):
-        # go through hierarchies
-        # 1. prepare input data
-        # 2. compute targets (only take input data for lvl 0, compute for all other)
         d_batch = training_data['o'].shape[1]
-        pred = []
-        pred_ema = []
-        targets = []
-        next_input = {k: v for k, v in training_data.items() if k in ('o', 'a', 'r', 'terminal')}
+        pred, pred_ema, targets = [], [], []
+        next_input = {k: v for k, v in training_data.items() if k in ('o', 'a', 'r', 'terminal')}  # lvl 0 input
         for i_lvl, (filters, n_warmup) in enumerate(zip(self.upwards_filters, warmup_steps)):
-            # prep current lvl input
+            # preparations
             if i_lvl == 0:
                 n_agent_steps = 0
                 n_warmup = random.randint(1, next_input['o'].shape[0]) if n_warmup == 'rand' else n_warmup
@@ -734,7 +719,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 simulation_groundtruth = {k: v.detach() for k, v in simulation_groundtruth.items()}
                 targets.append(simulation_groundtruth)
 
-            # temporally abstract for next level
+            # choose inputs for next level
             next_input = {'o': torch.stack(mem[self.links[i_lvl]]).detach(), 'r': torch.stack(mem['r']),
                           'terminal': torch.stack(mem['terminal'])}
 
