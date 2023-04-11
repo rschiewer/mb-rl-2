@@ -192,6 +192,8 @@ class RSSMCell(torch.nn.Module):
                 sample_output: bool = True):
         if o_current is None and last_state is None:
             raise ValueError('Need at least (o_current, r_current, term_current) or last_state')
+        if o_current is None and use_posterior:
+            raise ValueError('Can\'t use posterior if no ground truth data is provided')
 
         # compute next world state
         if use_posterior:
@@ -406,7 +408,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         # imagine a trajectory RSSMCell's prior and given actions
         for t in range(n_steps):
             a_t = a[t]
-            pred, state = mdl(a=a_t, last_state=state, use_posterior=True, sample_state=sample_state,
+            pred, state = mdl(a=a_t, last_state=state, use_posterior=False, sample_state=sample_state,
                               sample_output=sample_output, reconstruct=reconstruct)
 
             for k, v in {**pred, **state}.items():
@@ -462,6 +464,89 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 memory[k] = data
 
         return memory, state
+
+    def forward2(self, o, a, r, terminal, n_warmup: int = -1, n_agent_steps: int = 0, level: int = 0,
+                memory: Optional[dict] = None, start_state: Optional[dict] = None, sample_state: bool = True,
+                sample_output: bool = True, reconstruct: bool = True, use_ema_modules: bool = False,
+                agent_goal: torch.Tensor = None):
+        """
+        Implements core functionality of this class. Can continue earlier calls if a start state is provided.
+        The length of the rollout is controlled by the amount of action time steps and :n_agent_steps:.
+        The final rollout length is the amount of provided actions plus the requested :n_agent_steps: on top. After
+        all predefined actions are used up, the internal agent is used for :n_agent_steps:. If ground truth
+        data is provided for a time step, and this time step is within the warmup period, the ground truth data is used.
+        :param o: observations to warm up world model
+        :param a: predefined actions for the rollout
+        :param r: rewards to warm up world model
+        :param terminal: terminal flags to warm up model
+        :param n_warmup: amount of steps where the warm up data is actually used (can be less steps than data is there)
+        :param n_agent_steps: amount of steps where actions are chosen by the internal agent, those are executed after
+        all predefined actions are used up
+        :param level: world model hierarchy index
+        :param memory: optional memory to use for storing generated rollout data, a blank one is created otherwise
+        :param start_state: optional start state for the RSSMCell to continue a previous rollout
+        :param sample_state: toggles sampling of z in RSSMCell
+        :param sample_output: toggles sampling of o, r, terminal predictions in RSSMCell
+        :param reconstruct: toggles generation of o in RSSMCell
+        :param use_ema_modules: toggles whether the live (trained by gradient descent) or EMA RSSMCell should be used
+        :param agent_goal: optional goal to determine whether the actions for :n_agent_steps: come from the reward
+        maximizing or the goal maximizing agent, in case of the latter this is the goal the agent should achieve
+        during this rollout
+        :return: a memory with all the world model related generated data
+        """
+
+        assert o.shape[0] == r.shape[0] == terminal.shape[0]
+
+        device = self.device
+        mdl = self._ema_rssm_modules[level] if use_ema_modules else self.rssm_modules[level]
+        n_predefined_actions, d_batch = a.shape[:2]
+        n_groundtruth_steps = o.shape[0]
+        mem = {} if memory is None else memory
+        state = mdl.init_state(d_batch, device) if start_state is None else start_state
+        n_warmup = n_warmup if n_warmup >= 0 else n_predefined_actions
+        total_steps = n_predefined_actions + n_agent_steps
+
+        assert n_warmup <= n_predefined_actions
+
+        # configure correct agent for action making
+        if n_agent_steps > 0:
+            if agent_goal is None:
+                def get_a(mem):
+                    agent_o = mem[self.r_max_agents[level][0].observation_key][-1]
+                    a_dist, a, v = self.r_max_agents[level][0](agent_o)
+                    return a
+            else:
+                def get_a(mem):
+                    agent_o = mem[self.goal_seeking_agents[level][0].observation_key][-1]
+                    a_dist, a, v = self.goal_seeking_agents[level][0](torch.concat([agent_o, agent_goal], dim=-1))
+                    return a
+
+        # perform simulation
+        for t in range(total_steps):
+            if t < n_groundtruth_steps and t < n_warmup:
+                o_t, r_t, term_t = o[t], r[t], terminal[t]
+                use_posterior = True
+            else:
+                o_t, r_t, term_t = None, None, None
+                use_posterior = False
+
+            a_t = a[t] if t < n_predefined_actions else get_a(mem)
+
+            pred, state = mdl(a=a_t, o_current=o_t, r_current=r_t, term_current=term_t, last_state=state,
+                              use_posterior=use_posterior, sample_state=sample_state, sample_output=sample_output,
+                              reconstruct=reconstruct)
+
+            for k, v in {**pred, **state}.items():
+                data = mem.get(k, [])
+                data.append(v)
+                mem[k] = data
+
+            # store a as well for the record
+            actions = mem.get('a', [])
+            actions.append(a_t)
+            mem['a'] = actions
+
+        return mem, state
 
     def forward(self, o, a, r, terminal, n_warmup: int = -1, n_agent_steps: int = 0, level: int = 0,
                 memory: Optional[dict] = None, start_state: Optional[dict] = None, sample_state: bool = True,
@@ -545,7 +630,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             mem['a'] = actions
 
         return mem, state
-
 
     def _train_step(self,
                     training_data: Dict[str, torch.Tensor],

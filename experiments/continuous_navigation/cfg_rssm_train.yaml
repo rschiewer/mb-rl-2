@@ -79,20 +79,20 @@ mdm:
             lws: [ 32, 32 ]
             layer_norm: True
             activation: "relu"
-   links: [ 'o' ]  # Links for observation filters between RSSM levels
+   links: [ 'z' ]  # Links for observation filters between RSSM levels
    upwards_filters:
       # Connection between RSSM1 and RSSM2
       -  o:
             class: "PickOneUpwardsFilter"
             window_size: 2
             offset: -1
-         a:
-            class: "LearnableUpwardsFilter"
-            window_size: 2
-            lws: [ 32, 32 ]
-            layer_norm: True
-            activation: "relu"
-            model_type: "det_tanh"
+         #a:
+         #   class: "LearnableUpwardsFilter"
+         #   window_size: 2
+         #   lws: [ 32, 32 ]
+         #   layer_norm: True
+         #   activation: "relu"
+         #   model_type: "det_tanh"
          r:
             class: "AvgUpwardsFilter"
             window_size: 2

@@ -151,10 +151,10 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                                                                                               returns, gae_advantages,
                                                                                               model_novelty, discount):
             # ACTOR
-            #advantage = R - v_.detach()
-            #policy_losses.append(-advantage)
+            # advantage = R - v_.detach()
+            # policy_losses.append(-advantage)
             policy_losses.append(-gae_advantage_)
-            #policy_losses.append(-R)
+            # policy_losses.append(-R)
             # ppo_r = a_dist.log_prob(a.detach()) / detach_dist(ema_a_dist).log_prob(a.detach())
             # ppo_actor_loss = -((R.detach() - v.detach()) * torch.clip(ppo_r, torch.tensor(0.8, device=sim_env.device),
             #                                                          torch.tensor(1.2, device=sim_env.device)))
@@ -214,8 +214,11 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         vs, ema_vs = [], []
         a_dists, ema_a_dists, performed_actions = [], [], []
         model_novelties = []
-        mem, env_state = sim_env(o=init_data['o'], a=init_data['a'], r=init_data['r'], terminal=init_data['terminal'],
-                                 level=self.level, use_ema_modules=self.use_slow_world_model)
+        # mem, env_state = sim_env(o=init_data['o'], a=init_data['a'], r=init_data['r'], terminal=init_data['terminal'],
+        #                         level=self.level, use_ema_modules=self.use_slow_world_model)
+        mem, env_state = sim_env.observe(o=init_data['o'], a=init_data['a'], r=init_data['r'],
+                                         terminal=init_data['terminal'], level=self.level,
+                                         use_ema_modules=self.use_slow_world_model)
         for t in range(n_steps):
             if self.goal_seeking:
                 agent_o = torch.concat([mem[self.observation_key][-1], goal], dim=-1)
@@ -223,13 +226,17 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                 agent_o = mem[self.observation_key][-1]
             a_dist, a, v = self(agent_o)
             ema_a_dist, _, ema_v = self(agent_o, use_ema_modules=True)
-            empty_tensor = torch.zeros_like(a)
-            mem, next_env_state = sim_env(o=empty_tensor, a=a.unsqueeze(0), r=empty_tensor, terminal=empty_tensor,
-                                          n_warmup=0, start_state=env_state, level=self.level,
-                                          use_ema_modules=self.use_slow_world_model)
-            mem_ema, _ = sim_env(o=empty_tensor, a=a.unsqueeze(0), r=empty_tensor, terminal=empty_tensor,
-                                 n_warmup=0, start_state=env_state, level=self.level,
-                                 use_ema_modules=self.use_slow_world_model)
+            # empty_tensor = torch.zeros_like(a)
+            # mem, next_env_state = sim_env(o=empty_tensor, a=a.unsqueeze(0), r=empty_tensor, terminal=empty_tensor,
+            #                              n_warmup=0, start_state=env_state, level=self.level,
+            #                              use_ema_modules=self.use_slow_world_model)
+            # mem_ema, _ = sim_env(o=empty_tensor, a=a.unsqueeze(0), r=empty_tensor, terminal=empty_tensor,
+            #                     n_warmup=0, start_state=env_state, level=self.level,
+            #                     use_ema_modules=not self.use_slow_world_model)
+            mem, next_env_state = sim_env.imagine(a=a.unsqueeze(0), start_state=env_state, level=self.level,
+                                                  use_ema_modules=self.use_slow_world_model)
+            mem_ema, _ = sim_env.imagine(a=a.unsqueeze(0), start_state=env_state, level=self.level,
+                                         use_ema_modules=not self.use_slow_world_model)
             if self.goal_seeking:
                 rewards.append(self._goal_similarity(mem[self.observation_key][-1], goal))
             else:
@@ -279,3 +286,32 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
     @staticmethod
     def _goal_similarity(o: torch.Tensor, goal: torch.Tensor):
         return torch.mean((o - goal) ** 2, dim=-1)
+
+
+# helper class for use of agent directly inside RSSM
+class FixedLengthActionSequence:
+
+    def __init__(self,
+                 agent: ActorCriticAgent,
+                 d_batch: int,
+                 n_actions: int):
+        self.agent = agent
+        self.d_batch = d_batch
+        self.max_actions = n_actions
+        self.n_actions_left = n_actions
+
+    @property
+    def shape(self):
+        return self.n_actions_left, self.d_batch, self.agent.d_a
+
+    def __len__(self):
+        return self.n_actions_left
+
+    def next_action(self,
+                    o: torch.Tensor):
+        if self.n_actions_left > 0:
+            a_dist, a, v = self.agent(o)
+            self.n_actions_left -= 1
+        else:
+            raise StopIteration
+        return a
