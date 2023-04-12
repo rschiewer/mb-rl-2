@@ -725,7 +725,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             update_ema_modules(rssm_params, ema_params, self.ema_coeff)
             r_max_agent_losses, goal_seeking_agent_losses = {}, {}
 
-        return {'model': losses, 'r_max_agents:': r_max_agent_losses, 'goal_seeking_agents': goal_seeking_agent_losses}
+        return {'model': losses, 'r_max_agents': r_max_agent_losses, 'goal_seeking_agents': goal_seeking_agent_losses}
 
     def _eval_step(self,
                    training_data: Dict[str, torch.Tensor],
