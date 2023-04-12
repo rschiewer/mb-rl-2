@@ -130,10 +130,6 @@ if __name__ == '__main__':
 
     d_batch = cfg['trainer']['d_batch']
 
-    planners = [CrossentropyPlanner(DistributionType.NORMAL, d_dist=m.d_a, device=model.device, debug_env=None,
-                                    **pln_cfg, a_min=-1.0, a_max=1.0)
-                for pln_cfg, m in zip(planning_cfg['planners'], model.rssm_modules)]
-
     n_envs = cfg['trainer']['collect_envs']
     collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * n_envs)
     collect_env = CacheLastStepVecEnv(collect_env)
