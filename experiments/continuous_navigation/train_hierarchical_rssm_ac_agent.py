@@ -158,7 +158,6 @@ if __name__ == '__main__':
         #avg_score = np.mean([traj['r'].mean() for traj in collected_data_trajectories])
         #logger.log({'average_collected_reward': avg_score}, Scope.TRAIN() / 'agent/', i_step)
 
-
     def collect():
         """
         1.  Observe first env data time step from env initialization
@@ -173,6 +172,9 @@ if __name__ == '__main__':
         10.   Filter out every k-th step as goals for lower level
         11. Execute lowest level actions in real world
         """
+        policy = HierarchicalLatentAgentPolicy(model)
+        collected_data_trajectories = collect_data(collect_env, 25, policy)
+        mem.extend(collected_data_trajectories)
 
 
     def get_batch_train(i_step):
@@ -279,7 +281,8 @@ if __name__ == '__main__':
                     logger.log(_to_np(losses), Scope.TRAIN() / f'goal_seeking_agent/{i_lvl}/', i_step)
 
         if i_step % cfg['trainer']['collect_interval'] == 0:
-            collect_simple()
+            #collect_simple()
+            collect()
 
         # eval
         if cfg['trainer']['eval_interval'] is not None and i_step % cfg['trainer']['eval_interval'] == 0:
