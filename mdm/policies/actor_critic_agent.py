@@ -382,7 +382,8 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
 
     @staticmethod
     def goal_similarity(o: torch.Tensor, goal: torch.Tensor):
-        return torch.mean((o - goal) ** 2, dim=-1, keepdim=True)
+        # NOTE: goal similarity reward is NEGATIVE MSE between current obs and goal obs
+        return - torch.mean((o - goal) ** 2, dim=-1, keepdim=True)
 
 
 # helper class for use of agent directly inside RSSM

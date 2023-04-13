@@ -1,39 +1,18 @@
 import copy
 import os.path
-import random
-import time
-from pathlib import Path
-import io
 import argparse
-import pickle
-from typing import Any
 
 import gym.vector
-import matplotlib.pyplot as plt
-import torch
-import numpy as np
-from PIL import Image
 from tqdm import tqdm
 
 from mdm.utils.utils import *
-from mdm.utils.torch_tools import to_tensors
-from mdm.models.building_blocks import *
 from mdm.models.hierarchical_rssm import HierarchicalRSSM, RSSMCell
-from mdm.models.dynamics_model import DynamicsModel
-from mdm.models.rnn_baseline import RnnBaselineModel
-from mdm.training.dynamics_model_trainer import DynamicsModelTrainer
-from mdm.planning.cem_planner import CrossentropyPlanner
 from mdm.training.offline_rl_driver import OfflineRLDriver, SamplingType
 from mdm.logging.neptune_logger import NeptuneLogger
 from mdm.logging.not_logger import NotLogger
 from mdm.logging.logger import Scope
-from mdm.policies.random_policy import RandomPolicy
-from mdm.policies.predefined_policy import PredefinedPolicy
-from mdm.training.gym_driver import act_in_env, act_in_vector_env
-from mdm.utils.gym_wrappers import CacheLastStepEnv, CacheLastStepVecEnv
-from mdm.utils.torch_tools import extract_sub_distribution, pack_rnn_state, unpack_rnn_state, TensorIndex
+from mdm.models.building_blocks import *
 from mdm.training.gym_driver import collect_data
-from mdm.planning.planning_tools import plan_hierarchical
 from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.policies.agent_policy import *
 
@@ -70,6 +49,7 @@ if __name__ == '__main__':
 
     def make_env_fn():
         return gym.make(f'gym_nav2d:nav2d{map_version}-v0')
+
 
     # infer missing config values for RSSMs
     for i_module, module_args in enumerate(cfg['mdm']['rssm_modules']):
@@ -119,7 +99,9 @@ if __name__ == '__main__':
             instance = globals()[cls_name](**v)
             filter_args[k] = instance
 
-    def gen_agent_fn(level: int, goal_seeking: bool) -> (ActorCriticAgent, torch.optim.Optimizer, torch.optim.Optimizer):
+
+    def gen_agent_fn(level: int, goal_seeking: bool) -> (
+    ActorCriticAgent, torch.optim.Optimizer, torch.optim.Optimizer):
         agent = ActorCriticAgent(level=level, observation_key='z', d_a=cfg['mdm']['rssm_modules'][level].d_a,
                                  d_o=cfg['mdm']['rssm_modules'][level].d_z, min_a=(-1.0, -1.0), max_a=(1.0, 1.0),
                                  ema_coeff=0.99, trust_region_policy_update_beta=0.5, eps_exploration=0.0,
@@ -130,6 +112,7 @@ if __name__ == '__main__':
         critic_optimizer = torch.optim.Adam(agent.critic_net.parameters(), lr=0.01)
         return agent, actor_optimizer, critic_optimizer
 
+
     r_max_agents = []
     goal_seeking_agents = []
     for agent_lvl in range(len(cfg['mdm']['rssm_modules'])):
@@ -137,8 +120,8 @@ if __name__ == '__main__':
         goal_seeking_agents.append(gen_agent_fn(agent_lvl, True))
     goal_seeking_agents[-1] = None  # no homing agent needed on last level
 
-
-    model = HierarchicalRSSM(**cfg['mdm'], r_max_agents=r_max_agents, goal_seeking_agents=goal_seeking_agents).to('cuda')
+    model = HierarchicalRSSM(**cfg['mdm'], r_max_agents=r_max_agents, goal_seeking_agents=goal_seeking_agents).to(
+        'cuda')
     model.training = True
 
     optim_type = cfg['optim'].pop('type')
@@ -165,22 +148,37 @@ if __name__ == '__main__':
     eval_env = CacheLastStepVecEnv(eval_env)
 
 
-    def collect_wrapper():
+    def collect_simple():
         agent = r_max_agents[0][0]
         agent.eval()
         collect_env.reset()
         policy = LatentAgentPolicy(agent, model)
         collected_data_trajectories = collect_data(collect_env, 25, policy)
         mem.extend(collected_data_trajectories)
-        avg_score = np.mean([traj['r'].mean() for traj in collected_data_trajectories])
-        logger.log({'top_planning_score': avg_score}, Scope.TRAIN() / f'planning/level_0', i_step)
+        #avg_score = np.mean([traj['r'].mean() for traj in collected_data_trajectories])
+        #logger.log({'average_collected_reward': avg_score}, Scope.TRAIN() / 'agent/', i_step)
+
+
+    def collect():
+        """
+        1.  Observe first env data time step from env initialization
+        2.  From lower to higher level:
+        3.    Use current level r_max agent to make decision and collect new time step from env
+        4.    If not enough time steps to escalate to next level, GOTO 3
+        5.  Use r_max agent on highest level to make decision
+        6.  From higher to lower level:
+        7.    While above level goals are available:
+        8.      Use current level goal_seeking agent to find proposed goal from above
+        9.      Store achieved model latent states in every step
+        10.   Filter out every k-th step as goals for lower level
+        11. Execute lowest level actions in real world
+        """
 
 
     def get_batch_train(i_step):
         batch = train_driver.interact(d_batch)
         batch = to_tensors(batch, model.device)
         batch = prepare_data(batch)
-
         return batch
 
 
@@ -195,9 +193,9 @@ if __name__ == '__main__':
 
 
     def eval_callback(training_data, i_step: int):
+        """
         # record plots of reward/terminal predictions for expert dataset, we have an expectation how they should look
         model.eval()
-        agent.eval()
         predictions = []
         for i_lvl in range(len(model.rssm_modules)):
             pred, _ = model(training_data['o'], training_data['a'], training_data['r'], training_data['terminal'],
@@ -217,16 +215,19 @@ if __name__ == '__main__':
             plt.plot(term_std, label='std')
             plt.legend()
             logger.log_plot(fig_to_img(fig), Scope.PARAMETERS() / f'model_stats/term_{i_lvl}', i_step)
+        """
 
         # do some planning and see how successfull the model is
+        agent = r_max_agents[0][0]
+        agent.eval()
         eval_env.reset()
         policy = LatentAgentPolicy(agent, model)
         # policy = AgentPolicy(agent)
-        mem = collect_data(eval_env, 25, policy)
+        eval_mem = collect_data(eval_env, 25, policy)
         ep_len = 0
         success = 0
         avg_return = 0
-        for ep in mem:
+        for ep in eval_mem:
             avg_return += np.stack(ep['r']).sum()
             if ep['terminal'].sum() == 1:
                 ep_len += len(ep['terminal'])
@@ -240,62 +241,47 @@ if __name__ == '__main__':
         avg_return /= n_eval_envs
 
         logger.log({'ep_len': ep_len, 'success': success, 'avg_return': avg_return, 'exploration': agent.eps},
-                   Scope.PARAMETERS() / 'model_stats/eval_planning', i_step)
+                   Scope.TEST() / 'flat_agent/', i_step)
         model.train()
+
 
     # start training ---------------------------------------------------------------------------------------------------
 
     logger.start_session()
     model.prepare_for_training()
     for i_step in tqdm(range(cfg['trainer']['n_train_steps']), desc='Training Progress'):
-        if i_step % cfg['trainer']['collect_interval'] == 0:
-            collect_wrapper()
         batch = get_batch_train(i_step)
 
         # train model
         model.train()
-        #model_batch = valid_subtrajectories(batch, 15)
         model_batch = subtrajectories(batch, 15)
-        train_agents = i_step % cfg['trainer']['agent_train_interval'] == 0
-        train_losses = model.train_step(model_batch, opt_model, train_agents=train_agents)
+        # train_agents = i_step % cfg['trainer']['agent_train_interval'] == 0
+        # train_losses = model.train_step(model_batch, opt_model, train_agents=train_agents)
+        train_losses = model.train_step(model_batch, opt_model)
         logger.log(_to_np(train_losses), Scope.TRAIN(), i_step)
 
-        # train agents
-        continue
+        # train agent
         if i_step % cfg['trainer']['agent_train_interval'] == 0:
+            agent_batch = valid_subtrajectories(batch, 1)  # for agents avoid subtrajectories that contain padding
+            # NOTE: lvl 0 needs warmup of 1 to make sure that the agent sees the first observation from the environment
+            warmup_steps = [1] + [1 for _ in range(model.levels - 1)]  # only lvl 0 warmup steps is relevant
+            agent_steps = [20, 10, 5]  # arbitrary, test various values
+            _, _, _, r_max_agents_mem, goal_seeking_agents_mem = model.forward_all_hierarchies(agent_batch, warmup_steps,
+                                                                                               agent_steps)
+            if random.random() < 0.5:  # can only propagate through model once so decide which agent gets training
+                for i_lvl, data_lvl in enumerate(r_max_agents_mem):
+                    agent, opt_act, opt_crit = r_max_agents[i_lvl]
+                    losses = agent.train_step(**data_lvl, actor_optimizer=opt_act, critic_optimizer=opt_crit)
+                    logger.log(_to_np(losses), Scope.TRAIN() / f'r_max_agent/{i_lvl}/', i_step)
+            else:
+                for i_lvl, data_lvl in enumerate(goal_seeking_agents_mem):
+                    agent, opt_act, opt_crit = goal_seeking_agents[i_lvl]
+                    losses = agent.train_step(**data_lvl, actor_optimizer=opt_act, critic_optimizer=opt_crit)
+                    logger.log(_to_np(losses), Scope.TRAIN() / f'goal_seeking_agent/{i_lvl}/', i_step)
 
-            # r_max agents
-            for agent_lvl in range(model.levels):
-                agent, act_opt, crit_opt = r_max_agents[agent_lvl]
-                n_wu = cfg['trainer']['agent_world_model_warmup'][agent_lvl]
-                n_t = cfg['trainer']['agent_sim_steps'][agent_lvl]
+        if i_step % cfg['trainer']['collect_interval'] == 0:
+            collect_simple()
 
-                agent.train()
-                init_data_agent = {k: v[:n_wu] for k, v in batch.items()}
-                interact_data = agent.act_in_sim(init_data=init_data_agent, n_steps=n_t, sim_env=model)
-                agent_loss = agent.sim_train_step(**interact_data, actor_optimizer=act_opt, critic_optimizer=crit_opt)
-                agent.update_exploration()
-                logger.log(agent_loss, Scope.TRAIN() / f'agent_{agent_lvl}')
-
-                # take subtrajectory out of interact_data and train homing agent on that part
-                if agent_lvl < model.levels - 1:
-                    agent, act_opt, crit_opt = goal_seeking_agents[agent_lvl]
-
-            # homing agents
-            for agent_lvl in range(model.levels - 1):
-                agent = r_max_agents[agent_lvl + 1]
-
-                agent, act_opt, crit_opt = goal_seeking_agents[agent_lvl]
-                n_wu = cfg['trainer']['agent_world_model_warmup'][agent_lvl]
-                n_t = cfg['trainer']['agent_sim_steps'][agent_lvl]
-
-                agent.train()
-                init_data_agent = {k: v[:n_wu] for k, v in batch.items()}
-                agent_loss = agent.sim_train_step(sim_env=model, init_data=init_data_agent, n_steps=n_t,
-                                                  actor_optimizer=act_opt, critic_optimizer=crit_opt)
-                agent.update_exploration()
-                logger.log(agent_loss, Scope.TRAIN() / f'agent_{agent_lvl}')
-        continue
         # eval
         if cfg['trainer']['eval_interval'] is not None and i_step % cfg['trainer']['eval_interval'] == 0:
             batch = get_batch_test(i_step)
