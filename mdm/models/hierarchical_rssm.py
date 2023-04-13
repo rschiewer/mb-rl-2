@@ -325,6 +325,10 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
     def strides(self) -> List[int]:
         return [filters['o'].window_size for filters in self.upwards_filters]
 
+    @property
+    def i_top(self) -> int:
+        return self.levels - 1
+
     def forward_old(self, o, a, r, terminal, n_warmup: int = -1, level: int = 0,
                     memory: Optional[dict] = None, start_state: Optional[dict] = None, sample_state: bool = True,
                     sample_output: bool = True, reconstruct: bool = True, use_ema_modules: bool = False):
@@ -429,18 +433,21 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                  start_state: Dict[str, torch.Tensor],
                  agent_goal: torch.Tensor | None = None,
                  level: int = 0,
+                 memory: Dict[str, torch.Tensor] | None = None,
                  agent_memory: Dict[str, torch.Tensor] | None = None,
                  sample_state: bool = True,
                  sample_output: bool = True,
                  reconstruct: bool = True,
                  use_ema_modules: bool = False):
-        if n_steps == 0:
-            return before_history, start_state, {}
 
         mdl = self._ema_rssm_modules[level] if use_ema_modules else self.rssm_modules[level]
         mdl_other = self.rssm_modules[level] if use_ema_modules else self._ema_rssm_modules[level]
         agent_memory = {} if agent_memory is None else agent_memory
+        memory = {} if memory is None else memory
         state = start_state
+
+        if n_steps == 0:
+            return memory, start_state, {}
 
         # determine whether we need goal-augmented observations or not
         if agent_goal is None:
@@ -488,9 +495,9 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             pred_agent['terminal'] = current['terminal']
 
             for k, v in current.items():
-                data = before_history.get(k, [])
+                data = memory.get(k, [])
                 data.append(v)
-                before_history[k] = data
+                memory[k] = data
 
             for k, v in pred_agent.items():
                 data = agent_memory.get(k, [])
@@ -499,7 +506,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
             state = next_state
 
-        return before_history, state, agent_memory
+        return memory, state, agent_memory
 
     def forward2(self, o, a, r, terminal, n_warmup: int = -1, n_agent_steps: int = 0, level: int = 0,
                  memory: Optional[dict] = None, start_state: Optional[dict] = None, sample_state: bool = True,
@@ -649,13 +656,13 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             mem, state = self.observe(**wu_inp, level=i_lvl, start_state=start_state)
             mem, state = self.imagine(next_input['a'][n_wu:], start_state=state, level=i_lvl, memory=mem)
             mem, state, r_max_agent_mem = self.simulate(n_steps=n_as, before_history=mem, start_state=state,
-                                                        level=i_lvl)
+                                                        memory=mem, level=i_lvl)
             if self.ema_regularization:
                 mem_ema, init_state_ema = self.observe(**wu_inp, level=i_lvl, use_ema_modules=True)
                 mem_ema, _ = self.imagine(next_input['a'][n_wu:], start_state=init_state_ema, level=i_lvl,
                                           memory=mem_ema, use_ema_modules=True)
                 mem_ema, _, _ = self.simulate(n_steps=n_as, before_history=mem_ema, start_state=init_state_ema,
-                                              level=i_lvl, use_ema_modules=True)
+                                              memory=mem_ema, level=i_lvl, use_ema_modules=True)
             else:
                 mem_ema = None
 
@@ -699,7 +706,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         for intermediate_goal in mem_current['o'][n_warmup_chunks:]:
             mem_below, state_below, agent_mem = self.simulate(n_steps=chunk_size, before_history=mem_below,
                                                               start_state=state_below, agent_goal=intermediate_goal,
-                                                              level=lvl_below, agent_memory=agent_mem)
+                                                              level=lvl_below, memory=mem_below, agent_memory=agent_mem)
         return mem_below, agent_mem
 
     def _train_step(self,
