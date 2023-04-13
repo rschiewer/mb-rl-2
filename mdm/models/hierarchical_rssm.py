@@ -623,13 +623,13 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             targets.append(filtered_inp_level)
         return pred, pred_ema, targets
 
-    def forward_all_hierarchies(self,
-                                training_data: Dict[str, torch.Tensor],
-                                warmup_steps: Sequence[int],
-                                agent_steps: Sequence[int],
-                                start_state_lvl_0: Dict[str, torch.Tensor] | None = None):
+    def forward_all(self,
+                    trajectory_data: Dict[str, torch.Tensor],
+                    warmup_steps: Sequence[int],
+                    agent_steps: Sequence[int],
+                    start_state_lvl_0: Dict[str, torch.Tensor] | None = None):
         pred, pred_ema, targets, r_max_agents, goal_seeking_agents, states = [], [], [], [], [], []
-        next_input = {k: v for k, v in training_data.items() if k in ('o', 'a', 'r', 'terminal')}  # lvl 0 input
+        next_input = {k: v for k, v in trajectory_data.items() if k in ('o', 'a', 'r', 'terminal')}  # lvl 0 input
         for i_lvl, (filters, n_wu, n_as) in enumerate(zip(self.upwards_filters, warmup_steps, agent_steps)):
             # preparations
             if i_lvl == 0:
@@ -685,14 +685,18 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
     def compute_targets(self,
                         lvl_current: int,
-                        r_max_mem_current: Dict[str, torch.Tensor],
-                        r_max_mem_below: Dict[str, torch.Tensor]):
+                        # usually r_max mem during model training
+                        mem_current: Dict[str, torch.Tensor],
+                        # for initialization of below level, usuall r_max_mem from below during model training
+                        mem_below: Dict[str, torch.Tensor]):
         lvl_below = lvl_current - 1
         chunk_size = self.strides[lvl_current]
-        init_mem = {k: torch.stack(r_max_mem_below[k][:chunk_size]) for k in ('o', 'a', 'r', 'terminal')}  # first chunk
+        # TODO: currently uses only first chunk for warmup, could be varied during training for better results
+        n_warmup_chunks = 1
+        init_mem = {k: torch.stack(mem_below[k][:chunk_size * n_warmup_chunks]) for k in ('o', 'a', 'r', 'terminal')}
         mem_below, state_below = self.observe(**init_mem, level=lvl_below)
         agent_mem = {}
-        for intermediate_goal in r_max_mem_current['o'][1:]:
+        for intermediate_goal in mem_current['o'][n_warmup_chunks:]:
             mem_below, state_below, agent_mem = self.simulate(n_steps=chunk_size, before_history=mem_below,
                                                               start_state=state_below, agent_goal=intermediate_goal,
                                                               level=lvl_below, agent_memory=agent_mem)
@@ -742,7 +746,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                    **kwargs):
         warmup_steps = kwargs.get('force_warmup', self.warmup_steps)
         agent_steps = [0, 10, 5]  # TODO: this is arbitrary and only for testing
-        pred, pred_ema, targets, _, _, _ = self.forward_all_hierarchies(training_data, warmup_steps, agent_steps)
+        pred, pred_ema, targets, _, _, _ = self.forward_all(training_data, warmup_steps, agent_steps)
 
         # model losses
         losses = {}
