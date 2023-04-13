@@ -626,8 +626,9 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
     def forward_all_hierarchies(self,
                                 training_data: Dict[str, torch.Tensor],
                                 warmup_steps: Sequence[int],
-                                agent_steps: Sequence[int]):
-        pred, pred_ema, targets, r_max_agents, goal_seeking_agents = [], [], [], [], []
+                                agent_steps: Sequence[int],
+                                start_state_lvl_0: Dict[str, torch.Tensor] | None = None):
+        pred, pred_ema, targets, r_max_agents, goal_seeking_agents, states = [], [], [], [], [], []
         next_input = {k: v for k, v in training_data.items() if k in ('o', 'a', 'r', 'terminal')}  # lvl 0 input
         for i_lvl, (filters, n_wu, n_as) in enumerate(zip(self.upwards_filters, warmup_steps, agent_steps)):
             # preparations
@@ -636,17 +637,19 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                     n_wu = random.randint(1, next_input['o'].shape[0])
                 elif n_wu == -1:
                     n_wu = next_input['a'].shape[0]
+                start_state = start_state_lvl_0
             else:  # for all abstract levels, take only init o, r, term and zero action per definition
                 next_input = {k: filters[k](v) for k, v in next_input.items()}
                 next_input['a'] = torch.zeros_like(next_input['a'])
                 n_wu = 1
+                start_state = None
 
             # do prediction
             wu_inp = {k: v[:n_wu] for k, v in next_input.items()}
-            mem, init_state = self.observe(**wu_inp, level=i_lvl)
-            mem, init_state = self.imagine(next_input['a'][n_wu:], start_state=init_state, level=i_lvl, memory=mem)
-            mem, _, r_max_agent_mem = self.simulate(n_steps=n_as, before_history=mem, start_state=init_state,
-                                                    level=i_lvl)
+            mem, state = self.observe(**wu_inp, level=i_lvl, start_state=start_state)
+            mem, state = self.imagine(next_input['a'][n_wu:], start_state=state, level=i_lvl, memory=mem)
+            mem, state, r_max_agent_mem = self.simulate(n_steps=n_as, before_history=mem, start_state=state,
+                                                        level=i_lvl)
             if self.ema_regularization:
                 mem_ema, init_state_ema = self.observe(**wu_inp, level=i_lvl, use_ema_modules=True)
                 mem_ema, _ = self.imagine(next_input['a'][n_wu:], start_state=init_state_ema, level=i_lvl,
@@ -677,7 +680,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             pred.append(mem)
             pred_ema.append(mem_ema)
             r_max_agents.append(r_max_agent_mem)
-        return pred, pred_ema, targets, r_max_agents, goal_seeking_agents
+            states.append(state)
+        return pred, pred_ema, targets, r_max_agents, goal_seeking_agents, states
 
     def compute_targets(self,
                         lvl_current: int,
@@ -738,9 +742,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                    **kwargs):
         warmup_steps = kwargs.get('force_warmup', self.warmup_steps)
         agent_steps = [0, 10, 5]  # TODO: this is arbitrary and only for testing
-        pred, pred_ema, targets, r_max_agent_mem, goal_seeking_agent_mem = self.forward_all_hierarchies(training_data,
-                                                                                                        warmup_steps,
-                                                                                                        agent_steps)
+        pred, pred_ema, targets, _, _, _ = self.forward_all_hierarchies(training_data, warmup_steps, agent_steps)
+
         # model losses
         losses = {}
         mask_lvl = training_data['mask']

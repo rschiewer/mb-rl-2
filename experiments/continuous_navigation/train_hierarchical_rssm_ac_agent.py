@@ -266,15 +266,14 @@ if __name__ == '__main__':
             # NOTE: lvl 0 needs warmup of 1 to make sure that the agent sees the first observation from the environment
             warmup_steps = [1] + [1 for _ in range(model.levels - 1)]  # only lvl 0 warmup steps is relevant
             agent_steps = [20, 10, 5]  # arbitrary, test various values
-            _, _, _, r_max_agents_mem, goal_seeking_agents_mem = model.forward_all_hierarchies(agent_batch, warmup_steps,
-                                                                                               agent_steps)
+            _, _, _, r_ag_mem, goal_ag_mem, _ = model.forward_all_hierarchies(agent_batch, warmup_steps, agent_steps)
             if random.random() < 0.5:  # can only propagate through model once so decide which agent gets training
-                for i_lvl, data_lvl in enumerate(r_max_agents_mem):
+                for i_lvl, data_lvl in enumerate(r_ag_mem):
                     agent, opt_act, opt_crit = r_max_agents[i_lvl]
                     losses = agent.train_step(**data_lvl, actor_optimizer=opt_act, critic_optimizer=opt_crit)
                     logger.log(_to_np(losses), Scope.TRAIN() / f'r_max_agent/{i_lvl}/', i_step)
             else:
-                for i_lvl, data_lvl in enumerate(goal_seeking_agents_mem):
+                for i_lvl, data_lvl in enumerate(goal_ag_mem):
                     agent, opt_act, opt_crit = goal_seeking_agents[i_lvl]
                     losses = agent.train_step(**data_lvl, actor_optimizer=opt_act, critic_optimizer=opt_crit)
                     logger.log(_to_np(losses), Scope.TRAIN() / f'goal_seeking_agent/{i_lvl}/', i_step)
