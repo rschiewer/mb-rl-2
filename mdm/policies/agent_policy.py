@@ -126,22 +126,31 @@ class HierarchicalLatentAgentPolicy(Policy):
 
             # prepare data from level below for this level's model to digest
             env_data_below = {k: torch.stack(v) for k, v in self._env_data_below_cache[i_lvl].items()}
-            actions = torch.stack(self._act_cache[i_lvl])  # this should always be one action actually
-            data_filtered = {k: self.model.upwards_filters[i_lvl][k](v) for k, v in env_data_below.items()}
-            # we don't want filtered actions from lower level, but original ones from this
-            data_filtered['a'] = actions
+            actions = self._act_cache[i_lvl].pop(0).unsqueeze(0)  # take oldest action from cache
+            data_filtered = {k: self.model.upwards_filters[i_lvl][k](env_data_below[k]) for k in ('o', 'r', 'terminal')}
+            data_filtered['a'] = actions  # we don't want filtered actions from lower level, but original ones from this
 
             # memorize the latest inputs the model has seen as they are needed for the agent during planning
-            self._last_step_cache[i_lvl] = data_filtered
 
             state = self._current_env_states[i_lvl]
-            _, new_state = self.model.observe(**data_filtered, start_state=state, level=i_lvl,
+            mem, new_state = self.model.observe(**data_filtered, start_state=state, level=i_lvl,
                                               use_ema_modules=self._use_ema_modules)
+            self._last_step_cache[i_lvl] = mem
             self._current_env_states[i_lvl] = new_state
+
+            # store updated state in cache for upper level
+            if i_lvl < self.model.i_top:
+                data = self._env_data_below_cache[i_lvl + 1].get('o', [])
+                data += mem[self.model.links[i_lvl]]
+                self._env_data_below_cache[i_lvl + 1]['o'] = data
+                for k in ('r', 'terminal'):
+                    data = self._env_data_below_cache[i_lvl + 1].get(k, [])
+                    data += mem[k]
+                    self._env_data_below_cache[i_lvl + 1][k] = data
 
             # reset counter and clear caches
             self._next_state_update[i_lvl] = self.model.strides[i_lvl]
-            self._act_cache[i_lvl] = []
+            #self._act_cache[i_lvl] = []
             self._env_data_below_cache[i_lvl] = {}
 
     def _replan(self):
@@ -152,7 +161,9 @@ class HierarchicalLatentAgentPolicy(Policy):
         # 2: use all agents below to go to intermediate goals
 
         # find out if we're in warmup phase and need to plan more than one step ahead
-        if i_highest < self.model.i_top:
+        if i_highest == 0:
+            n_plan_steps = self.model.strides[i_highest + 1] - 1  # first initial zero action
+        elif i_highest < self.model.i_top:
             n_plan_steps = self.model.strides[i_highest + 1]
         else:
             n_plan_steps = 1
@@ -161,9 +172,12 @@ class HierarchicalLatentAgentPolicy(Policy):
         hist, state = self._last_step_cache[i_highest], self._current_env_states[i_highest]
         goal_mem, _, lowest_agent = self.model.simulate(n_steps=n_plan_steps, before_history=hist, start_state=state,
                                                         level=i_highest)
+        self._act_cache[i_highest] = lowest_agent['a']
+
         for i_lvl in reversed(range(1, i_highest + 1)):
             hist, state = self._last_step_cache[i_lvl], self._current_env_states[i_lvl]
             goal_mem, lowest_agent = self._follow_plan(i_lvl, goal_mem, hist, state)
+            self._act_cache[i_lvl - 1] = lowest_agent['a']
 
         self._action_queue += lowest_agent['a']
 
@@ -178,7 +192,7 @@ class HierarchicalLatentAgentPolicy(Policy):
         n_warmup_chunks = 1
         agent_mem_below = {}
         mem_below = {}
-        for goal in mem_current['o'][n_warmup_chunks:]:
+        for goal in mem_current['o']:
             mem_below, state_below, agent_mem_below = self.model.simulate(n_steps=chunk_size,
                                                                           before_history=last_step_below,
                                                                           start_state=state_below, agent_goal=goal,
@@ -190,9 +204,11 @@ class HierarchicalLatentAgentPolicy(Policy):
                  env: Union[CacheLastStepEnv, CacheLastStepVecEnv]):
         if env.current_step == 0:
             self._reset()
+            d_batch = env.last_a.shape[0]
+            self._act_cache = [[torch.zeros((d_batch, rssm.d_a), device=self.model.device, dtype=torch.float32)] for rssm in self.model.rssm_modules]
 
         # first step: store current env ground truth data to cache
-        self._env_data_below_cache[0] = self._prep_step(env)
+        self._env_data_below_cache[0] = {k: v.unbind(0) for k, v in self._prep_step(env).items()}
         self._check_state_update()  # update individual level's states if necessary
 
         # check if re-planning is needed
@@ -200,4 +216,4 @@ class HierarchicalLatentAgentPolicy(Policy):
             self._replan()
 
         action = self._action_queue.pop(0)
-        return action
+        return action.detach().cpu().numpy()
