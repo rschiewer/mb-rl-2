@@ -123,6 +123,7 @@ if __name__ == '__main__':
     model = HierarchicalRSSM(**cfg['mdm'], r_max_agents=r_max_agents, goal_seeking_agents=goal_seeking_agents).to(
         'cuda')
     model.training = True
+    #model = torch.load(here() / 'trained_models/model_MBRL-2422.ptmdl').to('cuda')
 
     optim_type = cfg['optim'].pop('type')
     if optim_type == 'adam':
@@ -172,6 +173,7 @@ if __name__ == '__main__':
         10.   Filter out every k-th step as goals for lower level
         11. Execute lowest level actions in real world
         """
+        collect_env.reset()
         policy = HierarchicalLatentAgentPolicy(model)
         collected_data_trajectories = collect_data(collect_env, 25, policy)
         mem.extend(collected_data_trajectories)
@@ -219,11 +221,12 @@ if __name__ == '__main__':
             logger.log_plot(fig_to_img(fig), Scope.PARAMETERS() / f'model_stats/term_{i_lvl}', i_step)
         """
 
-        # do some planning and see how successfull the model is
-        agent = r_max_agents[0][0]
-        agent.eval()
+        # test hierarchical agent
+        #agent = r_max_agents[0][0]
+        #agent.eval()
         eval_env.reset()
-        policy = LatentAgentPolicy(agent, model)
+        #model.eval()
+        policy = HierarchicalLatentAgentPolicy(model)
         # policy = AgentPolicy(agent)
         eval_mem = collect_data(eval_env, 25, policy)
         ep_len = 0
@@ -242,10 +245,38 @@ if __name__ == '__main__':
         ep_len /= n_eval_envs
         avg_return /= n_eval_envs
 
-        logger.log({'ep_len': ep_len, 'success': success, 'avg_return': avg_return, 'exploration': agent.eps},
-                   Scope.TEST() / 'flat_agent/', i_step)
-        model.train()
+        logger.log({'ep_len': ep_len, 'success': success, 'avg_return': avg_return},
+                   Scope.TEST() / 'hierarchical_agent/', i_step)
+        #model.train()
 
+        # test flat agent
+        agent = r_max_agents[0][0]
+        agent.eval()
+        eval_env.reset()
+        policy = LatentAgentPolicy(agent, model)
+        eval_mem = collect_data(eval_env, 25, policy)
+        ep_len = 0
+        success = 0
+        avg_return = 0
+        for ep in eval_mem:
+            avg_return += np.stack(ep['r']).sum()
+            if ep['terminal'].sum() == 1:
+                ep_len += len(ep['terminal'])
+                success += 1
+            elif ep['terminal'].sum() > 1:
+                raise RuntimeError('More than one terminal flag, there is something wrong!')
+            else:
+                ep_len += len(ep['terminal'])
+        success /= n_eval_envs
+        ep_len /= n_eval_envs
+        avg_return /= n_eval_envs
+
+        logger.log({'ep_len': ep_len, 'success': success, 'avg_return': avg_return},
+                   Scope.TEST() / 'flat_agent/', i_step)
+
+    #for i in tqdm(range(100)):
+    #    eval_callback(None, i)
+    #exit(0)
 
     # start training ---------------------------------------------------------------------------------------------------
 
@@ -268,7 +299,8 @@ if __name__ == '__main__':
             # NOTE: lvl 0 needs warmup of 1 to make sure that the agent sees the first observation from the environment
             warmup_steps = [1] + [1 for _ in range(model.levels - 1)]  # only lvl 0 warmup steps is relevant
             agent_steps = [20, 10, 5]  # arbitrary, test various values
-            _, _, _, r_ag_mem, goal_ag_mem, _ = model.forward_all(agent_batch, warmup_steps, agent_steps)
+            _, _, _, r_ag_mem, goal_ag_mem, _ = model.forward_all(agent_batch, warmup_steps, agent_steps,
+                                                                  agent_training=True)
             if random.random() < 0.5:  # can only propagate through model once so decide which agent gets training
                 for i_lvl, data_lvl in enumerate(r_ag_mem):
                     agent, opt_act, opt_crit = r_max_agents[i_lvl]

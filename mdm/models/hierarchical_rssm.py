@@ -718,23 +718,26 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         chunk_size = self.strides[lvl_current]
         # TODO: currently uses only first chunk for warmup, could be varied during training for better results
         n_warmup_chunks = 1
-        init_mem = {k: torch.stack(mem_below[k][:chunk_size * n_warmup_chunks]) for k in ('o', 'a', 'r', 'terminal')}
-        mem_below, state_below = self.observe(**init_mem, level=lvl_below)
 
-        if agent_training and False:  # use same level's MDP predictions as agent goals
-            goals = mem_below['o'][::chunk_size]
+        # if goal seeking agent is trained, use goals produced by same level MDP to isolate the task of finding goals
+        # from the rest of the training process
+        if agent_training:
+            observation_key = self.goal_seeking_agents[lvl_below][0].observation_key
+            goals = mem_below[observation_key][::chunk_size]
             goals = goals[n_warmup_chunks:]
         else:
             goals = mem_current['o'][n_warmup_chunks:]
 
+        init_data = {k: torch.stack(mem_below[k][:chunk_size * n_warmup_chunks]) for k in ('o', 'a', 'r', 'terminal')}
+        goal_mem_below, state_below = self.observe(**init_data, level=lvl_below)  # mem_below is re-purposed here
         agent_mem = {}
         for g in goals:
-            mem_below, state_below, agent_mem = self.simulate(n_steps=chunk_size, before_history=mem_below,
-                                                              start_state=state_below, agent_goal=g,
-                                                              level=lvl_below, memory=mem_below,
-                                                              agent_memory=agent_mem,
-                                                              agent_training=agent_training)
-        return mem_below, agent_mem
+            goal_mem_below, state_below, agent_mem = self.simulate(n_steps=chunk_size, before_history=goal_mem_below,
+                                                                   start_state=state_below, agent_goal=g,
+                                                                   level=lvl_below, memory=goal_mem_below,
+                                                                   agent_memory=agent_mem,
+                                                                   agent_training=agent_training)
+        return goal_mem_below, agent_mem
 
     def _train_step(self,
                     training_data: Dict[str, torch.Tensor],
@@ -746,32 +749,16 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         losses_wu = self.eval_step(training_data)
 
         losses, r_max_agent_losses, goal_seeking_agent_losses = {}, {}, {}
-        if False:  # disable agent training inside model for now
-            # if kwargs.get('train_agents', False):  # either train agents...
-            if random.random() < 0.5:  # either r_max agents
-                for i_lvl, agent_losses in enumerate(losses_tf['r_max_agents']):  # TODO: should I use losses_tf here?
-                    agent, act_opt, crit_opt = self.r_max_agents[i_lvl]
-                    agent.update_step(agent_losses, act_opt, crit_opt)
-                    loss_level = {k + f'_{i_lvl}': v for k, v in agent_losses.items()}
-                    r_max_agent_losses.update(loss_level)
-            else:  # or goal_seeking agents
-                for i_lvl, agent_losses in enumerate(
-                        losses_tf['goal_seeking_agents']):  # TODO: should I use losses_tf here?
-                    agent, act_opt, crit_opt = self.goal_seeking_agents[i_lvl]
-                    agent.update_step(agent_losses, act_opt, crit_opt)
-                    loss_level = {k + f'_{i_lvl}': v for k, v in agent_losses.items()}
-                    goal_seeking_agent_losses.update(loss_level)
-        else:  # ... or train model
-            for k in losses_tf['model']:
-                losses[k] = (losses_tf['model'][k] + losses_wu['model'][k] + losses_one['model'][k]) / 3
-            losses['total'].backward()
-            torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
-            optimizer.step()
-            # update ema modules
-            rssm_params = [OrderedDict(m.named_parameters()) for m in self.rssm_modules]
-            ema_params = [OrderedDict(m.named_parameters()) for m in self._ema_rssm_modules]
-            update_ema_modules(rssm_params, ema_params, self.ema_coeff)
-            r_max_agent_losses, goal_seeking_agent_losses = {}, {}
+        for k in losses_tf['model']:
+            losses[k] = (losses_tf['model'][k] + losses_wu['model'][k] + losses_one['model'][k]) / 3
+        losses['total'].backward()
+        torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
+        optimizer.step()
+        # update ema modules
+        rssm_params = [OrderedDict(m.named_parameters()) for m in self.rssm_modules]
+        ema_params = [OrderedDict(m.named_parameters()) for m in self._ema_rssm_modules]
+        update_ema_modules(rssm_params, ema_params, self.ema_coeff)
+        r_max_agent_losses, goal_seeking_agent_losses = {}, {}
 
         return {'model': losses, 'r_max_agents': r_max_agent_losses, 'goal_seeking_agents': goal_seeking_agent_losses}
 
