@@ -148,9 +148,9 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                                                                                               returns, gae_advantages,
                                                                                               model_novelty, discount):
             # ACTOR
-            # advantage = R - v_.detach()
-            # policy_losses.append(-advantage)
-            policy_losses.append(-gae_advantage_)
+            advantage = R - v_.detach()
+            policy_losses.append(-advantage)
+            #policy_losses.append(-gae_advantage_)
             # policy_losses.append(-R)
             # ppo_r = a_dist.log_prob(a.detach()) / detach_dist(ema_a_dist).log_prob(a.detach())
             # ppo_actor_loss = -((R.detach() - v.detach()) * torch.clip(ppo_r, torch.tensor(0.8, device=sim_env.device),
