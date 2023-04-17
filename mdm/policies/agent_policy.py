@@ -81,6 +81,19 @@ class LatentAgentPolicy(Policy):
 
 
 class HierarchicalLatentAgentPolicy(Policy):
+    """
+    1.  Observe first env data time step from env initialization
+    2.  From lower to higher level:
+    3.    Use current level r_max agent to make decision and collect new time step from env
+    4.    If not enough time steps to escalate to next level, GOTO 3
+    5.  Use r_max agent on highest level to make decision
+    6.  From higher to lower level:
+    7.    While above level goals are available:
+    8.      Use current level goal_seeking agent to find proposed goal from above
+    9.      Store achieved model latent states in every step
+    10.   Filter out every k-th step as goals for lower level
+    11. Execute lowest level actions in real world
+    """
 
     def __init__(self,
                  model: HierarchicalRSSM,
