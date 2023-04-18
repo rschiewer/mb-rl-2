@@ -7,6 +7,7 @@ from copy import deepcopy
 import gymnasium as gym
 import torch
 import torch.distributions as torchd
+from torch.distributions import Distribution
 import numpy as np
 
 from mdm.utils.torch_tools import layers_with_activation as lwa
@@ -123,14 +124,15 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                   r: list[torch.Tensor],
                   terminal: list[torch.Tensor],
                   v: list[torch.Tensor],
+                  ema_v: list[torch.Tensor],
                   **kwargs):
         # if a terminal transition occurs, the terminal flag is close to 1 and would block out the reward in that step
         # so shift terminals list one to the right and make first element zeros
         del terminal[-1]
         terminal.insert(0, torch.zeros_like(terminal[0]))
 
-        # if self.ema_reg:
-        #    vs = [torch.min(v, ema_v) for v, ema_v in zip(vs, ema_vs)]
+        #if self.ema_reg:
+        #   v = [torch.min(v, ema_v) for v, ema_v in zip(v, ema_v)]
 
         # calculate losses
         # from https://github.com/pytorch/examples/blob/main/reinforcement_learning/actor_critic.py
@@ -205,11 +207,12 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                    r: list[torch.Tensor],
                    terminal: list[torch.Tensor],
                    v: list[torch.Tensor],
+                   ema_v: list[torch.Tensor],
                    actor_optimizer: torch.optim.Optimizer,
                    critic_optimizer: torch.optim.Optimizer,
                    **kwargs):
         losses = self.eval_step(a_dist=a_dist, ema_a_dist=ema_a_dist, model_novelty=model_novelty, a=a, r=r,
-                                terminal=terminal, v=v)
+                                terminal=terminal, v=v, ema_v=ema_v)
         self.update_step(losses, actor_optimizer, critic_optimizer)
         return losses
 
@@ -381,9 +384,15 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         return advantages, discounts
 
     @staticmethod
-    def goal_similarity(o: torch.Tensor, goal: torch.Tensor):
-        # NOTE: goal similarity reward is NEGATIVE MSE between current obs and goal obs
-        return - torch.mean((o - goal) ** 2, dim=-1, keepdim=True)
+    def goal_similarity(o: torch.Tensor | torchd.Distribution, goal: torch.Tensor | torchd.Distribution):
+        if isinstance(o, torch.Tensor) and isinstance(goal, torch.Tensor):
+            return - torch.mean((o - goal) ** 2, dim=-1, keepdim=True)
+        elif isinstance(o, torch.Tensor) and isinstance(goal, Distribution):
+            return torch.mean(goal.log_prob(o), dim=-1, keepdim=True)
+        elif isinstance(o, Distribution) and isinstance(goal, torch.Tensor):
+            return torch.mean(o.log_prob(goal), dim=-1, keepdim=True)
+        else:
+            return - torch.mean(torchd.kl_divergence(goal, o) + torchd.kl_divergence(o, goal), dim=-1, keepdim=True)
 
 
 # helper class for use of agent directly inside RSSM

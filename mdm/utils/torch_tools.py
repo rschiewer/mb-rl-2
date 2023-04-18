@@ -10,8 +10,6 @@ import torch.jit as jit
 from mdm.utils.utils import DataType
 
 RnnStateType = TypeVar('RnnStateType', torch.Tensor, Tuple[torch.Tensor, torch.Tensor])
-TensorData = TypeVar('TensorData', torch.Tensor, Tuple[torch.Tensor, ...], List[torch.Tensor])
-TensorIndex = TypeVar('TensorIndex', int, Sequence[int], torch.Tensor)
 _Placeholder = namedtuple('placeholder', 'device')
 
 
@@ -380,7 +378,7 @@ def detach_dist(d: torch.distributions.Distribution):
 
 
 def extract_sub_distribution(d: torch.distributions.Distribution,
-                             *idx: TensorIndex,
+                             *idx: int | Sequence[int] | torch.Tensor,
                              keepdim: bool = False):
     if len(d.batch_shape) < len(idx):
         raise ValueError(f'Batch size of distribution should be smaller or equal to number of specified indices ',

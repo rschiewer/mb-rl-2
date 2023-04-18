@@ -102,11 +102,13 @@ if __name__ == '__main__':
 
     def gen_agent_fn(level: int, goal_seeking: bool) -> (
     ActorCriticAgent, torch.optim.Optimizer, torch.optim.Optimizer):
+        mu = 0.0 if goal_seeking else 0.1
+        beta = 0.01 if goal_seeking else 0.2
         agent = ActorCriticAgent(level=level, observation_key='z', d_a=cfg['mdm']['rssm_modules'][level].d_a,
                                  d_o=cfg['mdm']['rssm_modules'][level].d_z, min_a=(-1.0, -1.0), max_a=(1.0, 1.0),
-                                 ema_coeff=0.99, trust_region_policy_update_beta=0.5, eps_exploration=0.0,
-                                 eps_exploration_mul=0.0, action_entropy_exploration=0.00,
-                                 model_novelty_exploration=0.1, use_ema_world_model=False, goal_seeking=goal_seeking)
+                                 ema_coeff=0.99, trust_region_policy_update_beta=beta, eps_exploration=0.0,
+                                 eps_exploration_mul=0.0, action_entropy_exploration=0.01,
+                                 model_novelty_exploration=mu, use_ema_world_model=False, goal_seeking=goal_seeking)
         agent = agent.to('cuda')
         actor_optimizer = torch.optim.Adam(agent.actor_net.parameters(), lr=0.001)
         critic_optimizer = torch.optim.Adam(agent.critic_net.parameters(), lr=0.01)
@@ -120,8 +122,8 @@ if __name__ == '__main__':
         goal_seeking_agents.append(gen_agent_fn(agent_lvl, True))
     goal_seeking_agents[-1] = None  # no homing agent needed on last level
 
-    model = HierarchicalRSSM(**cfg['mdm'], r_max_agents=r_max_agents, goal_seeking_agents=goal_seeking_agents).to(
-        'cuda')
+    model = HierarchicalRSSM(**cfg['mdm'], r_max_agents=r_max_agents, goal_seeking_agents=goal_seeking_agents)
+    model = model.to( 'cuda')
     model.training = True
     #model = torch.load(here() / 'trained_models/model_MBRL-2422.ptmdl').to('cuda')
 
@@ -160,19 +162,6 @@ if __name__ == '__main__':
         #logger.log({'average_collected_reward': avg_score}, Scope.TRAIN() / 'agent/', i_step)
 
     def collect():
-        """
-        1.  Observe first env data time step from env initialization
-        2.  From lower to higher level:
-        3.    Use current level r_max agent to make decision and collect new time step from env
-        4.    If not enough time steps to escalate to next level, GOTO 3
-        5.  Use r_max agent on highest level to make decision
-        6.  From higher to lower level:
-        7.    While above level goals are available:
-        8.      Use current level goal_seeking agent to find proposed goal from above
-        9.      Store achieved model latent states in every step
-        10.   Filter out every k-th step as goals for lower level
-        11. Execute lowest level actions in real world
-        """
         collect_env.reset()
         policy = HierarchicalLatentAgentPolicy(model)
         collected_data_trajectories = collect_data(collect_env, 25, policy)
@@ -197,33 +186,6 @@ if __name__ == '__main__':
 
 
     def eval_callback(training_data, i_step: int):
-        """
-        # record plots of reward/terminal predictions for expert dataset, we have an expectation how they should look
-        model.eval()
-        predictions = []
-        for i_lvl in range(len(model.rssm_modules)):
-            pred, _ = model(training_data['o'], training_data['a'], training_data['r'], training_data['terminal'],
-                            cfg['eval']['warmup_steps'][i_lvl], sample_state=True, sample_output=True)
-            predictions.append(pred)
-
-            r_mean = torch.stack(pred['r']).mean(dim=1).squeeze().detach().cpu().numpy()
-            r_std = torch.stack(pred['r']).std(dim=1).squeeze().detach().cpu().numpy()
-            term_mean = torch.stack(pred['terminal']).mean(dim=1).squeeze().detach().cpu().numpy()
-            term_std = torch.stack(pred['terminal']).std(dim=1).squeeze().detach().cpu().numpy()
-
-            plt.plot(r_mean, label='mean')
-            plt.plot(r_std, label='std')
-            plt.legend()
-            logger.log_plot(fig_to_img(fig), Scope.PARAMETERS() / f'model_stats/r_{i_lvl}', i_step)
-            plt.plot(term_mean, label='mean')
-            plt.plot(term_std, label='std')
-            plt.legend()
-            logger.log_plot(fig_to_img(fig), Scope.PARAMETERS() / f'model_stats/term_{i_lvl}', i_step)
-        """
-
-        # test hierarchical agent
-        #agent = r_max_agents[0][0]
-        #agent.eval()
         eval_env.reset()
         #model.eval()
         policy = HierarchicalLatentAgentPolicy(model)
@@ -270,6 +232,7 @@ if __name__ == '__main__':
         success /= n_eval_envs
         ep_len /= n_eval_envs
         avg_return /= n_eval_envs
+        agent.train()
 
         logger.log({'ep_len': ep_len, 'success': success, 'avg_return': avg_return},
                    Scope.TEST() / 'flat_agent/', i_step)
@@ -295,6 +258,10 @@ if __name__ == '__main__':
 
         # train agent
         if i_step % cfg['trainer']['agent_train_interval'] == 0:
+            for a in r_max_agents + goal_seeking_agents:
+                if a is None: continue
+                a[0].train()
+
             agent_batch = valid_subtrajectories(batch, 1)  # for agents avoid subtrajectories that contain padding
             # NOTE: lvl 0 needs warmup of 1 to make sure that the agent sees the first observation from the environment
             warmup_steps = [1] + [1 for _ in range(model.levels - 1)]  # only lvl 0 warmup steps is relevant
@@ -305,12 +272,18 @@ if __name__ == '__main__':
                 for i_lvl, data_lvl in enumerate(r_ag_mem):
                     agent, opt_act, opt_crit = r_max_agents[i_lvl]
                     losses = agent.train_step(**data_lvl, actor_optimizer=opt_act, critic_optimizer=opt_crit)
+                    losses['action_entropy'] = torch.stack([d.entropy() for d in data_lvl['a_dist']]).mean()
+                    losses['obtained_reward'] = torch.stack(data_lvl['r']).mean()
                     logger.log(_to_np(losses), Scope.TRAIN() / f'r_max_agent/{i_lvl}/', i_step)
             else:
                 for i_lvl, data_lvl in enumerate(goal_ag_mem):
                     agent, opt_act, opt_crit = goal_seeking_agents[i_lvl]
                     losses = agent.train_step(**data_lvl, actor_optimizer=opt_act, critic_optimizer=opt_crit)
+                    losses['action_entropy'] = torch.stack([d.entropy() for d in data_lvl['a_dist']]).mean()
+                    losses['obtained_reward'] = torch.stack(data_lvl['r']).mean()
                     logger.log(_to_np(losses), Scope.TRAIN() / f'goal_seeking_agent/{i_lvl}/', i_step)
+            #goal_rewards = goal_ag_mem['r']
+            #logger.log(_to_np())
 
         if i_step % cfg['trainer']['collect_interval'] == 0:
             #collect_simple()

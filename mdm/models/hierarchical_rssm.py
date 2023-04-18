@@ -8,11 +8,12 @@ from typing import List, Dict, Tuple, Any
 import torch
 from torch.nn import ModuleList, ModuleDict
 from torch.distributions import kl_divergence
+import torch.distributions as torchd
 
 from mdm.models.building_blocks import *
 from mdm.models.dynamics_model import DynamicsModel
 from mdm.policies.actor_critic_agent import ActorCriticAgent
-from mdm.utils.torch_tools import FuzzyDeviceMixin
+from mdm.utils.torch_tools import FuzzyDeviceMixin, TensorDict
 from mdm.utils.torch_tools import get_dist_params, detach_dist, update_ema_modules
 from mdm.utils.utils import expand_shape_right
 
@@ -329,43 +330,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
     def i_top(self) -> int:
         return self.levels - 1
 
-    def forward_old(self, o, a, r, terminal, n_warmup: int = -1, level: int = 0,
-                    memory: Optional[dict] = None, start_state: Optional[dict] = None, sample_state: bool = True,
-                    sample_output: bool = True, reconstruct: bool = True, use_ema_modules: bool = False):
-        assert o.shape[0] == r.shape[0] == terminal.shape[0]
-
-        device = self.device
-        mdl = self._ema_rssm_modules[level] if use_ema_modules else self.rssm_modules[level]
-        n_pred_steps, d_batch = a.shape[:2]
-        n_groundtruth_steps = o.shape[0]
-        mem = {} if memory is None else memory
-        state = mdl.init_state(d_batch, device) if start_state is None else start_state
-        n_warmup = n_warmup if n_warmup >= 0 else n_pred_steps
-
-        for t, a_t in enumerate(a):
-            if t < n_groundtruth_steps and t < n_warmup:
-                o_t, r_t, term_t = o[t], r[t], terminal[t]
-                use_posterior = True
-            else:
-                o_t, r_t, term_t = None, None, None
-                use_posterior = False
-
-            pred, state = mdl(a=a_t, o_current=o_t, r_current=r_t, term_current=term_t, last_state=state,
-                              use_posterior=use_posterior, sample_state=sample_state, sample_output=sample_output,
-                              reconstruct=reconstruct)
-
-            for k, v in {**pred, **state}.items():
-                data = mem.get(k, [])
-                data.append(v)
-                mem[k] = data
-
-            # store a as well for the record
-            actions = mem.get('a', [])
-            actions.append(a_t)
-            mem['a'] = actions
-
-        return mem, state
-
     def observe(self,
                 o: torch.Tensor,
                 a: torch.Tensor,
@@ -431,7 +395,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                  n_steps: int,
                  before_history: Dict[str, torch.Tensor],
                  start_state: Dict[str, torch.Tensor],
-                 agent_goal: torch.Tensor | None = None,
+                 agent_goal: torch.Tensor | torchd.Distribution | None = None,
                  level: int = 0,
                  memory: Dict[str, torch.Tensor] | None = None,
                  agent_memory: Dict[str, torch.Tensor] | None = None,
@@ -463,12 +427,21 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             agent = self.goal_seeking_agents[level][0]
 
             def process_o(_step):
-                # TODO: should agent_goal be detached?
-                return torch.concat([_step[agent.observation_key], agent_goal.detach()], dim=-1)
+                if isinstance(agent_goal, torchd.Distribution):
+                    _goal = agent_goal.mode.detach()
+                else:
+                    _goal = agent_goal.detach()
+                return torch.concat([_step[agent.observation_key], _goal], dim=-1)
 
             def process_r(_step):
-                # TODO: should agent_goal be detached?
-                return agent.goal_similarity(_step[agent.observation_key], agent_goal.detach())
+                if isinstance(agent_goal, torchd.Distribution):
+                    _goal = detach_dist(agent_goal)
+                else:
+                    _goal = agent_goal.detach()
+                key = agent.observation_key
+                if agent.observation_key == 'z':
+                    key = 'z_prior'
+                return agent.goal_similarity(_step[key], _goal)
 
         if agent_training:
             def agent_decide(_step):
@@ -520,127 +493,17 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
         return memory, state, agent_memory
 
-    def forward2(self, o, a, r, terminal, n_warmup: int = -1, n_agent_steps: int = 0, level: int = 0,
-                 memory: Optional[dict] = None, start_state: Optional[dict] = None, sample_state: bool = True,
-                 sample_output: bool = True, reconstruct: bool = True, use_ema_modules: bool = False,
-                 agent_goal: torch.Tensor = None):
-
-        # TODO: This version of forward should delegate to observe(), imagine() and simulate() and just orchestrate them
+    def forward_l0(self):
+        # TODO
         pass
 
-    def forward(self, o, a, r, terminal, n_warmup: int = -1, n_agent_steps: int = 0, level: int = 0,
-                memory: Optional[dict] = None, start_state: Optional[dict] = None, sample_state: bool = True,
-                sample_output: bool = True, reconstruct: bool = True, use_ema_modules: bool = False,
-                agent_goal: torch.Tensor = None):
-        """
-        Implements core functionality of this class. Can continue earlier calls if a start state is provided.
-        The length of the rollout is controlled by the amount of action time steps and :n_agent_steps:.
-        The final rollout length is the amount of provided actions plus the requested :n_agent_steps: on top. After
-        all predefined actions are used up, the internal agent is used for :n_agent_steps:. If ground truth
-        data is provided for a time step, and this time step is within the warmup period, the ground truth data is used.
-        :param o: observations to warm up world model
-        :param a: predefined actions for the rollout
-        :param r: rewards to warm up world model
-        :param terminal: terminal flags to warm up model
-        :param n_warmup: amount of steps where the warm up data is actually used (can be less steps than data is there)
-        :param n_agent_steps: amount of steps where actions are chosen by the internal agent, those are executed after
-        all predefined actions are used up
-        :param level: world model hierarchy index
-        :param memory: optional memory to use for storing generated rollout data, a blank one is created otherwise
-        :param start_state: optional start state for the RSSMCell to continue a previous rollout
-        :param sample_state: toggles sampling of z in RSSMCell
-        :param sample_output: toggles sampling of o, r, terminal predictions in RSSMCell
-        :param reconstruct: toggles generation of o in RSSMCell
-        :param use_ema_modules: toggles whether the live (trained by gradient descent) or EMA RSSMCell should be used
-        :param agent_goal: optional goal to determine whether the actions for :n_agent_steps: come from the reward
-        maximizing or the goal maximizing agent, in case of the latter this is the goal the agent should achieve
-        during this rollout
-        :return: a memory with all the world model related generated data
-        """
+    def forward_latent(self):
+        # TODO
+        pass
 
-        assert o.shape[0] == r.shape[0] == terminal.shape[0]
-
-        device = self.device
-        mdl = self._ema_rssm_modules[level] if use_ema_modules else self.rssm_modules[level]
-        n_predefined_actions, d_batch = a.shape[:2]
-        n_groundtruth_steps = o.shape[0]
-        mem = {} if memory is None else memory
-        state = mdl.init_state(d_batch, device) if start_state is None else start_state
-        n_warmup = n_warmup if n_warmup >= 0 else n_predefined_actions
-        total_steps = n_predefined_actions + n_agent_steps
-
-        assert n_warmup <= n_predefined_actions
-
-        # configure correct agent for action making
-        if n_agent_steps > 0:
-            if agent_goal is None:
-                def get_a(mem):
-                    agent_o = mem[self.r_max_agents[level][0].observation_key][-1]
-                    a_dist, a, v = self.r_max_agents[level][0](agent_o)
-                    return a
-            else:
-                def get_a(mem):
-                    agent_o = mem[self.goal_seeking_agents[level][0].observation_key][-1]
-                    a_dist, a, v = self.goal_seeking_agents[level][0](torch.concat([agent_o, agent_goal], dim=-1))
-                    return a
-
-        # perform simulation
-        for t in range(total_steps):
-            if t < n_groundtruth_steps and t < n_warmup:
-                o_t, r_t, term_t = o[t], r[t], terminal[t]
-                use_posterior = True
-            else:
-                o_t, r_t, term_t = None, None, None
-                use_posterior = False
-
-            a_t = a[t] if t < n_predefined_actions else get_a(mem)
-
-            pred, state = mdl(a=a_t, o_current=o_t, r_current=r_t, term_current=term_t, last_state=state,
-                              use_posterior=use_posterior, sample_state=sample_state, sample_output=sample_output,
-                              reconstruct=reconstruct)
-
-            for k, v in {**pred, **state}.items():
-                data = mem.get(k, [])
-                data.append(v)
-                mem[k] = data
-
-        return mem, state
-
-    def forward_all_hierarchies_old(self,
-                                    training_data: Dict[str, torch.Tensor],
-                                    warmup_steps: List[int]):
-        pred = []
-        pred_ema = []
-        targets = []
-        inp_lvl = {k: v for k, v in training_data.items() if k in ('o', 'a', 'r', 'terminal')}  # ground truth data lvl0
-        for i_lvl, (filters, link, n_warmup) in enumerate(zip(self.upwards_filters, self.links, warmup_steps)):
-            # prep current lvl input
-            filtered_inp_level = {k: filters[k](inp_lvl[k]) for k in inp_lvl}
-            # if f'a_{i_lvl}' in training_data:
-            #    filtered_inp_level['a'] = training_data[f'a_{i_lvl}']
-
-            n_warmup = random.randint(1, filtered_inp_level['o'].shape[0]) if n_warmup == 'rand' else n_warmup
-            # do prediction
-            mem, _ = self(**filtered_inp_level, n_warmup=n_warmup, level=i_lvl, sample_state=True,
-                          sample_output=True, reconstruct=True)
-            if self.ema_regularization:
-                mem_ema, _ = self(**filtered_inp_level, n_warmup=n_warmup, level=i_lvl, sample_state=True,
-                                  sample_output=True, reconstruct=True, use_ema_modules=True)
-            else:
-                mem_ema = None
-            # prep next lvl input
-            # TODO: just a test, remove again later
-            # inp_lvl = {'o': torch.stack(mem[link]), 'a': filtered_inp_level['a'], 'r': torch.stack(mem['r']),
-            #           'terminal': torch.stack(mem['terminal'])}
-            inp_lvl = {'o': torch.stack(mem[link]).detach(), 'a': filtered_inp_level['a'], 'r': filtered_inp_level['r'],
-                       'terminal': filtered_inp_level['terminal']}
-            # inp_lvl = {'o': filtered_inp_level['o'], 'a': filtered_inp_level['a'], 'r': filtered_inp_level['r'],
-            #           'terminal': filtered_inp_level['terminal']}
-
-            pred.append(mem)
-            pred_ema.append(mem_ema)
-            targets.append(filtered_inp_level)
-        return pred, pred_ema, targets
+    def ground_levels(self,
+                      trajectory_data: Dict[str, torch.Tensor]):
+        pass
 
     def forward_all(self,
                     trajectory_data: Dict[str, torch.Tensor],
@@ -672,6 +535,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             mem, state = self.imagine(next_input['a'][n_wu:], start_state=state, level=i_lvl, memory=mem)
             mem, state, r_max_agent_mem = self.simulate(n_steps=n_as, before_history=mem, start_state=state,
                                                         memory=mem, level=i_lvl, agent_training=agent_training)
+            # TODO: more warmup steps in higher levels could be achieved by first doing simulation with one warmup step
+            # TODO: and then collecting the groundtruth data from below to train the autoencoder part of the model
             if self.ema_regularization:
                 mem_ema, init_state_ema = self.observe(**wu_inp, level=i_lvl, use_ema_modules=True)
                 mem_ema, _ = self.imagine(next_input['a'][n_wu:], start_state=init_state_ema, level=i_lvl,
@@ -723,21 +588,23 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         # from the rest of the training process
         if agent_training:
             observation_key = self.goal_seeking_agents[lvl_below][0].observation_key
+            if observation_key == 'z':
+                observation_key = 'z_prior'
             goals = mem_below[observation_key][::chunk_size]
             goals = goals[n_warmup_chunks:]
         else:
-            goals = mem_current['o'][n_warmup_chunks:]
+            goals = mem_current['o_dist'][n_warmup_chunks:]
 
         init_data = {k: torch.stack(mem_below[k][:chunk_size * n_warmup_chunks]) for k in ('o', 'a', 'r', 'terminal')}
-        goal_mem_below, state_below = self.observe(**init_data, level=lvl_below)  # mem_below is re-purposed here
+        new_mem_below, state_below = self.observe(**init_data, level=lvl_below)  # mem_below is re-purposed here
         agent_mem = {}
         for g in goals:
-            goal_mem_below, state_below, agent_mem = self.simulate(n_steps=chunk_size, before_history=goal_mem_below,
-                                                                   start_state=state_below, agent_goal=g,
-                                                                   level=lvl_below, memory=goal_mem_below,
-                                                                   agent_memory=agent_mem,
-                                                                   agent_training=agent_training)
-        return goal_mem_below, agent_mem
+            new_mem_below, state_below, agent_mem = self.simulate(n_steps=chunk_size, before_history=new_mem_below,
+                                                                  start_state=state_below, agent_goal=g,
+                                                                  level=lvl_below, memory=new_mem_below,
+                                                                  agent_memory=agent_mem,
+                                                                  agent_training=agent_training)
+        return new_mem_below, agent_mem
 
     def _train_step(self,
                     training_data: Dict[str, torch.Tensor],
@@ -887,3 +754,163 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         y_hats = torch.stack(y_hats, dim=0)
         mask = mask.reshape(*mask.shape + (1,) * (y_hats.ndim - mask.ndim))  # append size 1 dimensions for broadcasting
         return torch.mean(torch.abs(ys - y_hats) * mask)
+
+    def forward2(self, o, a, r, terminal, n_warmup: int = -1, n_agent_steps: int = 0, level: int = 0,
+                 memory: Optional[dict] = None, start_state: Optional[dict] = None, sample_state: bool = True,
+                 sample_output: bool = True, reconstruct: bool = True, use_ema_modules: bool = False,
+                 agent_goal: torch.Tensor = None):
+
+        # TODO: This version of forward should delegate to observe(), imagine() and simulate() and just orchestrate them
+        pass
+
+    def forward_old(self, o, a, r, terminal, n_warmup: int = -1, level: int = 0,
+                    memory: Optional[dict] = None, start_state: Optional[dict] = None, sample_state: bool = True,
+                    sample_output: bool = True, reconstruct: bool = True, use_ema_modules: bool = False):
+        assert o.shape[0] == r.shape[0] == terminal.shape[0]
+
+        device = self.device
+        mdl = self._ema_rssm_modules[level] if use_ema_modules else self.rssm_modules[level]
+        n_pred_steps, d_batch = a.shape[:2]
+        n_groundtruth_steps = o.shape[0]
+        mem = {} if memory is None else memory
+        state = mdl.init_state(d_batch, device) if start_state is None else start_state
+        n_warmup = n_warmup if n_warmup >= 0 else n_pred_steps
+
+        for t, a_t in enumerate(a):
+            if t < n_groundtruth_steps and t < n_warmup:
+                o_t, r_t, term_t = o[t], r[t], terminal[t]
+                use_posterior = True
+            else:
+                o_t, r_t, term_t = None, None, None
+                use_posterior = False
+
+            pred, state = mdl(a=a_t, o_current=o_t, r_current=r_t, term_current=term_t, last_state=state,
+                              use_posterior=use_posterior, sample_state=sample_state, sample_output=sample_output,
+                              reconstruct=reconstruct)
+
+            for k, v in {**pred, **state}.items():
+                data = mem.get(k, [])
+                data.append(v)
+                mem[k] = data
+
+            # store a as well for the record
+            actions = mem.get('a', [])
+            actions.append(a_t)
+            mem['a'] = actions
+
+        return mem, state
+
+    def forward(self, o, a, r, terminal, n_warmup: int = -1, n_agent_steps: int = 0, level: int = 0,
+                memory: Optional[dict] = None, start_state: Optional[dict] = None, sample_state: bool = True,
+                sample_output: bool = True, reconstruct: bool = True, use_ema_modules: bool = False,
+                agent_goal: torch.Tensor = None):
+        """
+        Implements core functionality of this class. Can continue earlier calls if a start state is provided.
+        The length of the rollout is controlled by the amount of action time steps and :n_agent_steps:.
+        The final rollout length is the amount of provided actions plus the requested :n_agent_steps: on top. After
+        all predefined actions are used up, the internal agent is used for :n_agent_steps:. If ground truth
+        data is provided for a time step, and this time step is within the warmup period, the ground truth data is used.
+        :param o: observations to warm up world model
+        :param a: predefined actions for the rollout
+        :param r: rewards to warm up world model
+        :param terminal: terminal flags to warm up model
+        :param n_warmup: amount of steps where the warm up data is actually used (can be less steps than data is there)
+        :param n_agent_steps: amount of steps where actions are chosen by the internal agent, those are executed after
+        all predefined actions are used up
+        :param level: world model hierarchy index
+        :param memory: optional memory to use for storing generated rollout data, a blank one is created otherwise
+        :param start_state: optional start state for the RSSMCell to continue a previous rollout
+        :param sample_state: toggles sampling of z in RSSMCell
+        :param sample_output: toggles sampling of o, r, terminal predictions in RSSMCell
+        :param reconstruct: toggles generation of o in RSSMCell
+        :param use_ema_modules: toggles whether the live (trained by gradient descent) or EMA RSSMCell should be used
+        :param agent_goal: optional goal to determine whether the actions for :n_agent_steps: come from the reward
+        maximizing or the goal maximizing agent, in case of the latter this is the goal the agent should achieve
+        during this rollout
+        :return: a memory with all the world model related generated data
+        """
+        raise DeprecationWarning('This method is not maintained anymore and shouldn\'t be used')
+
+        assert o.shape[0] == r.shape[0] == terminal.shape[0]
+
+        device = self.device
+        mdl = self._ema_rssm_modules[level] if use_ema_modules else self.rssm_modules[level]
+        n_predefined_actions, d_batch = a.shape[:2]
+        n_groundtruth_steps = o.shape[0]
+        mem = {} if memory is None else memory
+        state = mdl.init_state(d_batch, device) if start_state is None else start_state
+        n_warmup = n_warmup if n_warmup >= 0 else n_predefined_actions
+        total_steps = n_predefined_actions + n_agent_steps
+
+        assert n_warmup <= n_predefined_actions
+
+        # configure correct agent for action making
+        if n_agent_steps > 0:
+            if agent_goal is None:
+                def get_a(mem):
+                    agent_o = mem[self.r_max_agents[level][0].observation_key][-1]
+                    a_dist, a, v = self.r_max_agents[level][0](agent_o)
+                    return a
+            else:
+                def get_a(mem):
+                    agent_o = mem[self.goal_seeking_agents[level][0].observation_key][-1]
+                    a_dist, a, v = self.goal_seeking_agents[level][0](torch.concat([agent_o, agent_goal], dim=-1))
+                    return a
+
+        # perform simulation
+        for t in range(total_steps):
+            if t < n_groundtruth_steps and t < n_warmup:
+                o_t, r_t, term_t = o[t], r[t], terminal[t]
+                use_posterior = True
+            else:
+                o_t, r_t, term_t = None, None, None
+                use_posterior = False
+
+            a_t = a[t] if t < n_predefined_actions else get_a(mem)
+
+            pred, state = mdl(a=a_t, o_current=o_t, r_current=r_t, term_current=term_t, last_state=state,
+                              use_posterior=use_posterior, sample_state=sample_state, sample_output=sample_output,
+                              reconstruct=reconstruct)
+
+            for k, v in {**pred, **state}.items():
+                data = mem.get(k, [])
+                data.append(v)
+                mem[k] = data
+
+        return mem, state
+
+    def forward_all_hierarchies_old(self,
+                                    training_data: Dict[str, torch.Tensor],
+                                    warmup_steps: List[int]):
+        pred = []
+        pred_ema = []
+        targets = []
+        inp_lvl = {k: v for k, v in training_data.items() if k in ('o', 'a', 'r', 'terminal')}  # ground truth data lvl0
+        for i_lvl, (filters, link, n_warmup) in enumerate(zip(self.upwards_filters, self.links, warmup_steps)):
+            # prep current lvl input
+            filtered_inp_level = {k: filters[k](inp_lvl[k]) for k in inp_lvl}
+            # if f'a_{i_lvl}' in training_data:
+            #    filtered_inp_level['a'] = training_data[f'a_{i_lvl}']
+
+            n_warmup = random.randint(1, filtered_inp_level['o'].shape[0]) if n_warmup == 'rand' else n_warmup
+            # do prediction
+            mem, _ = self(**filtered_inp_level, n_warmup=n_warmup, level=i_lvl, sample_state=True,
+                          sample_output=True, reconstruct=True)
+            if self.ema_regularization:
+                mem_ema, _ = self(**filtered_inp_level, n_warmup=n_warmup, level=i_lvl, sample_state=True,
+                                  sample_output=True, reconstruct=True, use_ema_modules=True)
+            else:
+                mem_ema = None
+            # prep next lvl input
+            # TODO: just a test, remove again later
+            # inp_lvl = {'o': torch.stack(mem[link]), 'a': filtered_inp_level['a'], 'r': torch.stack(mem['r']),
+            #           'terminal': torch.stack(mem['terminal'])}
+            inp_lvl = {'o': torch.stack(mem[link]).detach(), 'a': filtered_inp_level['a'], 'r': filtered_inp_level['r'],
+                       'terminal': filtered_inp_level['terminal']}
+            # inp_lvl = {'o': filtered_inp_level['o'], 'a': filtered_inp_level['a'], 'r': filtered_inp_level['r'],
+            #           'terminal': filtered_inp_level['terminal']}
+
+            pred.append(mem)
+            pred_ema.append(mem_ema)
+            targets.append(filtered_inp_level)
+        return pred, pred_ema, targets
