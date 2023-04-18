@@ -1,21 +1,14 @@
-from typing import Tuple, Union, Iterable, List, Sequence, TypeVar, Dict
-from enum import Enum
+from typing import Tuple, Union, List, Sequence, TypeVar, Dict
 from collections import namedtuple, OrderedDict
 from functools import reduce, wraps
 from math import ceil
 
 import torch
-import torch.jit as jit
 
 from mdm.utils.utils import DataType
 
 RnnStateType = TypeVar('RnnStateType', torch.Tensor, Tuple[torch.Tensor, torch.Tensor])
 _Placeholder = namedtuple('placeholder', 'device')
-
-
-class Norm(Enum):
-    LAYER = 0
-    BATCH = 1
 
 
 class DeviceMixin:
@@ -507,12 +500,6 @@ def pad_first_timestep(o: torch.Tensor,
 @torch.jit.script
 def update_ema_modules(modules: List[Dict[str, torch.Tensor]], ema_modules: List[Dict[str, torch.Tensor]],
                        coeff: float):
-    # with torch.no_grad():
-    #    for m, ema_m in zip(modules, ema_modules):
-    #        params_m = OrderedDict(m.named_parameters())
-    #        params_ema_m = OrderedDict(ema_m.named_parameters())
-    #        for name, param_m in params_m.items():
-    #            params_ema_m[name].sub_(0.99 * (params_ema_m[name] - param_m))
     with torch.no_grad():
         for params_m, params_ema_m in zip(modules, ema_modules):
             for name, param_m in params_m.items():
