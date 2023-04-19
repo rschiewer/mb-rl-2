@@ -103,7 +103,6 @@ class HierarchicalLatentAgentPolicy(Policy):
         self._use_ema_modules = use_ema_modules
         self._current_env_states = [None for _ in range(model.levels)]
         self._env_data_below_cache = [{} for _ in range(model.levels)]
-        self._last_step_cache = [{} for _ in range(model.levels)]
         self._act_cache = [[] for _ in range(model.levels)]
         self._action_queue = []
         self._next_state_update = model.strides
@@ -111,7 +110,6 @@ class HierarchicalLatentAgentPolicy(Policy):
     def _reset(self):
         self._current_env_states = [None for _ in range(self.model.levels)]
         self._env_data_below_cache = [{} for _ in range(self.model.levels)]
-        self._last_step_cache = [{} for _ in range(self.model.levels)]
         self._act_cache = [[] for _ in range(self.model.levels)]
         self._next_state_update = self.model.strides
 
@@ -147,7 +145,6 @@ class HierarchicalLatentAgentPolicy(Policy):
             state = self._current_env_states[i_lvl]
             mem, new_state = self.model.observe(**data_filtered, start_state=state, level=i_lvl,
                                                 use_ema_modules=self._use_ema_modules)
-            self._last_step_cache[i_lvl] = mem
             self._current_env_states[i_lvl] = new_state
 
             # store updated state in cache for upper level
@@ -182,8 +179,7 @@ class HierarchicalLatentAgentPolicy(Policy):
 
         # highest level
         state = self._current_env_states[i_highest]
-        goal_mem, _, lowest_agent = self.model.simulate(n_steps=n_plan_steps, start_state=state,
-                                                        level=i_highest)
+        goal_mem, _, lowest_agent = self.model.simulate(n_steps=n_plan_steps, start_state=state, level=i_highest)
         self._act_cache[i_highest] = lowest_agent['a']
 
         for i_lvl in reversed(range(1, i_highest + 1)):

@@ -314,8 +314,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         # from the rest of the training process
         if agent_training:
             observation_key = self.goal_seeking_agents[lvl_below][0].observation_key
-            if observation_key == 'z':
-                observation_key = 'z_prior'
+            #if observation_key == 'z':
+            #    observation_key = 'z_prior'
             goals = mem_below[observation_key][::chunk_size]
             goals = goals[n_warmup_chunks:]
         else:
