@@ -66,17 +66,16 @@ class LatentAgentPolicy(Policy):
         truncated = torch.from_numpy(env.last_trunc).unsqueeze(0).to(device=device, dtype=torch.float32)
         if isinstance(env, CacheLastStepEnv):  # add batch dim if unbatched env
             o, a, r, terminal, truncated = [x.unsqueeze(1) for x in (o, a, r, terminal, truncated)]
-
+        # prepare data
         env_data = {'o': o, 'a': a, 'r': r, 'terminal': terminal, 'truncated': truncated, 'mask': torch.empty_like(r)}
         env_data = prepare_data(env_data)
-        # mem, self._current_env_state = self.model(o=env_data['o'], a=env_data['a'], r=env_data['r'],
-        #                                          terminal=env_data['terminal'], start_state=self._current_env_state,
-        #                                          level=self.agent.level, use_ema_modules=self._use_ema_modules)
-        mem, self._current_env_state = self.model.observe(o=env_data['o'], a=env_data['a'], r=env_data['r'],
-                                                          terminal=env_data['terminal'],
-                                                          start_state=self._current_env_state,
-                                                          level=self.agent.level, use_ema_modules=self._use_ema_modules)
-        a_dist, a, v = self.agent(mem[self.agent.observation_key][-1])
+        # digest new groundtruth data in level 0 model
+        _, self._current_env_state = self.model.observe(o=env_data['o'], a=env_data['a'], r=env_data['r'],
+                                                        terminal=env_data['terminal'],
+                                                        start_state=self._current_env_state,
+                                                        level=self.agent.level, use_ema_modules=self._use_ema_modules)
+        agent_o = self.agent.preproc_o(self._current_env_state)
+        a_dist, a, v = self.agent(agent_o)
         return a.detach().cpu().numpy()
 
 
@@ -182,14 +181,14 @@ class HierarchicalLatentAgentPolicy(Policy):
             n_plan_steps = 1
 
         # highest level
-        hist, state = self._last_step_cache[i_highest], self._current_env_states[i_highest]
-        goal_mem, _, lowest_agent = self.model.simulate(n_steps=n_plan_steps, before_history=hist, start_state=state,
+        state = self._current_env_states[i_highest]
+        goal_mem, _, lowest_agent = self.model.simulate(n_steps=n_plan_steps, start_state=state,
                                                         level=i_highest)
         self._act_cache[i_highest] = lowest_agent['a']
 
         for i_lvl in reversed(range(1, i_highest + 1)):
-            hist, state = self._last_step_cache[i_lvl], self._current_env_states[i_lvl]
-            goal_mem, lowest_agent = self._follow_plan(i_lvl, goal_mem, hist, state)
+            state = self._current_env_states[i_lvl]
+            goal_mem, lowest_agent = self._follow_plan(i_lvl, goal_mem, state)
             self._act_cache[i_lvl - 1] = lowest_agent['a']
 
         self._action_queue += lowest_agent['a']
@@ -197,7 +196,6 @@ class HierarchicalLatentAgentPolicy(Policy):
     def _follow_plan(self,
                      lvl_current: int,
                      mem_current: Dict[str, torch.Tensor],
-                     last_step_below: Dict[str, torch.Tensor],
                      state_below: Dict[str, torch.Tensor]):
         lvl_below = lvl_current - 1
         chunk_size = self.model.strides[lvl_current]
@@ -207,7 +205,6 @@ class HierarchicalLatentAgentPolicy(Policy):
         mem_below = {}
         for goal in mem_current['o']:
             mem_below, state_below, agent_mem_below = self.model.simulate(n_steps=chunk_size,
-                                                                          before_history=last_step_below,
                                                                           start_state=state_below, agent_goal=goal,
                                                                           level=lvl_below, memory=mem_below,
                                                                           agent_memory=agent_mem_below)

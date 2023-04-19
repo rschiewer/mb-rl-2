@@ -179,7 +179,6 @@ if __name__ == '__main__':
             batch = test_driver.interact(cfg['trainer']['d_batch'])
             batch = to_tensors(batch, model.device)
             batch = prepare_data(batch)
-            model_batch = subtrajectories(batch, 15)
             eval_losses = model.eval_step(model_batch)
             logger.log(_to_np(eval_losses), Scope.TEST(), i_step)
             # hierarchical agent

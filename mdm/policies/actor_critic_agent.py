@@ -131,7 +131,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         del terminal[-1]
         terminal.insert(0, torch.zeros_like(terminal[0]))
 
-        #if self.ema_reg:
+        # if self.ema_reg:
         #   v = [torch.min(v, ema_v) for v, ema_v in zip(v, ema_v)]
 
         # calculate losses
@@ -152,7 +152,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             # ACTOR
             advantage = R - v_.detach()
             policy_losses.append(-advantage)
-            #policy_losses.append(-gae_advantage_)
+            # policy_losses.append(-gae_advantage_)
             # policy_losses.append(-R)
             # ppo_r = a_dist.log_prob(a.detach()) / detach_dist(ema_a_dist).log_prob(a.detach())
             # ppo_actor_loss = -((R.detach() - v.detach()) * torch.clip(ppo_r, torch.tensor(0.8, device=sim_env.device),
@@ -393,6 +393,36 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             return torch.mean(o.log_prob(goal), dim=-1, keepdim=True)
         else:
             return - torch.mean(torchd.kl_divergence(goal, o) + torchd.kl_divergence(o, goal), dim=-1, keepdim=True)
+
+    def preproc_o(self,
+                  step: Dict[str, torch.Tensor | torchd.Distribution],
+                  goal: torch.Tensor | torchd.Distribution | None = None):
+        o = step[self.observation_key]
+        if isinstance(o, torchd.Distribution):
+            o = o.mode  # use most probable o if a distribution is provided
+
+        if self.goal_seeking:
+            # detach goal to avoid propagating gradients to upper level model into other agents
+            if isinstance(goal, torchd.Distribution):
+                goal = goal.mode.detach()
+            else:
+                goal = goal.detach()
+            return torch.concat([o, goal], dim=-1)
+        else:
+            return o
+
+    def build_step_reward(self,
+                          step: Dict[str, torch.Tensor | torchd.Distribution],
+                          goal: torch.Tensor | torchd.Distribution | None = None):
+        if self.goal_seeking:
+            # detach goal to avoid propagating gradients to upper level model into other agents
+            if isinstance(goal, torchd.Distribution):
+                goal = detach_dist(goal)
+            else:
+                goal = goal.detach()
+            return self.goal_similarity(step[self.observation_key], goal)
+        else:
+            return step['r']
 
 
 # helper class for use of agent directly inside RSSM

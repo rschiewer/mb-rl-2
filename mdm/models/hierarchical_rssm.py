@@ -142,7 +142,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
     def simulate(self,
                  n_steps: int,
-                 before_history: Dict[str, torch.Tensor],
                  start_state: Dict[str, torch.Tensor],
                  agent_goal: torch.Tensor | torchd.Distribution | None = None,
                  level: int = 0,
@@ -153,7 +152,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                  reconstruct: bool = True,
                  use_ema_modules: bool = False,
                  agent_training: bool = False):
-
         mdl = self._ema_rssm_modules[level] if use_ema_modules else self.rssm_modules[level]
         mdl_other = self.rssm_modules[level] if use_ema_modules else self._ema_rssm_modules[level]
         agent_memory = {} if agent_memory is None else agent_memory
@@ -163,53 +161,27 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         if n_steps == 0:
             return memory, start_state, {}
 
-        # determine whether we need goal-augmented observations or not
         if agent_goal is None:
             agent = self.r_max_agents[level][0]
-
-            def process_o(_step):
-                return _step[agent.observation_key]
-
-            def process_r(_step):
-                return _step['r']
         else:
             agent = self.goal_seeking_agents[level][0]
 
-            def process_o(_step):
-                if isinstance(agent_goal, torchd.Distribution):
-                    _goal = agent_goal.mode.detach()
-                else:
-                    _goal = agent_goal.detach()
-                return torch.concat([_step[agent.observation_key], _goal], dim=-1)
-
-            def process_r(_step):
-                if isinstance(agent_goal, torchd.Distribution):
-                    _goal = detach_dist(agent_goal)
-                else:
-                    _goal = agent_goal.detach()
-                key = agent.observation_key
-                if agent.observation_key == 'z':
-                    key = 'z_prior'
-                return agent.goal_similarity(_step[key], _goal)
-
         if agent_training:
             def agent_decide(_step):
-                agent_o = process_o(_step)
+                agent_o = agent.preproc_o(_step, agent_goal)
                 a_dist, a, v = agent(agent_o)
                 ema_a_dist, ema_a, ema_v = agent(agent_o, use_ema_modules=True)
                 return {'a_dist': a_dist, 'a': a, 'v': v, 'ema_a_dist': ema_a_dist, 'ema_a': ema_a, 'ema_v': ema_v}
         else:
             def agent_decide(_step):
-                agent_o = process_o(_step)
+                agent_o = agent.preproc_o(_step, agent_goal)
                 a_dist, a, v = agent(agent_o)
                 a_dist, a, v = detach_dist(a_dist), a.detach(), v.detach()
                 ema_a_dist, ema_a, ema_v = None, None, None
                 return {'a_dist': a_dist, 'a': a, 'v': v, 'ema_a_dist': ema_a_dist, 'ema_a': ema_a, 'ema_v': ema_v}
 
-        # start simulation, first agent observation is the last one from before_history
-        current = {agent.observation_key: before_history[agent.observation_key][-1].detach()}
         for t in range(n_steps):
-            pred_agent = agent_decide(current)
+            pred_agent = agent_decide(state)
             current, next_state = mdl(a=pred_agent['a'], last_state=state, use_posterior=False,
                                       sample_state=sample_state, sample_output=sample_output, reconstruct=reconstruct)
             current.update(next_state)
@@ -219,13 +191,13 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                                                             sample_state=sample_state, sample_output=sample_output,
                                                             reconstruct=reconstruct)
                 current_other.update(next_state_other)
-                novelty = kl_divergence(detach_dist(current['z_prior']), current_other['z_prior']).mean(dim=-1)
+                novelty = kl_divergence(detach_dist(current['z_dist']), current_other['z_dist']).mean(dim=-1)
             else:
                 novelty = torch.tensor(0, device=self.device, dtype=torch.float32)
 
             # add missing quantities to agent memory
             pred_agent['model_novelty'] = novelty
-            pred_agent['r'] = process_r(current)
+            pred_agent['r'] = agent.build_step_reward(current, agent_goal)
             pred_agent['terminal'] = current['terminal']
 
             for k, v in current.items():
@@ -241,6 +213,11 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             state = next_state
 
         return memory, state, agent_memory
+
+    def act_on_level(self,
+                     warmup_data: Dict[str, torch.Tensor],
+                     level: int):
+        pass
 
     def forward_l0(self):
         # TODO
@@ -282,7 +259,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             mem, state = self.observe(**wu_inp, level=i_lvl, start_state=start_state)
             # imagine() call is ony here for lvl 0 with predefined actions, the other levels use simulate()
             mem, state = self.imagine(next_input['a'][n_wu:], start_state=state, level=i_lvl, memory=mem)
-            mem, state, r_max_agent_mem = self.simulate(n_steps=n_as, before_history=mem, start_state=state,
+            mem, state, r_max_agent_mem = self.simulate(n_steps=n_as, start_state=state,
                                                         memory=mem, level=i_lvl, agent_training=agent_training)
             # TODO: more warmup steps in higher levels could be achieved by first doing simulation with one warmup step
             # TODO: and then collecting the groundtruth data from below to train the autoencoder part of the model
@@ -290,7 +267,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 mem_ema, init_state_ema = self.observe(**wu_inp, level=i_lvl, use_ema_modules=True)
                 mem_ema, _ = self.imagine(next_input['a'][n_wu:], start_state=init_state_ema, level=i_lvl,
                                           memory=mem_ema, use_ema_modules=True)
-                mem_ema, _, _ = self.simulate(n_steps=n_as, before_history=mem_ema, start_state=init_state_ema,
+                mem_ema, _, _ = self.simulate(n_steps=n_as, start_state=init_state_ema,
                                               memory=mem_ema, level=i_lvl, use_ema_modules=True,
                                               agent_training=agent_training)
             else:
@@ -348,7 +325,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         new_mem_below, state_below = self.observe(**init_data, level=lvl_below)  # mem_below is re-purposed here
         agent_mem = {}
         for g in goals:
-            new_mem_below, state_below, agent_mem = self.simulate(n_steps=chunk_size, before_history=new_mem_below,
+            new_mem_below, state_below, agent_mem = self.simulate(n_steps=chunk_size,
                                                                   start_state=state_below, agent_goal=g,
                                                                   level=lvl_below, memory=new_mem_below,
                                                                   agent_memory=agent_mem,
