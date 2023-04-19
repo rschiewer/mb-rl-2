@@ -818,7 +818,7 @@ class RSSMCell(torch.nn.Module):
         h = h.squeeze(0)  # remove time dim
         z_prior, z_smpl = self.build_z_prior(h, sample)
 
-        return h, {'z': z_smpl, 'z_prior': z_prior, 'z_post': None, 'rnn_state': next_rnn_state}
+        return h, {'z': z_smpl, 'z_dist' : z_prior, 'z_prior': z_prior, 'z_post': None, 'rnn_state': next_rnn_state}
 
     def observe(self,
                 a: torch.Tensor,
@@ -832,7 +832,9 @@ class RSSMCell(torch.nn.Module):
         x_current_groundtruth = torch.concat([self.o_encoder(o_current), r_current, term_current], dim=-1)
         z_post, z_smpl = self.build_z_post(h, next_state['z_prior'], x_current_groundtruth, sample)
 
-        next_state['z'] = z_smpl  # overwrite with posterior sample
+        # overwrite chosen z sample and distribution with posterior
+        next_state['z'] = z_smpl
+        next_state['z_dist'] = z_post
         next_state['z_post'] = z_post
         return h, next_state
 
