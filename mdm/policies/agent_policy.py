@@ -147,7 +147,7 @@ class HierarchicalLatentAgentPolicy(Policy):
 
             state = self._current_env_states[i_lvl]
             mem, new_state = self.model.observe(**data_filtered, start_state=state, level=i_lvl,
-                                              use_ema_modules=self._use_ema_modules)
+                                                use_ema_modules=self._use_ema_modules)
             self._last_step_cache[i_lvl] = mem
             self._current_env_states[i_lvl] = new_state
 
@@ -163,7 +163,7 @@ class HierarchicalLatentAgentPolicy(Policy):
 
             # reset counter and clear caches
             self._next_state_update[i_lvl] = self.model.strides[i_lvl]
-            #self._act_cache[i_lvl] = []
+            # self._act_cache[i_lvl] = []
             self._env_data_below_cache[i_lvl] = {}
 
     def _replan(self):
@@ -218,7 +218,9 @@ class HierarchicalLatentAgentPolicy(Policy):
         if env.current_step == 0:
             self._reset()
             d_batch = env.last_a.shape[0]
-            self._act_cache = [[torch.zeros((d_batch, rssm.d_a), device=self.model.device, dtype=torch.float32)] for rssm in self.model.rssm_modules]
+            # store default zero actions as last performend action
+            self._act_cache = [[torch.zeros((d_batch, rssm.d_a), device=self.model.device, dtype=torch.float32)] for
+                               rssm in self.model.rssm_modules]
 
         # first step: store current env ground truth data to cache
         self._env_data_below_cache[0] = {k: v.unbind(0) for k, v in self._prep_step(env).items()}

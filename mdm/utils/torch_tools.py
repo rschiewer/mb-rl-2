@@ -4,8 +4,7 @@ from functools import reduce, wraps
 from math import ceil
 
 import torch
-
-from mdm.utils.utils import DataType
+import numpy as np
 
 RnnStateType = TypeVar('RnnStateType', torch.Tensor, Tuple[torch.Tensor, torch.Tensor])
 _Placeholder = namedtuple('placeholder', 'device')
@@ -438,7 +437,7 @@ def pack_rnn_state(rnn_state: RnnStateType):
         return torch.stack([rnn_state.transpose(0, 1)], dim=-2)
 
 
-def to_tensors(mem: List[Dict[str, DataType]],
+def to_tensors(mem: List[Dict[str, int | float | np.single | np.double | bool | np.ndarray]],
                device: torch.device,
                dtypes: Union[List, Tuple] = None,
                padding: Union[List, Tuple] = None):

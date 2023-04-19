@@ -112,7 +112,7 @@ optim:
 trainer:
    n_train_steps: 10000
    eval_interval: 20
-   d_batch: 2048
+   d_batch: 4096
    subtrajectory_len: 15
    collect_envs: 50
    collect_interval: 50

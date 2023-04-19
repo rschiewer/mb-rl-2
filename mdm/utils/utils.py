@@ -21,6 +21,7 @@ from PIL import Image
 
 from mdm.gridworld.gridworld import Gridworld, CellType
 from mdm.memory.trajectory_memory import flatten_and_unsqueeze, TrajectoryMemory
+from mdm.models.building_blocks import *
 
 SliceType = TypeVar("SliceType", bound=Sequence)
 BasicDtype = TypeVar('BasicDtype', int, float, np.single, np.double, bool)
@@ -51,6 +52,56 @@ def load_yaml(path: Union[str, Path]) -> Dict:
     with open(path, 'r') as f:
         config = yaml.load(f, Loader=yaml.SafeLoader)
     return config
+
+
+def cfg_infer_missing_values(cfg: dict,
+                             env: gym.Env):
+    # infer missing config values for RSSMs
+    for i_module, module_args in enumerate(cfg['mdm']['rssm_modules']):
+        d_state = module_args['d_z'] + module_args['d_h']
+        if i_module == 0:
+            module_args['d_a'] = env.action_space.shape[0]
+            s_o = env.observation_space.shape
+        else:
+            if cfg['mdm']['links'][i_module - 1] == 'z':
+                s_o = cfg['mdm']['rssm_modules'][i_module - 1]['d_z']
+            elif cfg['mdm']['links'][i_module - 1] == 'h':
+                s_o = cfg['mdm']['rssm_modules'][i_module - 1]['d_h']
+            elif cfg['mdm']['links'][i_module - 1] == 's':
+                s_o = cfg['mdm']['rssm_modules'][i_module - 1]['d_z'] + cfg['mdm']['rssm_modules'][i_module - 1]['d_h']
+            elif cfg['mdm']['links'][i_module - 1] == 'o':
+                s_o = cfg['mdm']['rssm_modules'][i_module - 1]['o_decoder']['s_x_orig']
+            else:
+                raise ValueError(f'Unknown link key: {cfg["mdm"]["links"][i_module - 1]}')
+
+        module_args['o_encoder']['s_x_orig'] = s_o
+        module_args['o_decoder']['s_x_orig'] = s_o
+        module_args['o_decoder']['d_x_encoded'] = d_state
+        module_args['r_decoder']['s_x_orig'] = 1
+        module_args['r_decoder']['d_x_encoded'] = d_state
+        module_args['term_decoder']['s_x_orig'] = 1
+        module_args['term_decoder']['d_x_encoded'] = d_state
+
+    #for i_filter, filter_args in enumerate(cfg['mdm']['upwards_filters']):
+    #    rssm = cfg['mdm']['rssm_modules'][i_filter]
+    #    next_rssm = cfg['mdm']['rssm_modules'][i_filter + 1]
+    return cfg
+
+
+def build_rssms(cfg):
+    for i_module, module_args in enumerate(cfg['mdm']['rssm_modules']):
+        for k, v in module_args.items():  # generate encoders and decoder objects for current RSSM
+            if isinstance(v, dict) and 'class' in v:
+                cls_name = v.pop('class')
+                instance = globals()[cls_name](**v)
+                module_args[k] = instance
+        cfg['mdm']['rssm_modules'][i_module] = RSSMCell(**module_args)  # generate RSSM
+    for i_filter, filter_args in enumerate(cfg['mdm']['upwards_filters']):  # generate filter objects
+        for k, v in filter_args.items():
+            cls_name = v.pop('class')
+            instance = globals()[cls_name](**v)
+            filter_args[k] = instance
+    return cfg
 
 
 hierarchy_sep = '|'
@@ -553,6 +604,25 @@ def to_np_arrays(mem: List[Dict[str, DataType]], dtypes: Sequence = None, paddin
     # trunc_np = ma.array(trunc_np, mask=mask)
 
     return o_np, a_np, r_np, term_np, trunc_np, mask
+
+
+def trajectory_statistics(eval_mem: List[Dict[str, np.ndarray]]):
+    n_eval_trajectories = len(eval_mem)
+    ep_len, success, avg_return = 0, 0, 0
+    for ep in eval_mem:
+        avg_return += np.stack(ep['r']).sum()
+        if ep['terminal'].sum() == 1:
+            ep_len += len(ep['terminal'])
+            success += 1
+        elif ep['terminal'].sum() > 1:
+            raise RuntimeError('More than one terminal flag, there is something wrong!')
+        else:
+            ep_len += len(ep['terminal'])
+    success /= n_eval_trajectories
+    ep_len /= n_eval_trajectories
+    avg_return /= n_eval_trajectories
+
+    return {'success': success, 'ep_len': ep_len, 'avg_return': avg_return}
 
 
 def load_memory(path: Union[str, Path]) -> List[Dict[str, DataType]]:
