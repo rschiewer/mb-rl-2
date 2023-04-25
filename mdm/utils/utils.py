@@ -384,14 +384,15 @@ def valid_subtrajectories(data: Dict[str, torch.Tensor],
     i_matrix = np.tile(np.arange(0, length), (n_trajs, 1)) + i_start[..., None]
     i_matrix = torch.from_numpy(i_matrix).to(device=data['o'].device, dtype=torch.int64)
 
+    ret_data = {}
     for k, v in data.items():
         v = v.swapaxes(0, 1)
         i_matr_exp = expand_shape_right(i_matrix, v)
         i_matr_exp = i_matr_exp.repeat(1, 1, *v.shape[2:])
         v_new = torch.gather(v, dim=1, index=i_matr_exp)
-        data[k] = v_new.swapaxes(0, 1)
+        ret_data[k] = v_new.swapaxes(0, 1)
 
-    return data
+    return ret_data
 
 
 """
@@ -745,3 +746,38 @@ def random_walk_success_rate(env: gym.Env,
     ep_returns = np.array(ep_returns)
     ep_lens = np.array(ep_lens)
     return success, ep_returns, ep_lens
+
+
+def visualize_trajectory(trajectory: Dict[str, np.ndarray]):
+    n_steps = trajectory['o'].shape[0]
+
+    fig, ax = plt.subplots(2, 2, figsize=(10, 10))
+
+    ax[0, 0].set_xlim(-1, 1)
+    ax[0, 0].set_ylim(-1, 1)
+    pos = ax[0, 0].scatter(x=trajectory['o'][0, 0], y=trajectory['o'][0, 1])  # init pos
+    angle, stepwidth = trajectory['a'][0]
+    dx, dy = np.arccos(angle) * stepwidth, np.arcsin(angle) * stepwidth
+    #act = ax[0, 0].arrow(x=trajectory['o'][0, 0], y=trajectory['o'][0, 1], dx=dx, dy=dy)  # init action
+    ax[0, 0].scatter(x=trajectory['o'][0, 2], y=trajectory['o'][0, 3])  # goal
+    ax[1, 0].plot(trajectory['r'])
+    ax[1, 1].plot(trajectory['terminal'])
+
+    time_marker_r = ax[1, 0].axvline(x=0, color='gray', linestyle='dotted')
+    time_marker_terminal = ax[1, 1].axvline(x=0, color='gray', linestyle='dotted')
+
+    def animate_r(i):
+        # draw position
+        pos.set_offsets([trajectory['o'][i]])
+        # draw action
+        #angle, stepwidth = trajectory['a'][i]
+        #dx, dy = np.arccos(angle) * stepwidth, np.arcsin(angle) * stepwidth
+        #ax[0, 0].arrow(x=trajectory['o'][i, 0], y=trajectory['o'][i, 1], dx=dx, dy=dy)
+        # draw time markers
+        #act.set_offsets([dx, dy])
+        time_marker_r.set_xdata(i)
+        time_marker_terminal.set_xdata(i)
+        return pos, time_marker_r, time_marker_terminal
+
+    ani = animation.FuncAnimation(fig, animate_r, frames=n_steps, interval=100, blit=True)
+    plt.show()
