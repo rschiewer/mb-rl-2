@@ -28,6 +28,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                  eps_exploration: float = 0,
                  eps_exploration_mul: float = 0,
                  action_entropy_exploration: float = 0.0,
+                 learn_action_entropy_exploration: bool = False,
                  model_novelty_exploration: float = 0.0,
                  use_ema_world_model: bool = False,
                  goal_seeking: bool = False):
@@ -55,7 +56,9 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         self.beta = trust_region_policy_update_beta
         self.eps = eps_exploration
         self.eps_mul = eps_exploration_mul
-        self.alpha = action_entropy_exploration
+        self.alpha = torch.nn.Parameter(torch.tensor(action_entropy_exploration))
+        if not learn_action_entropy_exploration:
+            self.alpha.requires_grad = False
         self.mu = model_novelty_exploration
         self.use_slow_world_model = use_ema_world_model
         self.goal_seeking = goal_seeking
@@ -181,7 +184,8 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         loss = policy_loss + value_loss + ppo_loss
 
         return {'total': loss, 'policy': policy_loss, 'value': value_loss, 'policy_trust_region_loss': ppo_loss,
-                'model_novelty_reward_aug': model_novelty_reward_aug, 'action_entropy_reward_aug': entropy_reward_aug}
+                'model_novelty_reward_aug': model_novelty_reward_aug, 'action_entropy_reward_aug': entropy_reward_aug,
+                'eps_exploration': self.eps}
 
     def update_step(self,
                     losses: Dict[str, torch.Tensor],
@@ -214,6 +218,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         losses = self.eval_step(a_dist=a_dist, ema_a_dist=ema_a_dist, model_novelty=model_novelty, a=a, r=r,
                                 terminal=terminal, v=v, ema_v=ema_v)
         self.update_step(losses, actor_optimizer, critic_optimizer)
+        self.update_exploration()
         return losses
 
     def sim_train_step(self,
