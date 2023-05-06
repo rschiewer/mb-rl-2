@@ -18,6 +18,18 @@ from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.policies.agent_policy import *
 
 
+def all_agents_train(r_max_agents, goal_seeking_agents):
+    for a in r_max_agents + goal_seeking_agents:
+        if a is None: continue
+        a[0].train()
+
+
+def all_agents_eval(r_max_agents, goal_seeking_agents):
+    for a in r_max_agents + goal_seeking_agents:
+        if a is None: continue
+        a[0].eval()
+
+
 def _to_np(data_dict: Dict[str, Union[torch.Tensor, Dict]]):
     np_data_dict = {}
     for k, v in data_dict.items():
@@ -30,7 +42,7 @@ def _to_np(data_dict: Dict[str, Union[torch.Tensor, Dict]]):
     return np_data_dict
 
 
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-log', default=False, action='store_true')
     args = parser.parse_args()
@@ -60,18 +72,21 @@ if __name__ == '__main__':
 
     def gen_agent_fn(level: int, goal_seeking: bool) -> (
             ActorCriticAgent, torch.optim.Optimizer, torch.optim.Optimizer):
-        mu = 0.01 if goal_seeking else 0.1
-        beta = 0.02 if goal_seeking else 0.2
+        alpha = 0.1
+        beta = 0.1#0.02 if goal_seeking else 0.2
+        mu = 0.1#0.01 if goal_seeking else 0.1
+        eps = 0.2
+        eps_mul = 0.0 if goal_seeking else 0.99
         agent = ActorCriticAgent(level=level, observation_key='z', d_a=cfg['mdm']['rssm_modules'][level].d_a,
                                  d_o=cfg['mdm']['rssm_modules'][level].d_z, min_a=(-1.0, -1.0), max_a=(1.0, 1.0),
-                                 ema_coeff=0.95, trust_region_policy_update_beta=beta, eps_exploration=0.0,
-                                 eps_exploration_mul=0.0, action_entropy_exploration=0.01,
+                                 ema_coeff=0.95, trust_region_policy_update_beta=beta, eps_exploration=eps,
+                                 eps_exploration_mul=eps_mul, action_entropy_exploration=alpha,
+                                 learn_action_entropy_exploration=False,
                                  model_novelty_exploration=mu, use_ema_world_model=False, goal_seeking=goal_seeking)
         agent = agent.to('cuda')
-        actor_optimizer = torch.optim.Adam(agent.actor_net.parameters(), lr=0.001)
-        critic_optimizer = torch.optim.Adam(agent.critic_net.parameters(), lr=0.01)
+        actor_optimizer = torch.optim.Adam(agent.actor_net.parameters(), lr=0.0005)
+        critic_optimizer = torch.optim.Adam(agent.critic_net.parameters(), lr=0.005)
         return agent, actor_optimizer, critic_optimizer
-
 
     r_max_agents = []
     goal_seeking_agents = []
@@ -117,10 +132,11 @@ if __name__ == '__main__':
 
     def collect():
         collect_env.reset()
+        all_agents_eval(r_max_agents, goal_seeking_agents)
         policy = HierarchicalLatentAgentPolicy(model)
         collected_data_trajectories = collect_data(collect_env, 25, policy)
+        #visualize_trajectory(collected_data_trajectories[0])
         mem.extend(collected_data_trajectories)
-
 
     # start training ---------------------------------------------------------------------------------------------------
 
@@ -133,20 +149,19 @@ if __name__ == '__main__':
 
         # train model
         model.train()
-        model_batch = subtrajectories(batch, 15)
+        model_batch = valid_subtrajectories(batch, 15)
+        all_agents_eval(r_max_agents, goal_seeking_agents)
         train_losses = model.train_step(model_batch, opt_model)
         logger.log(_to_np(train_losses), Scope.TRAIN(), i_step)
 
         # train agent
         if i_step % cfg['trainer']['agent_train_interval'] == 0:
-            for a in r_max_agents + goal_seeking_agents:
-                if a is None: continue
-                a[0].train()
+            all_agents_train(r_max_agents, goal_seeking_agents)
 
-            agent_batch = valid_subtrajectories(batch, 1)  # for agents avoid subtrajectories that contain padding
             # NOTE: lvl 0 needs warmup of at least 1 to make sure that agent sees first observation from environment
             warmup_steps = [1] + [1 for _ in range(model.levels - 1)]  # only lvl 0 warmup steps is relevant
             agent_steps = [20, 10, 5]  # arbitrary, test various values
+            agent_batch = valid_subtrajectories(batch, 5)
             _, _, _, r_ag_mem, goal_ag_mem, _ = model.forward_all(agent_batch, warmup_steps, agent_steps,
                                                                   agent_training=True)
             if random.random() < 0.5:  # can only propagate through model once so decide which agent gets training
@@ -165,14 +180,12 @@ if __name__ == '__main__':
                     logger.log(_to_np(losses), Scope.TRAIN() / f'goal_seeking_agent/{i_lvl}/', i_step)
 
         if i_step % cfg['trainer']['collect_interval'] == 0:
-            # collect_simple()
+            #collect_simple()
             collect()
 
         # eval
         if cfg['trainer']['eval_interval'] is not None and i_step % cfg['trainer']['eval_interval'] == 0:
-            for a in r_max_agents + goal_seeking_agents:
-                if a is None: continue
-                a[0].eval()
+            all_agents_eval(r_max_agents, goal_seeking_agents)
             model.eval()
 
             # model
@@ -204,3 +217,6 @@ if __name__ == '__main__':
     logger.log_file(here() / model_path, Scope.DATA() / 'final_weights')
     logger.stop_session()
     print(logger.run_id)
+
+if __name__ == '__main__':
+    main()

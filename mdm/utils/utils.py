@@ -272,7 +272,7 @@ def fig_to_img(fig, clear_fig: bool = True):
     return Image.open(buffer)
 
 
-def expand_shape_right(to_expand: Union[np.ndarray, torch.Tensor], target: Union[np.ndarray, torch.Tensor]):
+def unsqueeze_right(to_expand: Union[np.ndarray, torch.Tensor], target: Union[np.ndarray, torch.Tensor]):
     if to_expand.ndim == target.ndim:
         return to_expand
     elif to_expand.ndim > target.ndim:
@@ -387,7 +387,7 @@ def valid_subtrajectories(data: Dict[str, torch.Tensor],
     ret_data = {}
     for k, v in data.items():
         v = v.swapaxes(0, 1)
-        i_matr_exp = expand_shape_right(i_matrix, v)
+        i_matr_exp = unsqueeze_right(i_matrix, v)
         i_matr_exp = i_matr_exp.repeat(1, 1, *v.shape[2:])
         v_new = torch.gather(v, dim=1, index=i_matr_exp)
         ret_data[k] = v_new.swapaxes(0, 1)

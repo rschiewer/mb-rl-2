@@ -15,7 +15,7 @@ from mdm.models.dynamics_model import DynamicsModel
 from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.utils.torch_tools import FuzzyDeviceMixin
 from mdm.utils.torch_tools import detach_dist, update_ema_modules
-from mdm.utils.utils import expand_shape_right
+from mdm.utils.utils import unsqueeze_right
 
 
 class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
@@ -214,17 +214,59 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
         return memory, state, agent_memory
 
-    def act_on_level(self,
-                     warmup_data: Dict[str, torch.Tensor],
-                     level: int):
-        pass
+    def forward_latent(self,
+                       start_state: Dict[str, torch.Tensor],
+                       start_state_below: Dict[str, torch.Tensor],
+                       level: int,
+                       n_steps: int,
+                       n_warmup: int,
+                       memory: Dict[str, torch.Tensor] | None = None,
+                       sample_state: bool = True,
+                       sample_output: bool = True,
+                       reconstruct: bool = True,
+                       use_ema_modules: bool = False,
+                       agent_training: bool = False):
+        mdl = self._ema_rssm_modules[level] if use_ema_modules else self.rssm_modules[level]
+        mdl_other = self.rssm_modules[level] if use_ema_modules else self._ema_rssm_modules[level]
+        memory = {} if memory is None else memory
+        filters = self.upwards_filters[level]
 
-    def forward_l0(self):
-        # TODO
-        pass
+        agent = self.r_max_agents[level][0]
+        lvl_below = level - 1
+        chunk_size = self.strides[level]
+        mem_below, agent_mem_below = {}, {}
 
-    def forward_latent(self):
-        # TODO
+        state = start_state
+        state_below = start_state_below
+        for t in range(n_steps):
+            a_t = agent(state)
+            pred, next_state = mdl(a=a_t, last_state=state, use_posterior=False, sample_state=sample_state,
+                                   sample_output=sample_output, reconstruct=reconstruct)
+
+            if t < n_warmup:  # get simulated ground truth for this step from level below
+                mem_below, state_below, agent_mem = self.simulate(n_steps=chunk_size,
+                                                                  start_state=state_below, agent_goal=pred['o'][-1],
+                                                                  level=lvl_below, memory=mem_below,
+                                                                  agent_memory=agent_mem_below,
+                                                                  agent_training=False)
+                o_sgt = filters['o'](mem_below[self.links[lvl_below]])
+                r_sgt = filters['r'](mem_below['r'])
+                term_sgt = filters['terminal'](mem_below['terminal'])
+                # re-do last step with simulated ground truth and use posterior
+                pred, next_state = mdl(a=a_t, o_current=o_sgt, r_current=r_sgt, term_current=term_sgt, last_state=state,
+                                       use_posterior=True, sample_state=sample_state, sample_output=sample_output,
+                                       reconstruct=reconstruct)
+            state = next_state
+
+            for k, v in {**pred, **state}.items():
+                data = memory.get(k, [])
+                data.append(v)
+                memory[k] = data
+
+        return memory, state
+
+    def ground_level(self,
+                     trajectory_below: Dict[str, torch.Tensor]):
         pass
 
     def ground_levels(self,
@@ -314,7 +356,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         # from the rest of the training process
         if agent_training:
             observation_key = self.goal_seeking_agents[lvl_below][0].observation_key
-            #if observation_key == 'z':
+            # if observation_key == 'z':
             #    observation_key = 'z_prior'
             goals = mem_below[observation_key][::chunk_size]
             goals = goals[n_warmup_chunks:]
@@ -392,7 +434,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         rec_term = self._neg_log_prob(pred['terminal_dist'], targets['terminal'], mask)
         kl_z = self._kl_div(pred['z_post'], pred['z_prior'], mask)
         kl_reg_z = self._kl_reg(pred['z_post'], mask)
-        contrastive_z = 0.0 * self.ema_regularization * self._contrastive_loss(pred['z'], mask)
+        contrastive_z = self.ema_regularization * self._contrastive_loss(pred['z'], mask)
 
         mae_o = self._mae(pred['o'], targets['o'], mask)
         mae_r = self._mae(pred['r'], targets['r'], mask)
@@ -423,7 +465,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         # b_offset = random.randint(1, d_batch - 1)
         t_offset = 1
         b_offset = 0
-        mask = expand_shape_right(mask, x)
+        mask = unsqueeze_right(mask, x)
         diff = x - x.roll(shifts=[t_offset, b_offset], dims=[0, 1])
         cont_loss = torch.mean(torch.maximum(torch.tensor(0.0, device=x.device), 1.0 - (diff ** 2) * mask))
         return cont_loss
@@ -436,7 +478,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             # smooth out targets a bit to avoid inf/nan log probs with RelaxedOneHotCategorical
             x_target = torch.abs(x_target - 1e-5)
             x_target /= x_target.sum(dim=-1, keepdim=True)
-        mask = expand_shape_right(mask, x_target)
+        mask = unsqueeze_right(mask, x_target)
         neg_log_prob = [-d.log_prob(x) * m for d, x, m in zip(distributions, x_target, mask)]
         neg_log_prob = torch.stack(neg_log_prob, dim=0).mean()
         return neg_log_prob

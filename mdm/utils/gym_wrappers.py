@@ -4,7 +4,7 @@ import gym
 import numpy as np
 from gym.core import ObsType, ActType
 
-from mdm.utils.utils import expand_shape_right
+from mdm.utils.utils import unsqueeze_right
 
 
 class StepCountEnv(gym.Wrapper):
@@ -98,8 +98,8 @@ class CacheLastStepVecEnv(gym.Wrapper):
     def step(self,
              actions):
         o, r, term, trunc, infos = self.env.step(actions)
-        self.last_o = np.where(expand_shape_right(self.envs_done, o), np.zeros_like(o), o)
-        self.last_a = np.where(expand_shape_right(self.envs_done, actions), np.zeros_like(actions), actions)
+        self.last_o = np.where(unsqueeze_right(self.envs_done, o), np.zeros_like(o), o)
+        self.last_a = np.where(unsqueeze_right(self.envs_done, actions), np.zeros_like(actions), actions)
         self.last_r = np.where(self.envs_done, np.zeros_like(r), r)
         self.last_term = np.where(self.envs_done, np.zeros_like(term), term)
         self.last_trunc = np.where(self.envs_done, np.zeros_like(trunc), trunc)
