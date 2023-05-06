@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Tuple, Optional, Sequence, Union, TypeVar, Dict
+from typing import Tuple, Optional, Sequence, Union, TypeVar, Dict, List
 from abc import ABC, abstractmethod
 from itertools import product
 from enum import Enum
