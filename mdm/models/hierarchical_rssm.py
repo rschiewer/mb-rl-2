@@ -3,11 +3,10 @@ from __future__ import annotations
 import copy
 import random
 from collections import OrderedDict
-from typing import List
 
-from torch.nn import ModuleList, ModuleDict
-from torch.distributions import kl_divergence
 import torch.distributions as torchd
+from torch.distributions import kl_divergence
+from torch.nn import ModuleList, ModuleDict
 
 from mdm.models.building_blocks import *
 from mdm.models.building_blocks import RSSMCell
@@ -46,7 +45,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             assert level.keys() <= set(self._filter_names), (f'Allowed filter names: {self._filter_names}, found'
                                                              f'filter names: {level.keys()}')
             window_size = level['o'].window_size
-            mask_and_action_filters = {'mask': MinUpwardsFilter(window_size), 'a': AvgUpwardsFilter(window_size)}
+            mask_and_action_filters = {'mask': MinUpwardsFilter(window_size), 'a': ConstUpwardsFilter(window_size, 0)}
             level.update(mask_and_action_filters)
         upwards_filters = [ModuleDict(lvl_0_filters)] + [ModuleDict(x) for x in upwards_filters]
 
@@ -139,6 +138,51 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 memory[k] = data
 
         return memory, state
+
+    def observe_2(self,
+                  o: torch.Tensor,
+                  a: torch.Tensor,
+                  r: torch.Tensor,
+                  terminal: torch.Tensor,
+                  level: int = 0,
+                  memory: Dict[str, torch.Tensor] | None = None,
+                  memory_other: Dict[str, torch.Tensor] | None = None,
+                  start_state: Dict[str, torch.Tensor] | None = None,
+                  sample_state: bool = True,
+                  sample_output: bool = True,
+                  reconstruct: bool = True,
+                  use_ema_modules: bool = False):
+        assert o.shape[0] == a.shape[0] == r.shape[0] == terminal.shape[0], 'Only complete trajectories are supported'
+
+        n_steps, d_batch = a.shape[:2]
+        mdl = self._ema_rssm_modules[level] if use_ema_modules else self.rssm_modules[level]
+        mdl_other = self.rssm_modules[level] if use_ema_modules else self._ema_rssm_modules[level]
+        memory = {} if memory is None else memory
+        memory_other = {} if memory_other is None else memory_other
+
+        # absorb given ground truth data to warmup the model
+        state = start_state
+        for t in range(n_steps):
+            o_t, a_t, r_t, term_t = o[t], a[t], r[t], terminal[t]
+            pred, next_state = mdl(a=a_t, o_current=o_t, r_current=r_t, term_current=term_t, last_state=state,
+                                   use_posterior=True, sample_state=sample_state, sample_output=sample_output,
+                                   reconstruct=reconstruct)
+            pred_other, next_state_other = mdl_other(a=a_t, o_current=o_t, r_current=r_t, term_current=term_t,
+                                                     last_state=state, use_posterior=True, sample_state=sample_state,
+                                                     sample_output=sample_output, reconstruct=reconstruct)
+
+            for k, v in {**pred, **state}.items():
+                data = memory.get(k, [])
+                data.append(v)
+                memory[k] = data
+            for k, v in {**pred_other, **next_state_other}.items():
+                data = memory_other.get(k, [])
+                data.append(v)
+                memory_other[k] = data
+
+            state = next_state
+
+        return memory, memory_other, state
 
     def imagine_2(self,
                   a: torch.Tensor,
@@ -366,17 +410,28 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
     def ground_level(self,
                      trajectory_below: Dict[str, torch.Tensor],
-                     i_level: int):
-        n_steps = n_warmup = trajectory_below['o'].shape[0]
-        if i_level == 0:
-            return self.forward_l0(**trajectory_below, n_steps=n_steps, n_warmup=n_warmup)
-        else:
-            pass
+                     level: int,
+                     start_state: Dict[str, torch.Tensor] = None,
+                     memory: Dict[str, torch.Tensor] | None = None,
+                     memory_other: Dict[str, torch.Tensor] | None = None,
+                     sample_state: bool = True,
+                     sample_output: bool = True,
+                     reconstruct: bool = True,
+                     use_ema_modules: bool = False):
+        assert level > 1, 'Level 0 grounding is done automatically in forward_l0 method'
+        filters = self.upwards_filters[level]
+        n_steps = self.strides[level]
+        trajectory_cut = {k: v[:n_steps] for k, v in trajectory_below.items()}
+        trajectory_filtered = {k: filters[k](v).detach() for k, v in trajectory_cut.items()}
+        for k, v in trajectory_filtered.items():
+            assert v.shape[0] == 1, f'k is too long: {v.shape[0]}'
 
+        mem, mem_other, state = self.observe_2(**trajectory_filtered, level=level, memory=memory,
+                                               start_state=start_state, memory_other=memory_other,
+                                               sample_state=sample_state, sample_output=sample_output,
+                                               reconstruct=reconstruct, use_ema_modules=use_ema_modules)
 
-    def ground_levels(self,
-                      trajectory_data: Dict[str, torch.Tensor]):
-        pass
+        return mem, mem_other, state
 
     def forward_all(self,
                     trajectory_data: Dict[str, torch.Tensor],
