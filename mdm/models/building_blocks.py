@@ -670,6 +670,19 @@ class IdentityUpwardsFilter(UpwardsFilter):
         return x
 
 
+class ConstUpwardsFilter(UpwardsFilter):
+
+    def __init__(self, window_size: int, constant: float):
+        super().__init__(window_size)
+        self.constant = constant
+
+    def forward(self,
+                x: torch.Tensor,
+                context: Optional[torch.Tensor] = None) -> torch.Tensor:
+        x, n_pad = self._preproc(x, 0.0)
+        return torch.zeros_like(x)
+
+
 class RSSMCell(torch.nn.Module):
 
     def __init__(self,
