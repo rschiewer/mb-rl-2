@@ -140,6 +140,45 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
         return memory, state
 
+    def imagine_2(self,
+                  a: torch.Tensor,
+                  start_state: Dict[str, torch.Tensor],
+                  level: int = 0,
+                  memory: Dict[str, torch.Tensor] | None = None,
+                  memory_other: Dict[str, torch.Tensor] | None = None,
+                  sample_state: bool = True,
+                  sample_output: bool = True,
+                  reconstruct: bool = True,
+                  use_ema_modules: bool = False):
+        n_steps, d_batch = a.shape[:2]
+        mdl = self._ema_rssm_modules[level] if use_ema_modules else self.rssm_modules[level]
+        mdl_other = self.rssm_modules[level] if use_ema_modules else self._ema_rssm_modules[level]
+        memory = {} if memory is None else memory
+        memory_other = {} if memory_other is None else memory_other
+
+        # imagine a trajectory RSSMCell's prior and given actions
+        state = start_state
+        for t in range(n_steps):
+            a_t = a[t]
+            pred, next_state = mdl(a=a_t, last_state=state, use_posterior=False, sample_state=sample_state,
+                                   sample_output=sample_output, reconstruct=reconstruct)
+            pred_other, next_state_other = mdl_other(a=a_t, last_state=state, use_posterior=False,
+                                                     sample_state=sample_state, sample_output=sample_output,
+                                                     reconstruct=reconstruct)
+
+            for k, v in {**pred, **state}.items():
+                data = memory.get(k, [])
+                data.append(v)
+                memory[k] = data
+            for k, v in {**pred_other, **next_state_other}.items():
+                data = memory_other.get(k, [])
+                data.append(v)
+                memory_other[k] = data
+
+            state = next_state
+
+        return memory, memory_other, state
+
     def simulate(self,
                  n_steps: int,
                  start_state: Dict[str, torch.Tensor],
@@ -221,20 +260,20 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                        n_steps: int,
                        n_warmup: int,
                        memory: Dict[str, torch.Tensor] | None = None,
+                       memory_other: Dict[str, torch.Tensor] | None = None,
                        sample_state: bool = True,
                        sample_output: bool = True,
                        reconstruct: bool = True,
-                       use_ema_modules: bool = False,
-                       agent_training: bool = False):
+                       use_ema_modules: bool = False):
         mdl = self._ema_rssm_modules[level] if use_ema_modules else self.rssm_modules[level]
         mdl_other = self.rssm_modules[level] if use_ema_modules else self._ema_rssm_modules[level]
         memory = {} if memory is None else memory
+        memory_other = {} if memory_other is None else memory_other
         filters = self.upwards_filters[level]
 
         agent = self.r_max_agents[level][0]
         lvl_below = level - 1
         chunk_size = self.strides[level]
-        mem_below, agent_mem_below = {}, {}
 
         state = start_state
         state_below = start_state_below
@@ -244,30 +283,96 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                                    sample_output=sample_output, reconstruct=reconstruct)
 
             if t < n_warmup:  # get simulated ground truth for this step from level below
-                mem_below, state_below, agent_mem = self.simulate(n_steps=chunk_size,
-                                                                  start_state=state_below, agent_goal=pred['o'][-1],
-                                                                  level=lvl_below, memory=mem_below,
-                                                                  agent_memory=agent_mem_below,
-                                                                  agent_training=False)
-                o_sgt = filters['o'](mem_below[self.links[lvl_below]])
-                r_sgt = filters['r'](mem_below['r'])
-                term_sgt = filters['terminal'](mem_below['terminal'])
+                simulation = self.goal_seeking_agents[lvl_below][0].act_in_sim(env_state=state_below, sim_env=self,
+                                                                               n_steps=chunk_size, goal=pred['o'][-1])
+                o_sgt = filters['o'](simulation['model']['z']).detach()
+                r_sgt = filters['r'](simulation['model']['r']).detach()
+                term_sgt = filters['terminal'](simulation['model']['terminal']).detach()
                 # re-do last step with simulated ground truth and use posterior
                 pred, next_state = mdl(a=a_t, o_current=o_sgt, r_current=r_sgt, term_current=term_sgt, last_state=state,
                                        use_posterior=True, sample_state=sample_state, sample_output=sample_output,
                                        reconstruct=reconstruct)
-            state = next_state
+                pred_other, next_state_other = mdl_other(a=a_t, o_current=o_sgt, r_current=r_sgt, term_current=term_sgt,
+                                                         last_state=state, use_posterior=True,
+                                                         sample_state=sample_state,
+                                                         sample_output=sample_output, reconstruct=reconstruct)
+            else:
+                pred_other, next_state_other = mdl_other(a=a_t, last_state=state, use_posterior=False,
+                                                         sample_state=sample_state,
+                                                         sample_output=sample_output, reconstruct=False)
 
             for k, v in {**pred, **state}.items():
                 data = memory.get(k, [])
                 data.append(v)
                 memory[k] = data
+            for k, v in {**pred_other, **next_state_other}.items():
+                data = memory_other.get(k, [])
+                data.append(v)
+                memory_other[k] = data
 
-        return memory, state
+            state = next_state
+
+        return memory, memory_other, state
+
+    def forward_l0(self,
+                   o: torch.Tensor,
+                   a: torch.Tensor,
+                   r: torch.Tensor,
+                   terminal: torch.Tensor,
+                   n_steps: int,
+                   n_warmup: int,
+                   start_state: Dict[str, torch.Tensor] = None,
+                   memory: Dict[str, torch.Tensor] | None = None,
+                   memory_other: Dict[str, torch.Tensor] | None = None,
+                   sample_state: bool = True,
+                   sample_output: bool = True,
+                   reconstruct: bool = True,
+                   use_ema_modules: bool = False):
+        mdl = self._ema_rssm_modules[0] if use_ema_modules else self.rssm_modules[0]
+        mdl_other = self.rssm_modules[0] if use_ema_modules else self._ema_rssm_modules[0]
+        memory = {} if memory is None else memory
+        memory_other = {} if memory_other is None else memory_other
+
+        state = start_state
+        for t in range(n_steps):
+            if t < n_warmup:
+                o_t, r_t, term_t = o[t], r[t], terminal[t]
+                use_posterior = True
+            else:
+                o_t, r_t, term_t = None, None, None
+                use_posterior = False
+            a_t = a[t]
+
+            pred, next_state = mdl(a=a_t, o_current=o_t, r_current=r_t, term_current=term_t, last_state=state,
+                                   use_posterior=use_posterior, sample_state=sample_state, sample_output=sample_output,
+                                   reconstruct=reconstruct)
+            pred_other, next_state_other = mdl_other(a=a_t, o_current=o_t, r_current=r_t, term_current=term_t,
+                                                     last_state=state, use_posterior=use_posterior,
+                                                     sample_state=sample_state, sample_output=sample_output,
+                                                     reconstruct=False)
+
+            for k, v in {**pred, **state}.items():
+                data = memory.get(k, [])
+                data.append(v)
+                memory[k] = data
+            for k, v in {**pred_other, **next_state_other}.items():
+                data = memory_other.get(k, [])
+                data.append(v)
+                memory_other[k] = data
+
+            state = next_state
+
+        return memory, memory_other, state
 
     def ground_level(self,
-                     trajectory_below: Dict[str, torch.Tensor]):
-        pass
+                     trajectory_below: Dict[str, torch.Tensor],
+                     i_level: int):
+        n_steps = n_warmup = trajectory_below['o'].shape[0]
+        if i_level == 0:
+            return self.forward_l0(**trajectory_below, n_steps=n_steps, n_warmup=n_warmup)
+        else:
+            pass
+
 
     def ground_levels(self,
                       trajectory_data: Dict[str, torch.Tensor]):

@@ -154,8 +154,8 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                                                                                               returns, gae_advantages,
                                                                                               model_novelty, discount):
             # ACTOR
-            #advantage = R - v_.detach()
-            #policy_losses.append(-advantage)
+            # advantage = R - v_.detach()
+            # policy_losses.append(-advantage)
             # policy_losses.append(-gae_advantage_)
             policy_losses.append(-R)
             # ppo_r = a_dist.log_prob(a.detach()) / detach_dist(ema_a_dist).log_prob(a.detach())
@@ -326,10 +326,8 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             agent_o = self.preproc_o(env_state, goal)
             a_dist, a, v = self(agent_o)
             ema_a_dist, _, ema_v = self(agent_o, use_ema_modules=True)
-            mem, next_env_state = sim_env.imagine(a=a.unsqueeze(0), start_state=env_state, level=self.level,
-                                                  use_ema_modules=self.use_slow_world_model)
-            mem_ema, _ = sim_env.imagine(a=a.unsqueeze(0), start_state=env_state, level=self.level,
-                                         use_ema_modules=not self.use_slow_world_model)
+            mem, mem_ema, next_env_state = sim_env.imagine_2(a=a.unsqueeze(0), start_state=env_state, level=self.level,
+                                                             use_ema_modules=self.use_slow_world_model)
             # store agent data
             agent_mem['o'].append(agent_o)
             agent_mem['a'].append(a)
@@ -352,7 +350,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             # prepare next step
             env_state = next_env_state
 
-        return {'agent': agent_mem, 'model': env_mem, 'ema_model': ema_env_mem}
+        return {'agent': agent_mem, 'model': env_mem, 'model_state': env_state, 'ema_model': ema_env_mem}
 
     @staticmethod
     # @torch.compile
@@ -405,10 +403,10 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             # detach goal to avoid propagating gradients to upper level model into other agents
             if isinstance(goal, torchd.Distribution):
                 goal = goal.mode.detach()
-                #goal = goal.mode
+                # goal = goal.mode
             else:
                 goal = goal.detach()
-                #goal = goal
+                # goal = goal
             return torch.concat([o, goal], dim=-1)
         else:
             return o
