@@ -339,8 +339,9 @@ def prepare_data_old(o: Union[np.ndarray, torch.Tensor],
 
 
 def prepare_data(data: Dict[str, Union[torch.Tensor, np.ndarray]],
-                 n_categories: Dict[str, int] = None,
-                 swap_batch_time_dim: bool = False):
+                 n_categories: Dict[str, int] | None = None,
+                 swap_batch_time_dim: bool = False,
+                 remove_keys: Sequence[str] | None = ()):
     if n_categories is None: n_categories = {}
 
     # here go all the specific requirements for individual fields in the data dict
@@ -361,6 +362,9 @@ def prepare_data(data: Dict[str, Union[torch.Tensor, np.ndarray]],
             data[fid] = to_onehot(fval, n_categories[fid])
         if swap_batch_time_dim:
             data[fid] = fval.swapaxes(0, 1)
+
+    for k in remove_keys:
+        del data[k]
 
     return data
 
