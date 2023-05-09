@@ -7,6 +7,7 @@ from collections import OrderedDict
 import torch.distributions as torchd
 from torch.distributions import kl_divergence
 from torch.nn import ModuleList, ModuleDict
+import matplotlib.pyplot as plt
 
 from mdm.models.building_blocks import *
 from mdm.models.building_blocks import RSSMCell
@@ -635,13 +636,13 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                     optimizer: torch.optim.Optimizer,
                     **kwargs) -> Dict[str, torch.Tensor]:
         optimizer.zero_grad(set_to_none=True)
-        losses_tf = self.eval_step(training_data, force_warmup=[-1 for _ in self.rssm_modules])
-        losses_one = self.eval_step(training_data, force_warmup=[1 for _ in self.rssm_modules])
-        losses_wu = self.eval_step(training_data)
+        losses_tf = self.eval_step(training_data, force_warmup=[-1 for _ in self.rssm_modules], **kwargs)
+        losses_one = self.eval_step(training_data, force_warmup=[1 for _ in self.rssm_modules], **kwargs)
+        losses_wu = self.eval_step(training_data, **kwargs)
 
-        losses, r_max_agent_losses, goal_seeking_agent_losses = {}, {}, {}
-        for k in losses_tf['model']:
-            losses[k] = (losses_tf['model'][k] + losses_wu['model'][k] + losses_one['model'][k]) / 3
+        losses = {}
+        for k in losses_tf:
+            losses[k] = (losses_tf[k] + losses_wu[k] + losses_one[k]) / 3
         losses['total'].backward()
         torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
         optimizer.step()
@@ -649,44 +650,77 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         rssm_params = [OrderedDict(m.named_parameters()) for m in self.rssm_modules]
         ema_params = [OrderedDict(m.named_parameters()) for m in self._ema_rssm_modules]
         update_ema_modules(rssm_params, ema_params, self.ema_coeff)
-        r_max_agent_losses, goal_seeking_agent_losses = {}, {}
 
-        return {'model': losses, 'r_max_agents': r_max_agent_losses, 'goal_seeking_agents': goal_seeking_agent_losses}
+        return losses
+
+    @staticmethod
+    @torch.compile
+    def _compute_mask(targets: Dict[str, torch.Tensor]):
+        terminals = targets['terminal']
+        d_time = terminals.shape[0]
+
+        mask = torch.zeros_like(terminals)
+        for t in range(1, d_time):
+            mask[t] = torch.maximum(mask[t - 1], terminals[t - 1])
+
+        return mask.detach()
 
     def _eval_step(self,
                    training_data: Dict[str, torch.Tensor],
                    **kwargs):
-        warmup_steps = list(kwargs.get('force_warmup', self.warmup_steps))
+        model_steps = kwargs.get('model_steps', None)
+        if model_steps is None:
+            raise RuntimeError('Please specify how many steps the model should run using the model_steps kwarg')
 
-        # Ugly hack starting
-        train_steps = [-1, 10, 5]  # TODO: this is arbitrary and only for testing
-        if warmup_steps[0] == 'rand':
-            warmup_steps[0] = random.randint(1, training_data['o'].shape[0])
-        for l in range(1, self.levels):
-            if warmup_steps[l] == 'rand':
-                warmup_steps[l] = random.randint(1, train_steps[l])
+        warmup_steps = kwargs.get('force_warmup', self.warmup_steps)
+        warmup_steps = self._maybe_sample_warmup_steps(training_data, model_steps, warmup_steps)
+
+        # filter out the keys we need for the model, keep the rest for loss calculation
         ground_truth_trajectories = {k: v for k, v in training_data.items() if k in ('o', 'a', 'r', 'terminal')}
-        # Ugly hack done
 
+        # forward model
         pred, pred_ema, targets = self.train_all_levels(ground_truth_trajectory=ground_truth_trajectories,
-                                                        warmup_steps=warmup_steps, train_steps=train_steps)
+                                                        warmup_steps=warmup_steps, train_steps=model_steps)
 
-        # model losses
+        # average losses and calculate masks
         losses = {}
-        mask_lvl = training_data['mask']
         for i_lvl in range(self.levels):
-            if i_lvl == 0:  # TODO: hack, make this nicer
-                mask_lvl = self.upwards_filters[i_lvl]['mask'](mask_lvl)
-            else:
-                mask_lvl = torch.zeros_like(
-                    torch.stack(pred[i_lvl]['r']))  # TODO: make a mask based on simulated ground truth terminal state
+            mask_lvl = self._compute_mask(targets[i_lvl])
+            #fig, ax = plt.subplots(1, 2, figsize=(10, 10))
+            #fig.suptitle(f'Level {i_lvl}')
+            #ax[0].matshow(mask_lvl[:, 0:50].detach().cpu().numpy().squeeze(-1).transpose())
+            #ax[0].set_title('Mask')
+            #ax[1].matshow(targets[i_lvl]['terminal'][:, 0:50].detach().cpu().numpy().squeeze(-1).transpose())
+            #ax[1].set_title('Terminal Flags')
+            #plt.show()
             loss_level = self.calc_loss(pred[i_lvl], pred_ema[i_lvl], targets[i_lvl], mask_lvl, self.kl_betas[i_lvl],
                                         self.kl_reg_betas[i_lvl])
             loss_level = {k + f'_{i_lvl}': v for k, v in loss_level.items()}
             losses.update(loss_level)
         losses['total'] = torch.stack([v for k, v in losses.items() if k.startswith('total')]).mean()
 
-        return {'model': losses}
+        return losses
+
+    def _maybe_sample_warmup_steps(self,
+                                   training_data: Dict[str, torch.Tensor],
+                                   model_steps: Tuple[str | int],
+                                   warmup_steps: Tuple[str | int]):
+        warmup_steps_sampled = []
+
+        if warmup_steps[0] == 'rand':
+            wu = random.randint(1, training_data['o'].shape[0])
+        else:
+            wu = warmup_steps[0]
+        warmup_steps_sampled.append(wu)
+
+        for l in range(1, self.levels):
+            if warmup_steps[l] == 'rand':
+                wu = random.randint(1, model_steps[l])
+            else:
+                wu = warmup_steps[l]
+            warmup_steps_sampled.append(wu)
+
+        return warmup_steps_sampled
 
     def calc_loss(self,
                   pred: Dict[str, List[Union[torch.Tensor, torch.distributions.Distribution]]],

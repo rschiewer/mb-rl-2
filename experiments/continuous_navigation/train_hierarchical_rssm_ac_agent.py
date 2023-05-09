@@ -1,4 +1,5 @@
 import copy
+import time
 import os.path
 import argparse
 
@@ -18,13 +19,13 @@ from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.policies.agent_policy import *
 
 
-def all_agents_train(agents):
+def agent_train_mode(agents):
     for a in agents:
         if a is None: continue
         a[0].train()
 
 
-def all_agents_eval(agents):
+def agent_eval_mode(agents):
     for a in agents:
         if a is None: continue
         a[0].eval()
@@ -127,7 +128,7 @@ def main():
 
     def collect():
         collect_env.reset()
-        all_agents_eval(r_max_agents + goal_seeking_agents)
+        agent_eval_mode(r_max_agents + goal_seeking_agents)
         policy = HierarchicalLatentAgentPolicy(model)
         collected_data_trajectories = collect_data(collect_env, 25, policy)
         #visualize_trajectory(collected_data_trajectories[0])
@@ -145,13 +146,22 @@ def main():
         # train model
         model.train()
         model_batch = valid_subtrajectories(batch, 15)
-        all_agents_eval(r_max_agents + goal_seeking_agents)
-        train_losses = model.train_step(model_batch, opt_model)
+        agent_eval_mode(r_max_agents + goal_seeking_agents)
+        train_steps = [-1, 20, 10]
+        now = time.time()
+        train_losses = model.train_step(model_batch, opt_model, model_steps=train_steps)
+        print(time.time() - now)
         logger.log(_to_np(train_losses), Scope.TRAIN(), i_step)
 
         # train agent
         if i_step % cfg['trainer']['agent_train_interval'] == 0:
-            all_agents_train(r_max_agents + goal_seeking_agents)
+            agent_train_mode(r_max_agents + goal_seeking_agents)
+            agent_model_warmup = cfg['trainer']['agent_model_warmup']
+            agent_model_steps = cfg['trainer']['agent_model_steps']
+            agent_batch = valid_subtrajectories(batch, agent_model_warmup[0])
+
+            for l in range(model.levels):
+                pass
         """
         if i_step % cfg['trainer']['agent_train_interval'] == 0:
             all_agents_train(r_max_agents, goal_seeking_agents)
@@ -184,14 +194,15 @@ def main():
 
         # eval
         if cfg['trainer']['eval_interval'] is not None and i_step % cfg['trainer']['eval_interval'] == 0:
-            all_agents_eval(r_max_agents + goal_seeking_agents)
+            agent_eval_mode(r_max_agents + goal_seeking_agents)
             model.eval()
 
             # model
             batch = test_driver.interact(cfg['trainer']['d_batch'])
             batch = to_tensors(batch, model.device)
             batch = prepare_data(batch)
-            eval_losses = model.eval_step(batch)
+            eval_steps = [-1, 20, 10]
+            eval_losses = model.eval_step(batch, model_steps=eval_steps)
             logger.log(_to_np(eval_losses), Scope.TEST(), i_step)
             # hierarchical agent
             #eval_env.reset()
