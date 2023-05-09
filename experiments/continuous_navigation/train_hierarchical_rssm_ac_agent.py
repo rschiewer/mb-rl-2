@@ -18,14 +18,14 @@ from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.policies.agent_policy import *
 
 
-def all_agents_train(r_max_agents, goal_seeking_agents):
-    for a in r_max_agents + goal_seeking_agents:
+def all_agents_train(agents):
+    for a in agents:
         if a is None: continue
         a[0].train()
 
 
-def all_agents_eval(r_max_agents, goal_seeking_agents):
-    for a in r_max_agents + goal_seeking_agents:
+def all_agents_eval(agents):
+    for a in agents:
         if a is None: continue
         a[0].eval()
 
@@ -59,16 +59,13 @@ def main():
     env = gym.make(env_name)
     env = CacheLastStepEnv(env)
 
-
     def make_env_fn():
         return gym.make(env_name)
-
 
     cfg = cfg_infer_missing_values(cfg, env)  # fill in missing config values
     logger.start_session()
     logger.log(cfg, Scope.HYPERPARAMETERS())  # log complete config
     cfg = build_rssms(cfg)  # generate RSSM cells and upwards filters
-
 
     def gen_agent_fn(level: int, goal_seeking: bool) -> (
             ActorCriticAgent, torch.optim.Optimizer, torch.optim.Optimizer):
@@ -120,7 +117,6 @@ def main():
     eval_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['eval']['eval_envs'])
     eval_env = CacheLastStepVecEnv(eval_env)
 
-
     def collect_simple():
         agent = r_max_agents[0][0]
         agent.eval()
@@ -129,10 +125,9 @@ def main():
         collected_data_trajectories = collect_data(collect_env, 25, policy)
         mem.extend(collected_data_trajectories)
 
-
     def collect():
         collect_env.reset()
-        all_agents_eval(r_max_agents, goal_seeking_agents)
+        all_agents_eval(r_max_agents + goal_seeking_agents)
         policy = HierarchicalLatentAgentPolicy(model)
         collected_data_trajectories = collect_data(collect_env, 25, policy)
         #visualize_trajectory(collected_data_trajectories[0])
@@ -150,11 +145,14 @@ def main():
         # train model
         model.train()
         model_batch = valid_subtrajectories(batch, 15)
-        all_agents_eval(r_max_agents, goal_seeking_agents)
+        all_agents_eval(r_max_agents + goal_seeking_agents)
         train_losses = model.train_step(model_batch, opt_model)
         logger.log(_to_np(train_losses), Scope.TRAIN(), i_step)
 
         # train agent
+        if i_step % cfg['trainer']['agent_train_interval'] == 0:
+            all_agents_train(r_max_agents + goal_seeking_agents)
+        """
         if i_step % cfg['trainer']['agent_train_interval'] == 0:
             all_agents_train(r_max_agents, goal_seeking_agents)
 
@@ -178,14 +176,15 @@ def main():
                     losses['action_entropy'] = torch.stack([d.entropy() for d in data_lvl['a_dist']]).mean()
                     losses['obtained_reward'] = torch.stack(data_lvl['r']).mean()
                     logger.log(_to_np(losses), Scope.TRAIN() / f'goal_seeking_agent/{i_lvl}/', i_step)
+        """
 
         if i_step % cfg['trainer']['collect_interval'] == 0:
-            #collect_simple()
-            collect()
+            collect_simple()
+            #collect()
 
         # eval
         if cfg['trainer']['eval_interval'] is not None and i_step % cfg['trainer']['eval_interval'] == 0:
-            all_agents_eval(r_max_agents, goal_seeking_agents)
+            all_agents_eval(r_max_agents + goal_seeking_agents)
             model.eval()
 
             # model
@@ -195,10 +194,10 @@ def main():
             eval_losses = model.eval_step(batch)
             logger.log(_to_np(eval_losses), Scope.TEST(), i_step)
             # hierarchical agent
-            eval_env.reset()
-            policy = HierarchicalLatentAgentPolicy(model)
-            eval_mem = collect_data(eval_env, 25, policy)
-            logger.log(trajectory_statistics(eval_mem), Scope.TEST() / 'hierarchical_agent/', i_step)
+            #eval_env.reset()
+            #policy = HierarchicalLatentAgentPolicy(model)
+            #eval_mem = collect_data(eval_env, 25, policy)
+            #logger.log(trajectory_statistics(eval_mem), Scope.TEST() / 'hierarchical_agent/', i_step)
             # flat agent
             eval_env.reset()
             policy = LatentAgentPolicy(r_max_agents[0][0], model)
@@ -217,6 +216,7 @@ def main():
     logger.log_file(here() / model_path, Scope.DATA() / 'final_weights')
     logger.stop_session()
     print(logger.run_id)
+
 
 if __name__ == '__main__':
     main()

@@ -680,6 +680,7 @@ class ConstUpwardsFilter(UpwardsFilter):
                 x: torch.Tensor,
                 context: Optional[torch.Tensor] = None) -> torch.Tensor:
         x, n_pad = self._preproc(x, 0.0)
+        x = x[:, 0]
         return torch.zeros_like(x)
 
 
@@ -820,10 +821,13 @@ class RSSMCell(torch.nn.Module):
     def imagine(self,
                 a: torch.Tensor,
                 last_state: Dict[str, torch.Tensor],
-                context: Optional[torch.Tensor] = None,
+                context: torch.Tensor | None = None,
                 sample: bool = True):
         if context is None:
             context = self.zero_context(a.shape[0], a.device)
+        if last_state is None:
+            last_state = {'z': self.zero_z(a.shape[0], a.device),
+                          'rnn_state': self.zero_rnn_state(a.shape[0], a.device)}
 
         inp = torch.concat([last_state['z'], a, context], dim=-1)
         inp = inp.unsqueeze(0)  # add time dim
@@ -835,14 +839,14 @@ class RSSMCell(torch.nn.Module):
 
     def observe(self,
                 a: torch.Tensor,
-                o_current: torch.Tensor,
-                r_current: torch.Tensor,
-                term_current: torch.Tensor,
+                o: torch.Tensor,
+                r: torch.Tensor,
+                terminal: torch.Tensor,
                 last_state: Dict[str, torch.Tensor],
-                context: Optional[torch.Tensor] = None,
+                context: torch.Tensor | None = None,
                 sample: bool = True):
         h, next_state = self.imagine(a, last_state, context, sample)
-        x_current_groundtruth = torch.concat([self.o_encoder(o_current), r_current, term_current], dim=-1)
+        x_current_groundtruth = torch.concat([self.o_encoder(o), r, terminal], dim=-1)
         z_post, z_smpl = self.build_z_post(h, next_state['z_prior'], x_current_groundtruth, sample)
 
         # overwrite chosen z sample and distribution with posterior
@@ -853,23 +857,23 @@ class RSSMCell(torch.nn.Module):
 
     def forward(self,
                 a: torch.Tensor,
-                o_current: torch.Tensor | None = None,
-                r_current: torch.Tensor | None = None,
-                term_current: torch.Tensor | None = None,
+                o: torch.Tensor | None = None,
+                r: torch.Tensor | None = None,
+                terminal: torch.Tensor | None = None,
                 last_state: Dict[str, torch.Tensor] | None = None,
-                context: Optional[torch.Tensor] = None,
+                context: torch.Tensor | None = None,
                 use_posterior: bool = True,
                 reconstruct: bool = True,
                 sample_state: bool = True,
                 sample_output: bool = True):
-        if o_current is None and last_state is None:
+        if o is None and last_state is None:
             raise ValueError('Need at least (o_current, r_current, term_current) or last_state')
-        if o_current is None and use_posterior:
+        if o is None and use_posterior:
             raise ValueError('Can\'t use posterior if no ground truth data is provided')
 
         # compute next world state
         if use_posterior:
-            h, next_state = self.observe(a, o_current, r_current, term_current, last_state, context, sample_state)
+            h, next_state = self.observe(a, o, r, terminal, last_state, context, sample_state)
         else:
             h, next_state = self.imagine(a, last_state, context, sample_state)
 
