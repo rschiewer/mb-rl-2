@@ -4,6 +4,7 @@ import os.path
 import argparse
 
 import gym.vector
+import torch
 from tqdm import tqdm
 
 from mdm.utils.utils import *
@@ -71,8 +72,8 @@ def main():
     def gen_agent_fn(level: int, goal_seeking: bool) -> (
             ActorCriticAgent, torch.optim.Optimizer, torch.optim.Optimizer):
         alpha = 0.1
-        beta = 0.1#0.02 if goal_seeking else 0.2
-        mu = 0.1#0.01 if goal_seeking else 0.1
+        beta = 0.1  # 0.02 if goal_seeking else 0.2
+        mu = 0.1  # 0.01 if goal_seeking else 0.1
         eps = 0.2
         eps_mul = 0.0 if goal_seeking else 0.99
         agent = ActorCriticAgent(level=level, observation_key='z', d_a=cfg['mdm']['rssm_modules'][level].d_a,
@@ -131,7 +132,7 @@ def main():
         agent_eval_mode(r_max_agents + goal_seeking_agents)
         policy = HierarchicalLatentAgentPolicy(model)
         collected_data_trajectories = collect_data(collect_env, 25, policy)
-        #visualize_trajectory(collected_data_trajectories[0])
+        # visualize_trajectory(collected_data_trajectories[0])
         mem.extend(collected_data_trajectories)
 
     # start training ---------------------------------------------------------------------------------------------------
@@ -145,23 +146,62 @@ def main():
 
         # train model
         model.train()
-        model_batch = valid_subtrajectories(batch, 15)
         agent_eval_mode(r_max_agents + goal_seeking_agents)
+        model_batch = valid_subtrajectories(batch, 15)
         train_steps = [-1, 20, 10]
-        now = time.time()
+        # now = time.time()
         train_losses = model.train_step(model_batch, opt_model, model_steps=train_steps)
-        print(time.time() - now)
+        # print(time.time() - now)
         logger.log(_to_np(train_losses), Scope.TRAIN(), i_step)
 
-        # train agent
+        # train agents
         if i_step % cfg['trainer']['agent_train_interval'] == 0:
             agent_train_mode(r_max_agents + goal_seeking_agents)
             agent_model_warmup = cfg['trainer']['agent_model_warmup']
             agent_model_steps = cfg['trainer']['agent_model_steps']
-            agent_batch = valid_subtrajectories(batch, agent_model_warmup[0])
+            trajectory_below = valid_subtrajectories(batch, agent_model_warmup[0])
 
             for l in range(model.levels):
-                pass
+                if l == 0:
+                    _, _, start_state_level = model.forward_static(trajectory_below, level=0, n_steps=-1, n_warmup=-1)
+                else:
+                    _, _, _, start_state_level, _ = model.ground_level(trajectory_below=trajectory_below, level=l)
+
+                # prevent gradient flow into the start state
+                start_state_level['z'] = start_state_level['z'].detach()
+                start_state_level['rnn_state'] = (start_state_level['rnn_state'][0].detach(),  # assumes LSTM state
+                                                  start_state_level['rnn_state'][1].detach())
+
+                # r_max agent
+                r_max_agent, r_max_actor_opt, r_max_critic_opt = model.r_max_agents[l]
+                n_steps = agent_model_steps[l]
+                r_max_simulation = r_max_agent.act_in_sim(start_state_level, model, n_steps)
+                r_max_losses = r_max_agent.train_step(r_max_simulation['agent'], actor_optimizer=r_max_actor_opt,
+                                                      critic_optimizer=r_max_critic_opt)
+                logger.log(_to_np(r_max_losses), Scope.TRAIN() / f'r_max_agent/{l}/', i_step)
+
+                # goal_seeking agent
+                # We start at the same spot as the r_max agent, namely at start_state_level. We then use every
+                # k-th time step from the r_max agent's simulation as intermediate goal and train goal finding
+                if l < model.levels - 1:
+                    goal_agent, goal_actor_opt, goal_critic_opt = model.goal_seeking_agents[l]
+                    total_steps = len(r_max_simulation['model']['z'])
+                    chunk_size = model.strides[l + 1]
+                    agent_mem = {}
+
+                    state = start_state_level
+                    for t in range(chunk_size - 1, total_steps, chunk_size):  # TODO: check if chunk_size - 1 is correct
+                        goal = r_max_simulation['model']['z'][t]
+                        goal_simulation = goal_agent.act_in_sim(state, model, chunk_size, goal, agent_memory=agent_mem)
+                        state = goal_simulation['model_state']
+
+                    goal_losses = goal_agent.train_step(agent_mem, actor_optimizer=goal_actor_opt,
+                                                        critic_optimizer=goal_critic_opt)
+                    logger.log(_to_np(goal_losses), Scope.TRAIN() / f'goal_seeking_agent/{l}/', i_step)
+
+                # prepare grounding information for next level
+                trajectory_below = r_max_simulation['model']
+
         """
         if i_step % cfg['trainer']['agent_train_interval'] == 0:
             all_agents_train(r_max_agents, goal_seeking_agents)
@@ -190,7 +230,7 @@ def main():
 
         if i_step % cfg['trainer']['collect_interval'] == 0:
             collect_simple()
-            #collect()
+            # collect()
 
         # eval
         if cfg['trainer']['eval_interval'] is not None and i_step % cfg['trainer']['eval_interval'] == 0:
@@ -205,10 +245,10 @@ def main():
             eval_losses = model.eval_step(batch, model_steps=eval_steps)
             logger.log(_to_np(eval_losses), Scope.TEST(), i_step)
             # hierarchical agent
-            #eval_env.reset()
-            #policy = HierarchicalLatentAgentPolicy(model)
-            #eval_mem = collect_data(eval_env, 25, policy)
-            #logger.log(trajectory_statistics(eval_mem), Scope.TEST() / 'hierarchical_agent/', i_step)
+            # eval_env.reset()
+            # policy = HierarchicalLatentAgentPolicy(model)
+            # eval_mem = collect_data(eval_env, 25, policy)
+            # logger.log(trajectory_statistics(eval_mem), Scope.TEST() / 'hierarchical_agent/', i_step)
             # flat agent
             eval_env.reset()
             policy = LatentAgentPolicy(r_max_agents[0][0], model)

@@ -118,7 +118,7 @@ trainer:
    collect_interval: 50
    agent_train_interval: 5
    agent_model_warmup: [ 2 , 1 ]
-   agent_model_steps: [ 25, 15 ]
+   agent_model_steps: [ 16, 8 ]
 
 eval:
    warmup_steps: [ 2, 1 ]

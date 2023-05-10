@@ -2,6 +2,8 @@ from typing import Tuple, Union, List, Sequence, TypeVar, Dict
 from collections import namedtuple, OrderedDict
 from functools import reduce, wraps
 from math import ceil
+from sys import gettrace
+import os
 
 import torch
 import numpy as np
@@ -503,3 +505,14 @@ def update_ema_modules(modules: List[Dict[str, torch.Tensor]], ema_modules: List
         for params_m, params_ema_m in zip(modules, ema_modules):
             for name, param_m in params_m.items():
                 params_ema_m[name].sub_(coeff * (params_ema_m[name] - param_m))
+
+
+# define torch.compile decorator depending on whether we're in debug mode or not
+if gettrace() or 'PYCHARM_HOSTED' in os.environ:
+    print('Debugging or running in PyCharm IDE, disabling torch.compile')
+
+    def compile_if_not_debug(func):
+        return func
+else:
+    print('Compiling functions with compile_if_not_debug decorator')
+    compile_if_not_debug = torch.compile

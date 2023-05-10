@@ -70,10 +70,10 @@ class LatentAgentPolicy(Policy):
         env_data = {'o': o, 'a': a, 'r': r, 'terminal': terminal, 'truncated': truncated, 'mask': torch.empty_like(r)}
         env_data = prepare_data(env_data)
         # digest new groundtruth data in level 0 model
-        _, self._current_env_state = self.model.observe(o=env_data['o'], a=env_data['a'], r=env_data['r'],
-                                                        terminal=env_data['terminal'],
-                                                        start_state=self._current_env_state,
-                                                        level=self.agent.level, use_ema_modules=self._use_ema_modules)
+        _, _, self._current_env_state = self.model.forward_static(trajectory=env_data, n_steps=1, n_warmup=1,
+                                                                  start_state=self._current_env_state,
+                                                                  level=self.agent.level,
+                                                                  use_ema_modules=self._use_ema_modules)
         agent_o = self.agent.preproc_o(self._current_env_state)
         a_dist, a, v = self.agent(agent_o)
         return a.detach().cpu().numpy()
@@ -143,8 +143,9 @@ class HierarchicalLatentAgentPolicy(Policy):
             # memorize the latest inputs the model has seen as they are needed for the agent during planning
 
             state = self._current_env_states[i_lvl]
-            mem, new_state = self.model.observe(**data_filtered, start_state=state, level=i_lvl,
-                                                use_ema_modules=self._use_ema_modules)
+            mem, _, new_state = self.model.forward_static(data_filtered, start_state=state, level=i_lvl,
+                                                          n_steps=-1, n_warmup=-1,
+                                                          use_ema_modules=self._use_ema_modules)
             self._current_env_states[i_lvl] = new_state
 
             # store updated state in cache for upper level
@@ -179,7 +180,9 @@ class HierarchicalLatentAgentPolicy(Policy):
 
         # highest level
         state = self._current_env_states[i_highest]
-        goal_mem, _, lowest_agent = self.model.simulate(n_steps=n_plan_steps, start_state=state, level=i_highest)
+        #goal_mem, _, lowest_agent = self.model.simulate(n_steps=n_plan_steps, start_state=state, level=i_highest)
+        agent = self.model.r_max_agents[i_highest][0]
+        simulation = agent.act_in_sim(env_state=state, sim_env=self.model, n_steps=n_plan_steps)
         self._act_cache[i_highest] = lowest_agent['a']
 
         for i_lvl in reversed(range(1, i_highest + 1)):
@@ -214,6 +217,8 @@ class HierarchicalLatentAgentPolicy(Policy):
             # store default zero actions as last performend action
             self._act_cache = [[torch.zeros((d_batch, rssm.d_a), device=self.model.device, dtype=torch.float32)] for
                                rssm in self.model.rssm_modules]
+
+        # TODO: are the correct state time steps recorded?
 
         # first step: store current env ground truth data to cache
         self._env_data_below_cache[0] = {k: v.unbind(0) for k, v in self._prep_step(env).items()}
