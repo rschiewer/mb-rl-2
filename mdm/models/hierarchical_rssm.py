@@ -646,7 +646,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
     @staticmethod
     @compile_if_not_debug
-    def _compute_mask(targets: Dict[str, torch.Tensor]):
+    def compute_mask(targets: Dict[str, torch.Tensor]):
         terminals = targets['terminal']
         d_time = terminals.shape[0]
 
@@ -676,7 +676,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         # average losses and calculate masks
         losses = {}
         for i_lvl in range(self.levels):
-            mask_lvl = self._compute_mask(targets[i_lvl])
+            mask_lvl = self.compute_mask(targets[i_lvl])
             # fig, ax = plt.subplots(1, 2, figsize=(10, 10))
             # fig.suptitle(f'Level {i_lvl}')
             # ax[0].matshow(mask_lvl[:, 0:50].detach().cpu().numpy().squeeze(-1).transpose())
