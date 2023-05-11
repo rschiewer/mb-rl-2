@@ -490,11 +490,11 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         state_below = {k: trajectory_below[k][n_steps - 1] for k in state.keys()}  # TODO: check this
         return mem, mem_other, memory_targets, state, state_below
 
-    def train_all_levels(self,
-                         ground_truth_trajectory: Dict[str, torch.Tensor],
-                         warmup_steps: List[int],
-                         train_steps: List[int],
-                         model_state: List[Dict[str, torch.Tensor]] | None = None):
+    def forward_all_levels(self,
+                           ground_truth_trajectory: Dict[str, torch.Tensor],
+                           warmup_steps: List[int],
+                           model_steps: List[int],
+                           model_state: List[Dict[str, torch.Tensor]] | None = None):
         memory = [None for _ in range(self.levels)]
         memory_ema = [None for _ in range(self.levels)]
         model_state = [None for _ in range(self.levels)] if model_state is None else model_state
@@ -502,13 +502,13 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
         # lvl 0 is special and gets static ground truth trajectories
         memory[0], memory_ema[0], model_state[0] = self.forward_static(ground_truth_trajectory,
-                                                                       n_steps=train_steps[0],
+                                                                       n_steps=model_steps[0],
                                                                        n_warmup=warmup_steps[0], level=0,
                                                                        start_state=model_state[0])
         # all other levels are only grounded with the first k steps from below and can then do what they want
         for l in range(1, self.levels):
             n_warmup = warmup_steps[l] - 1
-            n_steps = train_steps[l] - 1
+            n_steps = model_steps[l] - 1
             grounded = self.ground_level(trajectory_below=memory[l - 1], level=l, memory=memory[l],
                                          memory_other=memory_ema[l], memory_targets=targets[l],
                                          start_state=model_state[l])
@@ -670,8 +670,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         ground_truth_trajectories = {k: v for k, v in training_data.items() if k in ('o', 'a', 'r', 'terminal')}
 
         # forward model
-        pred, pred_ema, targets = self.train_all_levels(ground_truth_trajectory=ground_truth_trajectories,
-                                                        warmup_steps=warmup_steps, train_steps=model_steps)
+        pred, pred_ema, targets = self.forward_all_levels(ground_truth_trajectory=ground_truth_trajectories,
+                                                          warmup_steps=warmup_steps, model_steps=model_steps)
 
         # average losses and calculate masks
         losses = {}

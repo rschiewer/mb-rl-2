@@ -229,8 +229,8 @@ def main():
         """
 
         if i_step % cfg['trainer']['collect_interval'] == 0:
-            collect_simple()
-            # collect()
+            #collect_simple()
+            collect()
 
         # eval
         if cfg['trainer']['eval_interval'] is not None and i_step % cfg['trainer']['eval_interval'] == 0:
@@ -245,15 +245,18 @@ def main():
             eval_losses = model.eval_step(batch, model_steps=eval_steps)
             logger.log(_to_np(eval_losses), Scope.TEST(), i_step)
             # hierarchical agent
-            # eval_env.reset()
-            # policy = HierarchicalLatentAgentPolicy(model)
-            # eval_mem = collect_data(eval_env, 25, policy)
-            # logger.log(trajectory_statistics(eval_mem), Scope.TEST() / 'hierarchical_agent/', i_step)
+            eval_env.reset()
+            policy = HierarchicalLatentAgentPolicy(model)
+            eval_mem = collect_data(eval_env, 25, policy)
+            logger.log(trajectory_statistics(eval_mem), Scope.TEST() / 'hierarchical_agent/', i_step)
             # flat agent
             eval_env.reset()
             policy = LatentAgentPolicy(r_max_agents[0][0], model)
             eval_mem = collect_data(eval_env, 25, policy)
             logger.log(trajectory_statistics(eval_mem), Scope.TEST() / 'flat_agent/', i_step)
+
+            # latent state distribution
+
 
     # training done ----------------------------------------------------------------------------------------------------
 
