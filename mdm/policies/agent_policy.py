@@ -187,7 +187,7 @@ class HierarchicalLatentAgentPolicy(Policy):
         simulation = agent.act_in_sim(env_state=state, sim_env=self.model, n_steps=1)
         self._act_cache[i_highest] += simulation['agent']['a']
 
-        goals_from_above = simulation['model']['z']  # TODO: remove hardcoded agent observation key
+        goals_from_above = simulation['model']['o']
         for i_lvl in reversed(range(0, i_highest)):
             state = self._grounded_env_states[i_lvl]
             agent = self.model.goal_seeking_agents[i_lvl][0]
