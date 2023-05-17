@@ -507,8 +507,20 @@ def update_ema_modules(modules: List[Dict[str, torch.Tensor]], ema_modules: List
                 params_ema_m[name].sub_(coeff * (params_ema_m[name] - param_m))
 
 
+def to_np(data_dict: Dict[str, Union[torch.Tensor, Dict]]):
+    np_data_dict = {}
+    for k, v in data_dict.items():
+        if isinstance(v, dict):
+            np_data_dict[k] = to_np(v)
+        elif isinstance(v, torch.Tensor):
+            np_data_dict[k] = v.detach().cpu().numpy()
+        else:
+            raise ValueError(f'Unsupported type: {type(k)}')
+    return np_data_dict
+
+
 # define torch.compile decorator depending on whether we're in debug mode or not
-if gettrace() or 'PYCHARM_HOSTED' in os.environ:
+if gettrace() or 'PYCHARM_HOSTED' in os.environ or True:
     print('Debugging or running in PyCharm IDE, disabling torch.compile')
 
     def compile_if_not_debug(func):
@@ -516,3 +528,5 @@ if gettrace() or 'PYCHARM_HOSTED' in os.environ:
 else:
     print('Compiling functions with compile_if_not_debug decorator')
     compile_if_not_debug = torch.compile
+
+

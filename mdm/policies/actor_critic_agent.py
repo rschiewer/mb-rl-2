@@ -22,17 +22,18 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                  observation_key: str,
                  d_a: int,
                  d_o: int,
-                 min_a: Sequence[float] = None,
-                 max_a: Sequence[float] = None,
-                 ema_coeff: float = 0.99,
-                 trust_region_policy_update_beta: float = 0.0,
-                 eps_exploration: float = 0,
-                 eps_exploration_mul: float = 0,
-                 action_entropy_exploration: float = 0.0,
-                 learn_action_entropy_exploration: bool = False,
-                 model_novelty_exploration: float = 0.0,
+                 min_a: float | Sequence[float] = None,
+                 max_a: float | Sequence[float] = None,
+                 tr_policy_ema_update_coeff: float = 0.99,
+                 tr_policy_kl_coeff: float = 0.0,
+                 eps_exploration_init: float = 0,
+                 eps_exploration_coeff: float = 0,
+                 act_entropy_exploration_coeff: float = 0.0,
+                 learn_act_entropy_exploration_coeff: bool = False,
+                 novelty_exploration_coeff: float = 0.0,
                  use_ema_world_model: bool = False,
-                 goal_seeking: bool = False):
+                 goal_seeking: bool = False,
+                 **kwargs):
         super().__init__()
 
         if goal_seeking:
@@ -43,24 +44,28 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         self.d_a = d_a
         self.d_o = d_o
         if min_a:
+            if isinstance(min_a, float):
+                min_a = [min_a for _ in range(d_a)]
             self.min_a = torch.nn.Parameter(torch.tensor(min_a))
             self.min_a.requires_grad = False
         else:
             self.min_a = None
 
         if max_a:
+            if isinstance(max_a, float):
+                max_a = [max_a for _ in range(d_a)]
             self.max_a = torch.nn.Parameter(torch.tensor(max_a))
             self.max_a.requires_grad = False
         else:
             self.max_a = None
-        self.ema_coeff = ema_coeff
-        self.beta = trust_region_policy_update_beta
-        self.eps = torch.tensor(eps_exploration, device=self.device, dtype=torch.float32, requires_grad=False)
-        self.eps_mul = eps_exploration_mul
-        self.alpha = torch.nn.Parameter(torch.tensor(action_entropy_exploration))
-        if not learn_action_entropy_exploration:
+        self.ema_coeff = tr_policy_ema_update_coeff
+        self.beta = tr_policy_kl_coeff
+        self.eps = torch.tensor(eps_exploration_init, device=self.device, dtype=torch.float32, requires_grad=False)
+        self.eps_mul = eps_exploration_coeff
+        self.alpha = torch.nn.Parameter(torch.tensor(act_entropy_exploration_coeff))
+        if not learn_act_entropy_exploration_coeff:
             self.alpha.requires_grad = False
-        self.mu = model_novelty_exploration
+        self.mu = novelty_exploration_coeff
         self.use_slow_world_model = use_ema_world_model
         self.goal_seeking = goal_seeking
 
@@ -84,11 +89,11 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
 
     @compile_if_not_debug
     def _act_dist(self,
-                  actor_head: torch.nn.Module,
+                  actor_net: torch.nn.Module,
                   x: torch.Tensor):
-        x = actor_head(x)
+        x = actor_net(x)
         mu, logvar = torch.tensor_split(x, 2, dim=-1)
-        mu = torch.tanh(mu) * (self.max_a - self.min_a) / 2 + (self.min_a + self.max_a) / 2
+        #mu = torch.tanh(mu) * (self.max_a - self.min_a) / 2 + (self.min_a + self.max_a) / 2
         sigma = torch.log(1 + torch.exp(logvar)) + 0.001
         d = torch.distributions.Normal(loc=mu, scale=sigma)
         return d

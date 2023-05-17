@@ -8,7 +8,7 @@ final_model_path: "trained_models/model"
 mdm:
    rssm_modules:
       # RSSM no. 1
-      -  d_z: 10
+      -  d_z: 8
          d_h: 64
          d_a: null
          n_hidden_layers: 3
@@ -100,9 +100,9 @@ mdm:
             class: "MaxUpwardsFilter"
             window_size: 2
    warmup_steps: [ 'rand', 'rand' ]
-   kl_betas: [ 0.5, 0.5 ]
+   kl_betas: [ 1.0, 1.0 ]
    kl_reg_betas: [ 0.0, 0.0 ]
-   ema_regularization: 0.01
+   ema_regularization: 0.1
    ema_coeff: 0.98
 
 optim:
@@ -110,15 +110,71 @@ optim:
    lr: 0.001 #0.0002
 
 trainer:
-   n_train_steps: 10000
+   n_train_steps: 5000
    eval_interval: 20
    d_batch: 2048
    subtrajectory_len: 15
    collect_envs: 50
    collect_interval: 50
    agent_train_interval: 5
-   agent_model_warmup: [ 2 , 1 ]
    agent_model_steps: [ 16, 8 ]
+
+agents:
+   r_max:
+      # level 0
+      - eps_exploration_init: 0.0
+        eps_exploration_coeff: 0.99
+        act_entropy_exploration_coeff: 0.1
+        learn_act_entropy_exploration_coeff: False
+        novelty_exploration_coeff: 0.1
+        tr_policy_kl_coeff: 0.2
+        tr_policy_ema_update_coeff: 0.95
+        use_ema_world_model: False
+        lr_actor: 0.0005
+        lr_critic: 0.005
+        min_a: null
+        max_a: null
+      # level 1
+      - eps_exploration_init: 0.0
+        eps_exploration_coeff: 0.99
+        act_entropy_exploration_coeff: 0.1
+        learn_act_entropy_exploration_coeff: False
+        novelty_exploration_coeff: 0.1
+        tr_policy_kl_coeff: 0.2
+        tr_policy_ema_update_coeff: 0.95
+        use_ema_world_model: False
+        lr_actor: 0.0005
+        lr_critic: 0.005
+        min_a: null
+        max_a: null
+   goal_seeking:
+      # level 0
+      - eps_exploration_init: 0.0
+        eps_exploration_coeff: 0.99
+        act_entropy_exploration_coeff: 0.1
+        learn_act_entropy_exploration_coeff: False
+        novelty_exploration_coeff: 0.1
+        tr_policy_kl_coeff: 0.2
+        tr_policy_ema_update_coeff: 0.95
+        use_ema_world_model: False
+        lr_actor: 0.0005
+        lr_critic: 0.005
+        min_a: null
+        max_a: null
+      # level 1
+      - eps_exploration_init: 0.0
+        eps_exploration_coeff: 0.99
+        act_entropy_exploration_coeff: 0.1
+        learn_act_entropy_exploration_coeff: False
+        novelty_exploration_coeff: 0.1
+        tr_policy_kl_coeff: 0.2
+        tr_policy_ema_update_coeff: 0.95
+        use_ema_world_model: False
+        lr_actor: 0.0005
+        lr_critic: 0.005
+        min_a: null
+        max_a: null
+
 
 eval:
    warmup_steps: [ 2, 1 ]

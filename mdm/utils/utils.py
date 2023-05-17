@@ -7,7 +7,7 @@ from enum import Enum, auto
 from inspect import stack
 from itertools import product
 from pathlib import Path
-from typing import Union, Dict, Tuple, TypeVar, Sequence, List
+from typing import Any
 
 import gym
 import matplotlib.animation as animation
@@ -22,6 +22,7 @@ from PIL import Image
 from mdm.gridworld.gridworld import Gridworld, CellType
 from mdm.memory.trajectory_memory import flatten_and_unsqueeze, TrajectoryMemory
 from mdm.models.building_blocks import *
+from mdm.policies.actor_critic_agent import ActorCriticAgent
 
 SliceType = TypeVar("SliceType", bound=Sequence)
 BasicDtype = TypeVar('BasicDtype', int, float, np.single, np.double, bool)
@@ -82,13 +83,13 @@ def cfg_infer_missing_values(cfg: dict,
         module_args['term_decoder']['s_x_orig'] = 1
         module_args['term_decoder']['d_x_encoded'] = d_state
 
-    #for i_filter, filter_args in enumerate(cfg['mdm']['upwards_filters']):
+    # for i_filter, filter_args in enumerate(cfg['mdm']['upwards_filters']):
     #    rssm = cfg['mdm']['rssm_modules'][i_filter]
     #    next_rssm = cfg['mdm']['rssm_modules'][i_filter + 1]
     return cfg
 
 
-def build_rssms(cfg):
+def build_rssms(cfg: dict):
     for i_module, module_args in enumerate(cfg['mdm']['rssm_modules']):
         for k, v in module_args.items():  # generate encoders and decoder objects for current RSSM
             if isinstance(v, dict) and 'class' in v:
@@ -102,6 +103,40 @@ def build_rssms(cfg):
             instance = globals()[cls_name](**v)
             filter_args[k] = instance
     return cfg
+
+
+def build_agents(cfg: dict,
+                 env: gym.Env,
+                 device: torch.device):
+    if not isinstance(env.action_space, gym.spaces.Box):
+        raise ValueError('Only enviornments with continuous action space are supported')
+
+    def gen_agent_fn(level: int, goal_seeking: bool, cfg) -> (
+            ActorCriticAgent, torch.optim.Optimizer, torch.optim.Optimizer):
+        agent = ActorCriticAgent(level=level, observation_key='z', goal_seeking=goal_seeking, **cfg)
+        agent = agent.to(device)
+        actor_optimizer = torch.optim.Adam(agent.actor_net.parameters(), lr=cfg['lr_actor'])
+        critic_optimizer = torch.optim.Adam(agent.critic_net.parameters(), lr=cfg['lr_critic'])
+        return agent, actor_optimizer, critic_optimizer
+
+    r_max_agents = []
+    goal_seeking_agents = []
+    for agent_lvl in range(len(cfg['mdm']['rssm_modules'])):
+        cfg_r_max = cfg['agents']['r_max'][agent_lvl]
+        cfg_goal_seeking = cfg['agents']['goal_seeking'][agent_lvl]
+
+        # infer missing values
+        if agent_lvl == 0:
+            cfg_r_max['min_a'] = cfg_goal_seeking['min_a'] = tuple(env.action_space.low)
+            cfg_r_max['max_a'] = cfg_goal_seeking['max_a'] = tuple(env.action_space.high)
+        cfg_r_max['d_a'] = cfg_goal_seeking['d_a'] = cfg['mdm']['rssm_modules'][agent_lvl].d_a
+        cfg_r_max['d_o'] = cfg_goal_seeking['d_o'] = cfg['mdm']['rssm_modules'][agent_lvl].d_z
+
+        r_max_agents.append(gen_agent_fn(agent_lvl, False, cfg_r_max))
+        goal_seeking_agents.append(gen_agent_fn(agent_lvl, True, cfg_goal_seeking))
+    goal_seeking_agents[-1] = None  # no homing agent needed on last level
+
+    return r_max_agents, goal_seeking_agents
 
 
 hierarchy_sep = '|'
@@ -411,6 +446,7 @@ def subtrajectories(mem: List[Dict[str, DataType]],
     return mem
 """
 
+
 def apply_mask(o: torch.Tensor,
                a: torch.Tensor,
                r: torch.Tensor,
@@ -441,8 +477,8 @@ def prepare_data_gridworld(s: Union[np.ndarray, torch.Tensor],
                            env: Gridworld,
                            subtrajectory_len: int = 0,
                            ) -> Tuple[Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
-                                      Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
-                                      Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray]]:
+Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
+Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray]]:
     s, a, r, terminal, truncated, mask = flatten_and_unsqueeze(s, a, r, terminal, truncated, mask)
     s = to_onehot(s, max(env.grid_w, env.grid_h))
     # s = normalize_obs(s, env)
@@ -762,7 +798,7 @@ def visualize_trajectory(trajectory: Dict[str, np.ndarray]):
     pos = ax[0, 0].scatter(x=trajectory['o'][0, 0], y=trajectory['o'][0, 1])  # init pos
     angle, stepwidth = trajectory['a'][0]
     dx, dy = np.arccos(angle) * stepwidth, np.arcsin(angle) * stepwidth
-    #act = ax[0, 0].arrow(x=trajectory['o'][0, 0], y=trajectory['o'][0, 1], dx=dx, dy=dy)  # init action
+    # act = ax[0, 0].arrow(x=trajectory['o'][0, 0], y=trajectory['o'][0, 1], dx=dx, dy=dy)  # init action
     ax[0, 0].scatter(x=trajectory['o'][0, 2], y=trajectory['o'][0, 3])  # goal
     ax[1, 0].plot(trajectory['r'])
     ax[1, 1].plot(trajectory['terminal'])
@@ -774,11 +810,11 @@ def visualize_trajectory(trajectory: Dict[str, np.ndarray]):
         # draw position
         pos.set_offsets([trajectory['o'][i]])
         # draw action
-        #angle, stepwidth = trajectory['a'][i]
-        #dx, dy = np.arccos(angle) * stepwidth, np.arcsin(angle) * stepwidth
-        #ax[0, 0].arrow(x=trajectory['o'][i, 0], y=trajectory['o'][i, 1], dx=dx, dy=dy)
+        # angle, stepwidth = trajectory['a'][i]
+        # dx, dy = np.arccos(angle) * stepwidth, np.arcsin(angle) * stepwidth
+        # ax[0, 0].arrow(x=trajectory['o'][i, 0], y=trajectory['o'][i, 1], dx=dx, dy=dy)
         # draw time markers
-        #act.set_offsets([dx, dy])
+        # act.set_offsets([dx, dy])
         time_marker_r.set_xdata(i)
         time_marker_terminal.set_xdata(i)
         return pos, time_marker_r, time_marker_terminal

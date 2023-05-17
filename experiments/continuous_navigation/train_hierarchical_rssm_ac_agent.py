@@ -1,25 +1,17 @@
-import copy
-import time
 import os.path
 import argparse
-from typing import Dict, Any
+from typing import Any
 
 import gym.vector
-import torch
 from tqdm import tqdm
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 
+from mdm.utils.torch_tools import to_np
 from mdm.utils.utils import *
-from mdm.models.hierarchical_rssm import HierarchicalRSSM
-from mdm.models.building_blocks import RSSMCell
 from mdm.training.offline_rl_driver import OfflineRLDriver, SamplingType
 from mdm.logging.neptune_logger import NeptuneLogger
 from mdm.logging.not_logger import NotLogger
 from mdm.logging.logger import Scope
-from mdm.models.building_blocks import *
 from mdm.training.gym_driver import collect_data
-from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.policies.agent_policy import *
 
 
@@ -33,18 +25,6 @@ def agent_eval_mode(agents):
     for a in agents:
         if a is None: continue
         a[0].eval()
-
-
-def _to_np(data_dict: Dict[str, Union[torch.Tensor, Dict]]):
-    np_data_dict = {}
-    for k, v in data_dict.items():
-        if isinstance(v, dict):
-            np_data_dict[k] = _to_np(v)
-        elif isinstance(v, torch.Tensor):
-            np_data_dict[k] = v.detach().cpu().numpy()
-        else:
-            raise ValueError(f'Unsupported type: {type(k)}')
-    return np_data_dict
 
 
 def main():
@@ -70,32 +50,8 @@ def main():
     cfg = cfg_infer_missing_values(cfg, env)  # fill in missing config values
     logger.start_session()
     logger.log(cfg, Scope.HYPERPARAMETERS())  # log complete config
-    cfg = build_rssms(cfg)  # generate RSSM cells and upwards filters
-
-    def gen_agent_fn(level: int, goal_seeking: bool, cfg: dict[str, Any]) -> (
-            ActorCriticAgent, torch.optim.Optimizer, torch.optim.Optimizer):
-        alpha = 0.1 #0.001 if goal_seeking else 0.1
-        beta = 0.2 #0.02 if goal_seeking else 0.2
-        mu = 0.1 #0.001 if goal_seeking else 0.1
-        eps = 0.0
-        eps_mul = 0.99 #0.0 if goal_seeking else 0.99
-        agent = ActorCriticAgent(level=level, observation_key='z', d_a=cfg['mdm']['rssm_modules'][level].d_a,
-                                 d_o=cfg['mdm']['rssm_modules'][level].d_z, min_a=(-1.0, -1.0), max_a=(1.0, 1.0),
-                                 ema_coeff=0.95, trust_region_policy_update_beta=beta, eps_exploration=eps,
-                                 eps_exploration_mul=eps_mul, action_entropy_exploration=alpha,
-                                 learn_action_entropy_exploration=False,
-                                 model_novelty_exploration=mu, use_ema_world_model=False, goal_seeking=goal_seeking)
-        agent = agent.to('cuda')
-        actor_optimizer = torch.optim.Adam(agent.actor_net.parameters(), lr=0.0005)
-        critic_optimizer = torch.optim.Adam(agent.critic_net.parameters(), lr=0.005)
-        return agent, actor_optimizer, critic_optimizer
-
-    r_max_agents = []
-    goal_seeking_agents = []
-    for agent_lvl in range(len(cfg['mdm']['rssm_modules'])):
-        r_max_agents.append(gen_agent_fn(agent_lvl, False))
-        goal_seeking_agents.append(gen_agent_fn(agent_lvl, True))
-    goal_seeking_agents[-1] = None  # no homing agent needed on last level
+    build_rssms(cfg)  # generate RSSM cells and upwards filters
+    r_max_agents, goal_seeking_agents = build_agents(cfg, env, 'cuda')
 
     model = HierarchicalRSSM(**cfg['mdm'], r_max_agents=r_max_agents, goal_seeking_agents=goal_seeking_agents)
     model = model.to('cuda')
@@ -155,7 +111,7 @@ def main():
         # now = time.time()
         train_losses = model.train_step(model_batch, opt_model, model_steps=train_steps)
         # print(time.time() - now)
-        logger.log(_to_np(train_losses), Scope.TRAIN(), i_step)
+        logger.log(to_np(train_losses), Scope.TRAIN(), i_step)
 
         # train model in observation mode
         #train_losses = model.train_step(model_batch, opt_model, model_steps=train_steps, learn_states=True)
@@ -185,7 +141,7 @@ def main():
                 r_max_losses = r_max_agent.train_step(r_max_simulation['agent'], actor_optimizer=r_max_actor_opt,
                                                       critic_optimizer=r_max_critic_opt)
                 r_max_losses['obtained_reward'] = torch.stack(r_max_simulation['agent']['r']).mean()
-                logger.log(_to_np(r_max_losses), Scope.TRAIN() / f'r_max_agent/{l}/', i_step)
+                logger.log(to_np(r_max_losses), Scope.TRAIN() / f'r_max_agent/{l}/', i_step)
 
                 # goal_seeking agent
                 # We start at the same spot as the r_max agent, namely at start_state_level. We then use every
@@ -205,7 +161,7 @@ def main():
                     goal_losses = goal_agent.train_step(agent_mem, actor_optimizer=goal_actor_opt,
                                                         critic_optimizer=goal_critic_opt)
                     goal_losses['obtained_reward'] = torch.stack(goal_simulation['agent']['r']).mean()
-                    logger.log(_to_np(goal_losses), Scope.TRAIN() / f'goal_seeking_agent/{l}/', i_step)
+                    logger.log(to_np(goal_losses), Scope.TRAIN() / f'goal_seeking_agent/{l}/', i_step)
 
                 # prepare grounding information for next level
                 trajectory_below = r_max_simulation['model']
@@ -225,7 +181,7 @@ def main():
             batch = prepare_data(batch)
             eval_steps = [-1, 20, 10]
             eval_losses = model.eval_step(batch, model_steps=eval_steps)
-            logger.log(_to_np(eval_losses), Scope.TEST(), i_step)
+            logger.log(to_np(eval_losses), Scope.TEST(), i_step)
             # hierarchical agent
             eval_env.reset()
             policy = HierarchicalLatentAgentPolicy(model)
