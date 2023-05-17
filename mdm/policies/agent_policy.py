@@ -202,31 +202,6 @@ class HierarchicalLatentAgentPolicy(Policy):
 
         self._action_queue += self._act_cache[0]
 
-        #for i_lvl in reversed(range(1, i_highest + 1)):
-        #    state = self._grounded_env_states[i_lvl]
-        #    goal_mem, lowest_agent = self._follow_plan(i_lvl, goal_mem, state)
-        #    self._act_cache[i_lvl - 1] = lowest_agent['a']
-        #self._action_queue += lowest_agent['a']
-
-    """
-    def _follow_plan(self,
-                     lvl_current: int,
-                     mem_current: Dict[str, torch.Tensor],
-                     state_below: Dict[str, torch.Tensor]):
-        lvl_below = lvl_current - 1
-        chunk_size = self.model.strides[lvl_current]
-        # TODO: currently uses only first chunk for warmup, could be varied during training for better results
-        n_warmup_chunks = 1
-        agent_mem_below = {}
-        mem_below = {}
-        for goal in mem_current['o']:
-            mem_below, state_below, agent_mem_below = self.model.simulate(n_steps=chunk_size,
-                                                                          start_state=state_below, agent_goal=goal,
-                                                                          level=lvl_below, memory=mem_below,
-                                                                          agent_memory=agent_mem_below)
-        return mem_below, agent_mem_below
-    """
-
     def __call__(self,
                  env: Union[CacheLastStepEnv, CacheLastStepVecEnv]):
         if env.current_step == 0:

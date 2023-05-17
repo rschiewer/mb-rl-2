@@ -2,10 +2,13 @@ import copy
 import time
 import os.path
 import argparse
+from typing import Dict, Any
 
 import gym.vector
 import torch
 from tqdm import tqdm
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 
 from mdm.utils.utils import *
 from mdm.models.hierarchical_rssm import HierarchicalRSSM
@@ -69,13 +72,13 @@ def main():
     logger.log(cfg, Scope.HYPERPARAMETERS())  # log complete config
     cfg = build_rssms(cfg)  # generate RSSM cells and upwards filters
 
-    def gen_agent_fn(level: int, goal_seeking: bool) -> (
+    def gen_agent_fn(level: int, goal_seeking: bool, cfg: dict[str, Any]) -> (
             ActorCriticAgent, torch.optim.Optimizer, torch.optim.Optimizer):
-        alpha = 0.1
-        beta = 0.1  # 0.02 if goal_seeking else 0.2
-        mu = 0.1  # 0.01 if goal_seeking else 0.1
-        eps = 0.2
-        eps_mul = 0.0 if goal_seeking else 0.99
+        alpha = 0.1 #0.001 if goal_seeking else 0.1
+        beta = 0.2 #0.02 if goal_seeking else 0.2
+        mu = 0.1 #0.001 if goal_seeking else 0.1
+        eps = 0.0
+        eps_mul = 0.99 #0.0 if goal_seeking else 0.99
         agent = ActorCriticAgent(level=level, observation_key='z', d_a=cfg['mdm']['rssm_modules'][level].d_a,
                                  d_o=cfg['mdm']['rssm_modules'][level].d_z, min_a=(-1.0, -1.0), max_a=(1.0, 1.0),
                                  ema_coeff=0.95, trust_region_policy_update_beta=beta, eps_exploration=eps,
@@ -144,26 +147,29 @@ def main():
         batch = to_tensors(batch, model.device)
         batch = prepare_data(batch)
 
-        # train model
+        # train model normal
         model.train()
         agent_eval_mode(r_max_agents + goal_seeking_agents)
-        model_batch = valid_subtrajectories(batch, 15)
+        model_batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
         train_steps = [-1, 20, 10]
         # now = time.time()
         train_losses = model.train_step(model_batch, opt_model, model_steps=train_steps)
         # print(time.time() - now)
         logger.log(_to_np(train_losses), Scope.TRAIN(), i_step)
 
+        # train model in observation mode
+        #train_losses = model.train_step(model_batch, opt_model, model_steps=train_steps, learn_states=True)
+        #logger.log(_to_np(train_losses), Scope.TRAIN() / 'observation_mode', i_step)
+
         # train agents
         if i_step % cfg['trainer']['agent_train_interval'] == 0:
             agent_train_mode(r_max_agents + goal_seeking_agents)
-            agent_model_warmup = cfg['trainer']['agent_model_warmup']
             agent_model_steps = cfg['trainer']['agent_model_steps']
-            trajectory_below = valid_subtrajectories(batch, agent_model_warmup[0])
+            trajectory_below = valid_subtrajectories(batch, 1)
 
             for l in range(model.levels):
                 if l == 0:
-                    _, _, start_state_level = model.forward_static(trajectory_below, level=0, n_steps=-1, n_warmup=-1)
+                    _, _, start_state_level = model.forward_static(trajectory_below, level=0, n_steps=1, n_warmup=1)
                 else:
                     _, _, _, start_state_level, _ = model.ground_level(trajectory_below=trajectory_below, level=l)
 
@@ -178,6 +184,7 @@ def main():
                 r_max_simulation = r_max_agent.act_in_sim(start_state_level, model, n_steps)
                 r_max_losses = r_max_agent.train_step(r_max_simulation['agent'], actor_optimizer=r_max_actor_opt,
                                                       critic_optimizer=r_max_critic_opt)
+                r_max_losses['obtained_reward'] = torch.stack(r_max_simulation['agent']['r']).mean()
                 logger.log(_to_np(r_max_losses), Scope.TRAIN() / f'r_max_agent/{l}/', i_step)
 
                 # goal_seeking agent
@@ -197,36 +204,11 @@ def main():
 
                     goal_losses = goal_agent.train_step(agent_mem, actor_optimizer=goal_actor_opt,
                                                         critic_optimizer=goal_critic_opt)
+                    goal_losses['obtained_reward'] = torch.stack(goal_simulation['agent']['r']).mean()
                     logger.log(_to_np(goal_losses), Scope.TRAIN() / f'goal_seeking_agent/{l}/', i_step)
 
                 # prepare grounding information for next level
                 trajectory_below = r_max_simulation['model']
-
-        """
-        if i_step % cfg['trainer']['agent_train_interval'] == 0:
-            all_agents_train(r_max_agents, goal_seeking_agents)
-
-            # NOTE: lvl 0 needs warmup of at least 1 to make sure that agent sees first observation from environment
-            warmup_steps = [1] + [1 for _ in range(model.levels - 1)]  # only lvl 0 warmup steps is relevant
-            agent_steps = [20, 10, 5]  # arbitrary, test various values
-            agent_batch = valid_subtrajectories(batch, 5)
-            _, _, _, r_ag_mem, goal_ag_mem, _ = model.forward_all(agent_batch, warmup_steps, agent_steps,
-                                                                  agent_training=True)
-            if random.random() < 0.5:  # can only propagate through model once so decide which agent gets training
-                for i_lvl, data_lvl in enumerate(r_ag_mem):
-                    agent, opt_act, opt_crit = r_max_agents[i_lvl]
-                    losses = agent.train_step(**data_lvl, actor_optimizer=opt_act, critic_optimizer=opt_crit)
-                    losses['action_entropy'] = torch.stack([d.entropy() for d in data_lvl['a_dist']]).mean()
-                    losses['obtained_reward'] = torch.stack(data_lvl['r']).mean()
-                    logger.log(_to_np(losses), Scope.TRAIN() / f'r_max_agent/{i_lvl}/', i_step)
-            else:
-                for i_lvl, data_lvl in enumerate(goal_ag_mem):
-                    agent, opt_act, opt_crit = goal_seeking_agents[i_lvl]
-                    losses = agent.train_step(**data_lvl, actor_optimizer=opt_act, critic_optimizer=opt_crit)
-                    losses['action_entropy'] = torch.stack([d.entropy() for d in data_lvl['a_dist']]).mean()
-                    losses['obtained_reward'] = torch.stack(data_lvl['r']).mean()
-                    logger.log(_to_np(losses), Scope.TRAIN() / f'goal_seeking_agent/{i_lvl}/', i_step)
-        """
 
         if i_step % cfg['trainer']['collect_interval'] == 0:
             #collect_simple()
@@ -256,7 +238,28 @@ def main():
             logger.log(trajectory_statistics(eval_mem), Scope.TEST() / 'flat_agent/', i_step)
 
             # latent state distribution
+            #warmup_steps = cfg['eval']['warmup_steps']
+            #pred, _, targets = model.forward_all_levels(batch, model_steps=eval_steps, warmup_steps=warmup_steps)
+            #for l in range(model.levels):
+            #    mask = model.compute_mask(targets[l])
+            #    mask = mask.detach().cpu().numpy().reshape(mask.shape[0] * mask.shape[1], -1)
+            #    latent_states = torch.stack(pred[l]['z']).detach().cpu().numpy()
+            #    latent_states = latent_states.reshape(latent_states.shape[0] * latent_states.shape[1], -1)
+            #    #latent_states = np.stack([s for s, m in zip(latent_states, mask) if m < 0.9])
+            #    rewards = torch.stack(pred[l]['r']).detach().cpu().numpy()
+            #    rewards = rewards.reshape(rewards.shape[0] * rewards.shape[1], -1)
+            #    #rewards = np.stack([r for r, m in zip(rewards, mask) if m < 0.9])
 
+            #    fig = plt.figure(figsize=(10, 10))
+            #    fig.suptitle(f'Latent States Level {l}')
+            #    ax = fig.add_subplot(111)#, projection='3d')
+            #    #sc = ax.scatter(latent_states[:, 0], latent_states[:, 1], latent_states[:, 2], c=rewards.ravel())
+            #    sc = ax.scatter(latent_states[:, 0], latent_states[:, 1], c=rewards.ravel())
+            #    fig.colorbar(sc)
+            #    #plt.show()
+            #    logger.log_plot(fig_to_img(fig), Scope.TEST() / f'latent_state_distribution/{l}', i_step)
+            #    plt.close(fig)
+            #    del fig
 
     # training done ----------------------------------------------------------------------------------------------------
 

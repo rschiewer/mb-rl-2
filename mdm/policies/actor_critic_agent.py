@@ -393,10 +393,8 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             # detach goal to avoid propagating gradients to upper level model into other agents
             if isinstance(goal, torchd.Distribution):
                 goal = goal.mode.detach()
-                # goal = goal.mode
             else:
                 goal = goal.detach()
-                # goal = goal
             return torch.concat([o, goal], dim=-1)
         else:
             return o
