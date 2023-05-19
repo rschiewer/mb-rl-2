@@ -66,6 +66,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         self.goal_seeking_agents = tuple(goal_seeking_agents)
         self.ema_regularization = ema_regularization
         self.ema_coeff = ema_coeff
+        self.dbg_timestep = 0
 
     @property
     def levels(self) -> int:
@@ -78,6 +79,9 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
     @property
     def i_top(self) -> int:
         return self.levels - 1
+
+    def reset_debug_counter(self):
+        self.dbg_timestep = 0
 
     """
     def observe(self,
@@ -345,7 +349,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             simulated_ground_truth = {k: v.squeeze(0) for k, v in simulated_ground_truth.items()}  # remove time dim
 
             # augment reward with how reachable the goal was for lower level
-            simulated_ground_truth['r'] += 0.1 * simulation['agent']['r'][-1]
+            simulated_ground_truth['r'] += 0.01 * simulation['agent']['r'][-1]
 
             if t < n_warmup:  # if still in warmup, re-do last step with simulated ground truth and use posterior
                 pred, next_state = mdl(a=a_t, **simulated_ground_truth, last_state=state,
@@ -439,6 +443,11 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 data = memory_other.get(k, [])
                 data.append(v)
                 memory_other[k] = data
+
+            #dbg_timescale = memory.get('dbg_step', [])
+            #dbg_timescale.append(self.dbg_timestep)
+            #memory['dbg_step'] = dbg_timescale
+            #self.dbg_timestep += 1
 
             if memoryless:
                 state = None
@@ -716,7 +725,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             raise RuntimeError('Please specify how many steps the model should run using the model_steps kwarg')
 
         warmup_steps = kwargs.get('force_warmup', self.warmup_steps)
-        warmup_steps = self._maybe_sample_warmup_steps(training_data, model_steps, warmup_steps)
+        warmup_steps = self.maybe_sample_warmup_steps(training_data, model_steps, warmup_steps)
 
         learn_states = kwargs.get('learn_states', False)
 
@@ -734,7 +743,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         # average losses and calculate masks
         losses = {}
         for i_lvl in range(self.levels):
-            mask_lvl = self.compute_mask(targets[i_lvl], 0.9)
+            mask_lvl = self.compute_mask(targets[i_lvl])
             #mask_lvl = torch.zeros_like(mask_lvl)
             # fig, ax = plt.subplots(1, 2, figsize=(10, 10))
             # fig.suptitle(f'Level {i_lvl}')
@@ -751,14 +760,18 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
         return losses
 
-    def _maybe_sample_warmup_steps(self,
-                                   training_data: Dict[str, torch.Tensor],
-                                   model_steps: Tuple[str | int],
-                                   warmup_steps: Tuple[str | int]):
+    def maybe_sample_warmup_steps(self,
+                                  training_data: Dict[str, torch.Tensor],
+                                  model_steps: Tuple[str | int],
+                                  warmup_steps: Tuple[str | int]):
         warmup_steps_sampled = []
 
         if warmup_steps[0] == 'rand':
-            wu = random.randint(1, training_data['o'].shape[0])
+            if model_steps[0] == -1:
+                max_steps = training_data['o'].shape[0]
+            else:
+                max_steps = min(training_data['o'].shape[0], model_steps[0])
+            wu = random.randint(1, max_steps)
         else:
             wu = warmup_steps[0]
         warmup_steps_sampled.append(wu)
