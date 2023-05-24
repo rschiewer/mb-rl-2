@@ -55,7 +55,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             for i_param, param in enumerate(ema_mod.parameters()):
                 param.detach_()
 
-
         self.rssm_modules = ModuleList(list(rssm_modules))
         self.links = (*links, lvl_k_link)
         self.upwards_filters = ModuleList(upwards_filters)
@@ -771,14 +770,14 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 max_steps = training_data['o'].shape[0]
             else:
                 max_steps = min(training_data['o'].shape[0], model_steps[0])
-            wu = random.randint(1, max_steps)
+            wu = random.randint(1, max_steps - 1)  # do at least one step after warmup
         else:
             wu = warmup_steps[0]
         warmup_steps_sampled.append(wu)
 
         for l in range(1, self.levels):
             if warmup_steps[l] == 'rand':
-                wu = random.randint(1, model_steps[l])
+                wu = random.randint(1, model_steps[l] - 1)  # do at least one step after warmup
             else:
                 wu = warmup_steps[l]
             warmup_steps_sampled.append(wu)

@@ -520,7 +520,7 @@ def to_np(data_dict: Dict[str, Union[torch.Tensor, Dict]]):
 
 
 # define torch.compile decorator depending on whether we're in debug mode or not
-if gettrace() or 'PYCHARM_HOSTED' in os.environ or True:
+if gettrace() or 'PYCHARM_HOSTED' in os.environ:
     print('Debugging or running in PyCharm IDE, disabling torch.compile')
 
     def compile_if_not_debug(func):

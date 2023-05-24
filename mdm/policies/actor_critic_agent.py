@@ -93,7 +93,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                   x: torch.Tensor):
         x = actor_net(x)
         mu, logvar = torch.tensor_split(x, 2, dim=-1)
-        #mu = torch.tanh(mu) * (self.max_a - self.min_a) / 2 + (self.min_a + self.max_a) / 2
+        mu = torch.tanh(mu) * (self.max_a - self.min_a) / 2 + (self.min_a + self.max_a) / 2
         sigma = torch.log(1 + torch.exp(logvar)) + 0.001
         d = torch.distributions.Normal(loc=mu, scale=sigma)
         return d
@@ -159,10 +159,10 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                                                                                               returns, gae_advantages,
                                                                                               model_novelty, discount):
             # ACTOR
-            advantage = R - v_.detach()
-            policy_losses.append(-advantage)
-            # policy_losses.append(-gae_advantage_)
-            # policy_losses.append(-R)
+            #advantage = R - v_.detach()
+            #policy_losses.append(-advantage)
+            #policy_losses.append(-gae_advantage_)
+            policy_losses.append(-R)
             # ppo_r = a_dist.log_prob(a.detach()) / detach_dist(ema_a_dist).log_prob(a.detach())
             # ppo_actor_loss = -((R.detach() - v.detach()) * torch.clip(ppo_r, torch.tensor(0.8, device=sim_env.device),
             #                                                          torch.tensor(1.2, device=sim_env.device)))
@@ -186,7 +186,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         value_loss = torch.mean(torch.stack(value_losses))
         ppo_loss = self.beta * torch.mean(torch.stack(ppo_losses))
         entropy_reward_aug = torch.mean(torch.stack(act_entropy_reward_augs))
-        model_novelty_reward_aug = torch.mean(torch.stack(model_novelty))
+        model_novelty_reward_aug = torch.mean(torch.stack(model_novelty_reward_augs))
         loss = policy_loss + value_loss + ppo_loss
 
         return {'total': loss, 'policy': policy_loss, 'value': value_loss, 'policy_trust_region_loss': ppo_loss,
