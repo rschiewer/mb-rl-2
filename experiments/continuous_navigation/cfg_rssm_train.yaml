@@ -1,8 +1,10 @@
 ---
 neptune_cfg: "../neptune_settings.yaml"
-env_name: "gym_nav2d:nav2dVeryEasy-0"
-train_samples: "nav2d_VeryEasy_train.samples"
-test_samples: "nav2d_VeryEasy_expert.samples"
+env_name: "gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-0"
+prefill_memory: "offline-dataset" # "random", False
+prefill_episodes: 5000
+train_samples: "nav2d_Easy_train.samples"
+test_samples: "nav2d_Easy_expert.samples"
 checkpoint_path: "checkpoints"
 final_model_path: "trained_models/model"
 
@@ -111,14 +113,14 @@ optim:
    lr: 0.001 #0.0002
 
 trainer:
-   n_train_steps: 5000
+   n_train_steps: 10000
    eval_interval: 20
    d_batch: 2048
-   subtrajectory_len: 15
+   subtrajectory_len: 20
    collect_envs: 50
-   collect_interval: 50
+   collect_interval: 30
    agent_train_interval: 5
-   agent_model_steps: [ 16, 8 ]
+   agent_model_steps: [ 20, 10 ]
    agent_model_max_warmup_steps: [ 5, 2 ]
 
 agents:

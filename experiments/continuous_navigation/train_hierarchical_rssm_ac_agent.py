@@ -11,7 +11,7 @@ from mdm.training.offline_rl_driver import OfflineRLDriver, SamplingType
 from mdm.logging.neptune_logger import NeptuneLogger
 from mdm.logging.not_logger import NotLogger
 from mdm.logging.logger import Scope
-from mdm.training.gym_driver import collect_data
+from mdm.training.gym_driver import collect_data, GymEpisodeDriver
 from mdm.policies.agent_policy import *
 
 
@@ -67,7 +67,18 @@ def main():
     else:
         raise ValueError(f'Unknown optimizer type: {optim_type}')
 
-    mem = load_memory(here() / cfg['train_samples'])
+    mem = []
+    match cfg['prefill_memory']:
+        case 'offline-dataset':
+            print('loading offline data to prefill training memory...')
+            mem = load_memory(here() / cfg['train_samples'])
+        case 'random':
+            print('collecting initial random trajectories...')
+            collect_driver = GymEpisodeDriver(env, lambda *x: env.action_space.sample())
+            collect_driver.interact(cfg['prefill_episodes'], True, mem)
+        case False:
+            print('starting with empty training memory...')
+
     train_driver = OfflineRLDriver(mem, sampling_type=SamplingType.RANDOM)
     test_mem = load_memory(here() / cfg['test_samples'])
     test_driver = OfflineRLDriver(test_mem, sampling_type=SamplingType.RANDOM)
@@ -203,12 +214,12 @@ def main():
             # hierarchical agent
             eval_env.reset()
             policy = HierarchicalLatentAgentPolicy(model)
-            eval_mem = collect_data(eval_env, 25, policy)
+            eval_mem = collect_data(eval_env, 50, policy)
             logger.log(trajectory_statistics(eval_mem), Scope.TEST() / 'hierarchical_agent/', i_step)
             # flat agent
             eval_env.reset()
             policy = LatentAgentPolicy(r_max_agents[0][0], model)
-            eval_mem = collect_data(eval_env, 25, policy)
+            eval_mem = collect_data(eval_env, 50, policy)
             logger.log(trajectory_statistics(eval_mem), Scope.TEST() / 'flat_agent/', i_step)
 
             # latent state distribution
