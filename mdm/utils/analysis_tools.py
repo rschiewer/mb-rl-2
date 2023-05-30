@@ -9,7 +9,7 @@ from numpy import ma as ma
 
 from mdm.gridworld.gridworld import Gridworld, CellType
 from mdm.models.multiscale_model_mk2 import MultiscaleDynamicsModelMK2
-from mdm.utils.torch_tools import add_time_dim, unpack_rnn_state, get_mu
+from mdm.utils.torch_tools import unpack_rnn_state, get_mu
 from mdm.utils.utils import to_onehot, normalize_obs, exhaustive_traversion, prepare_data_gridworld, gen_video
 
 
