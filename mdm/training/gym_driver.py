@@ -17,38 +17,42 @@ DataType = TypeVar('DataType', np.ndarray, int, float, bool)
 class GymEpisodeDriver(Driver):
 
     def __init__(self,
-                 env: CacheLastStepEnv,
+                 env: CacheLastStepEnv | CacheLastStepVecEnv,
                  policy: Callable):
         super(GymEpisodeDriver, self).__init__()
-        if not isinstance(env, CacheLastStepEnv):
-            raise ValueError(f'Provided environment needs to be wrapped in {CacheLastStepEnv.__class__.__name__}')
+        if not isinstance(env, (CacheLastStepEnv, CacheLastStepVecEnv)):
+            raise ValueError(f'Provided environment needs to be wrapped in {CacheLastStepEnv.__class__.__name__} ',
+                             f'or {CacheLastStepVecEnv.__class__.__name__}')
         self.env = env
         self.policy = policy
 
     def interact(self,
                  n_episodes: int,
-                 progress_bar: bool = False,
                  mem: List[Dict[str, DataType]] = None,
                  seed: Union[int, List[int]] = None,
                  **kwargs) -> List[Dict[str, DataType]]:
         if mem is None:
             mem = []
 
-        ep_iter = range(n_episodes)
-        if progress_bar:
-            ep_iter = tqdm(ep_iter, desc='Collecting Samples')
+        ep_iter = tqdm(range(n_episodes), desc='Collecting Samples')
         if type(seed) is int:
             seed = [seed for _ in range(n_episodes)]
         elif seed is None:
             seed = [None for _ in range(n_episodes)]
 
-        for i_ep in ep_iter:
-            traj_o, traj_a, traj_r, traj_term, traj_trunc, traj_mask = [], [], [], [], [], []
-            act_in_env(self.env, self.policy, -1, traj_o, traj_a, traj_r, traj_term, traj_trunc, traj_mask,
-                       seed=seed[i_ep])
-            traj = {'o': np.array(traj_o), 'a': np.array(traj_a), 'r': np.array(traj_r),
-                    'terminal': np.array(traj_term), 'truncated': np.array(traj_trunc)}
-            mem.append(traj)
+        while ep_iter.n < n_episodes:
+            trajectories = collect_data(self.env, -1, self.policy)
+            mem.extend(trajectories)
+            ep_iter.n += len(trajectories)
+            ep_iter.refresh()
+
+        #for i_ep in ep_iter:
+        #    traj_o, traj_a, traj_r, traj_term, traj_trunc, traj_mask = [], [], [], [], [], []
+        #    act_in_env(self.env, self.policy, -1, traj_o, traj_a, traj_r, traj_term, traj_trunc, traj_mask,
+        #               seed=seed[i_ep])
+        #    traj = {'o': np.array(traj_o), 'a': np.array(traj_a), 'r': np.array(traj_r),
+        #            'terminal': np.array(traj_term), 'truncated': np.array(traj_trunc)}
+        #    mem.append(traj)
 
         return mem
 

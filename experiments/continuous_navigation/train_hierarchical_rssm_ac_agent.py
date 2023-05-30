@@ -13,6 +13,7 @@ from mdm.logging.not_logger import NotLogger
 from mdm.logging.logger import Scope
 from mdm.training.gym_driver import collect_data, GymEpisodeDriver
 from mdm.policies.agent_policy import *
+from mdm.utils.analysis_tools import plot_trajectory_stats
 
 
 def agent_train_mode(agents):
@@ -66,6 +67,11 @@ def main():
     else:
         raise ValueError(f'Unknown optimizer type: {optim_type}')
 
+    collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['trainer']['collect_envs'])
+    collect_env = CacheLastStepVecEnv(collect_env)
+    eval_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['eval']['eval_envs'])
+    eval_env = CacheLastStepVecEnv(eval_env)
+
     mem = []
     match cfg['prefill_memory']:
         case 'offline-dataset':
@@ -73,19 +79,16 @@ def main():
             mem = load_memory(here() / cfg['train_samples'])
         case 'random':
             print('collecting initial random trajectories...')
-            collect_driver = GymEpisodeDriver(env, lambda *x: env.action_space.sample())
-            collect_driver.interact(cfg['prefill_episodes'], True, mem)
+            collect_driver = GymEpisodeDriver(collect_env, lambda *x: collect_env.action_space.sample())
+            collect_driver.interact(cfg['prefill_episodes'], mem)
         case False:
             print('starting with empty training memory...')
+
+    #plot_trajectory_stats(mem, 20)
 
     train_driver = OfflineRLDriver(mem, sampling_type=SamplingType.RANDOM)
     test_mem = load_memory(here() / cfg['test_samples'])
     test_driver = OfflineRLDriver(test_mem, sampling_type=SamplingType.RANDOM)
-
-    collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['trainer']['collect_envs'])
-    collect_env = CacheLastStepVecEnv(collect_env)
-    eval_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['eval']['eval_envs'])
-    eval_env = CacheLastStepVecEnv(eval_env)
 
     def collect_simple():
         agent = r_max_agents[0][0]

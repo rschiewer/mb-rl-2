@@ -65,10 +65,10 @@ if __name__ == '__main__':
             return env.action_space.sample()
 
     collect_driver = GymEpisodeDriver(env, collect_policy)
-    collect_driver.interact(round(n_episodes_train * expert_trajectories), True, train_mem)
+    collect_driver.interact(round(n_episodes_train * expert_trajectories), train_mem)
 
     rand_driver = GymEpisodeDriver(env, lambda *args: env.action_space.sample())
-    rand_driver.interact(n_episodes_train - len(train_mem), True, train_mem)
+    rand_driver.interact(n_episodes_train - len(train_mem), train_mem)
 
     n_episodes_test = round(len(train_mem) * perc_test)
     random.shuffle(train_mem)
@@ -77,7 +77,7 @@ if __name__ == '__main__':
 
     expert_mem = []
     expert_driver = GymEpisodeDriver(env, expert_collect_policy)
-    expert_driver.interact(3000, True, expert_mem)
+    expert_driver.interact(3000, expert_mem)
 
     store_memory(train_mem, here() / f'nav2d_{map_version}_train.samples')
     store_memory(test_mem, here() / f'nav2d_{map_version}_test.samples')
