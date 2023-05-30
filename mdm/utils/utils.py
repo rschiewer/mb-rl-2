@@ -123,18 +123,22 @@ def build_agents(cfg: dict,
     goal_seeking_agents = []
     for agent_lvl in range(len(cfg['mdm']['rssm_modules'])):
         cfg_r_max = cfg['agents']['r_max'][agent_lvl]
-        cfg_goal_seeking = cfg['agents']['goal_seeking'][agent_lvl]
-
-        # infer missing values
         if agent_lvl == 0:
-            cfg_r_max['min_a'] = cfg_goal_seeking['min_a'] = tuple(env.action_space.low)
-            cfg_r_max['max_a'] = cfg_goal_seeking['max_a'] = tuple(env.action_space.high)
-        cfg_r_max['d_a'] = cfg_goal_seeking['d_a'] = cfg['mdm']['rssm_modules'][agent_lvl].d_a
-        cfg_r_max['d_o'] = cfg_goal_seeking['d_o'] = cfg['mdm']['rssm_modules'][agent_lvl].d_z
-
+            cfg_r_max['min_a'] = tuple(env.action_space.low)
+            cfg_r_max['max_a'] = tuple(env.action_space.high)
+        cfg_r_max['d_a'] = cfg['mdm']['rssm_modules'][agent_lvl].d_a
+        cfg_r_max['d_o'] = cfg['mdm']['rssm_modules'][agent_lvl].d_z
         r_max_agents.append(gen_agent_fn(agent_lvl, False, cfg_r_max))
-        goal_seeking_agents.append(gen_agent_fn(agent_lvl, True, cfg_goal_seeking))
-    goal_seeking_agents[-1] = None  # no homing agent needed on last level
+
+        if agent_lvl < len(cfg['mdm']['rssm_modules']) - 1:
+            cfg_goal_seeking = cfg['agents']['goal_seeking'][agent_lvl]
+            if agent_lvl == 0:
+                cfg_goal_seeking['min_a'] = tuple(env.action_space.low)
+                cfg_goal_seeking['max_a'] = tuple(env.action_space.high)
+            cfg_goal_seeking['d_a'] = cfg['mdm']['rssm_modules'][agent_lvl].d_a
+            cfg_goal_seeking['d_o'] = cfg['mdm']['rssm_modules'][agent_lvl].d_z
+            goal_seeking_agents.append(gen_agent_fn(agent_lvl, True, cfg_goal_seeking))
+    goal_seeking_agents.append(None)  # no homing agent needed on last level
 
     return r_max_agents, goal_seeking_agents
 
@@ -420,6 +424,7 @@ def valid_subtrajectories(data: Dict[str, torch.Tensor],
     n_trajs = data['o'].shape[1]
     l_trajs = (1 - data['mask']).sum(dim=0).detach().cpu().numpy().squeeze()
     i_start = np.random.randint(low=[0 for _ in range(n_trajs)], high=np.maximum(l_trajs - length, 1))
+    i_start = np.zeros_like(i_start)
     i_matrix = np.tile(np.arange(0, length), (n_trajs, 1)) + i_start[..., None]
     i_matrix = torch.from_numpy(i_matrix).to(device=data['o'].device, dtype=torch.int64)
 
@@ -432,6 +437,30 @@ def valid_subtrajectories(data: Dict[str, torch.Tensor],
         ret_data[k] = v_new.swapaxes(0, 1)
 
     return ret_data
+
+
+@torch.compile
+def valid_subtrajectories_2(data: Dict[str, torch.Tensor],
+                            length: int):
+    assert length < data['o'].shape[0]
+
+    n_trajs = data['o'].shape[1]
+
+    ret_data = {k: [] for k in data}
+    for i_traj in range(n_trajs):
+        traj_len = (1 - data['mask'][:, i_traj]).sum().detach().cpu().numpy()
+        #i_start = random.randint(0, np.maximum(traj_len - length, 1))
+        i_start = 0
+        i_end = i_start + length
+        for k, v in data.items():
+            ret_data[k].append(v[i_start:i_end, i_traj])
+
+    ret_data = {k: torch.stack(v, dim=1) for k, v in ret_data.items()}
+
+    return ret_data
+
+
+
 
 
 """

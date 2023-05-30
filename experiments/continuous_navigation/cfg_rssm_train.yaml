@@ -1,7 +1,7 @@
 ---
 neptune_cfg: "../neptune_settings.yaml"
 env_name: "gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-0"
-prefill_memory: "offline-dataset" # "random", False
+prefill_memory: "offline-dataset" #"offline-dataset" # "random", False
 prefill_episodes: 5000
 train_samples: "nav2d_Easy_train.samples"
 test_samples: "nav2d_Easy_expert.samples"
@@ -116,11 +116,11 @@ trainer:
    n_train_steps: 10000
    eval_interval: 20
    d_batch: 2048
-   subtrajectory_len: 20
+   subtrajectory_len: 15
    collect_envs: 50
-   collect_interval: 30
-   agent_train_interval: 5
-   agent_model_steps: [ 20, 10 ]
+   collect_interval: 10
+   agent_train_interval: 2
+   agent_model_steps: [ 10, 10 ]
    agent_model_max_warmup_steps: [ 5, 2 ]
 
 agents:
@@ -128,11 +128,11 @@ agents:
       # level 0
       - eps_exploration_init: 0.2
         eps_exploration_coeff: 0.98
-        act_entropy_exploration_coeff: 0.0
+        act_entropy_exploration_coeff: 0.1
         learn_act_entropy_exploration_coeff: False
-        novelty_exploration_coeff: 0.0
-        tr_policy_kl_coeff: 0.0
-        tr_policy_ema_update_coeff: 0.99
+        novelty_exploration_coeff: 0.1
+        tr_policy_kl_coeff: 0.1
+        tr_policy_ema_update_coeff: 0.98
         use_ema_world_model: False
         lr_actor: 0.0005
         lr_critic: 0.005
@@ -141,11 +141,11 @@ agents:
       # level 1
       - eps_exploration_init: 0.2
         eps_exploration_coeff: 0.99
-        act_entropy_exploration_coeff: 0.0
+        act_entropy_exploration_coeff: 0.1
         learn_act_entropy_exploration_coeff: False
-        novelty_exploration_coeff: 0.0
-        tr_policy_kl_coeff: 0.0
-        tr_policy_ema_update_coeff: 0.99
+        novelty_exploration_coeff: 0.1
+        tr_policy_kl_coeff: 0.1
+        tr_policy_ema_update_coeff: 0.98
         use_ema_world_model: False
         lr_actor: 0.0005
         lr_critic: 0.005
@@ -155,30 +155,16 @@ agents:
       # level 0
       - eps_exploration_init: 0.2
         eps_exploration_coeff: 0.99
-        act_entropy_exploration_coeff: 0.0
+        act_entropy_exploration_coeff: 0.1
         learn_act_entropy_exploration_coeff: False
-        novelty_exploration_coeff: 0.0
-        tr_policy_kl_coeff: 0.0
-        tr_policy_ema_update_coeff: 0.99
+        novelty_exploration_coeff: 0.1
+        tr_policy_kl_coeff: 0.1
+        tr_policy_ema_update_coeff: 0.98
         use_ema_world_model: False
         lr_actor: 0.0005
         lr_critic: 0.005
         min_a: null
         max_a: null
-      # level 1
-      - eps_exploration_init: 0.2
-        eps_exploration_coeff: 0.99
-        act_entropy_exploration_coeff: 0.0
-        learn_act_entropy_exploration_coeff: False
-        novelty_exploration_coeff: 0.0
-        tr_policy_kl_coeff: 0.0
-        tr_policy_ema_update_coeff: 0.99
-        use_ema_world_model: False
-        lr_actor: 0.0005
-        lr_critic: 0.005
-        min_a: -1.0
-        max_a: 1.0
-
 
 eval:
    warmup_steps: [ 2, 1 ]

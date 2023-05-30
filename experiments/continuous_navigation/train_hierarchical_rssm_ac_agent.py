@@ -54,7 +54,6 @@ def main():
 
     model = HierarchicalRSSM(**cfg['mdm'], r_max_agents=r_max_agents, goal_seeking_agents=goal_seeking_agents)
     model = model.to('cuda')
-    model.training = True
     # model = torch.load(here() / 'trained_models/model_MBRL-2422.ptmdl').to('cuda')
 
     optim_type = cfg['optim'].pop('type')
@@ -117,7 +116,12 @@ def main():
         model.train()
         agent_eval_mode(r_max_agents + goal_seeking_agents)
         model_batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
-        train_steps = [-1, 20, 10]
+        #model_batch_2 = valid_subtrajectories_2(batch, cfg['trainer']['subtrajectory_len'])
+        #for k, v in model_batch.items():
+        #    assert torch.all(model_batch_2[k] == v)
+
+        #model_batch = batch
+        train_steps = [-1, cfg['trainer']['subtrajectory_len'] * model.strides[1]]
         # now = time.time()
         train_losses = model.train_step(model_batch, opt_model, model_steps=train_steps)
         # print(time.time() - now)
@@ -131,11 +135,11 @@ def main():
         if i_step % cfg['trainer']['agent_train_interval'] == 0:
             agent_train_mode(r_max_agents + goal_seeking_agents)
             agent_model_steps = cfg['trainer']['agent_model_steps']
-            # trajectory_below = valid_subtrajectories(batch, agent_model_warmup_steps[0])
             agent_model_max_warmup_steps = cfg['trainer']['agent_model_max_warmup_steps']
             agent_model_warmup_steps = [random.randint(1, n_wu) for n_wu in agent_model_max_warmup_steps]
 
-            trajectory_below = batch
+            #trajectory_below = batch
+            trajectory_below = valid_subtrajectories(batch, agent_model_warmup_steps[0])
             for l in range(model.levels):
                 # model.reset_debug_counter()
                 n_wu = agent_model_warmup_steps[l]
@@ -196,8 +200,8 @@ def main():
                 trajectory_below = r_max_simulation['model']
 
         if i_step % cfg['trainer']['collect_interval'] == 0:
-            # collect_simple()
-            collect()
+            collect_simple()
+            #collect()
 
         # eval
         if cfg['trainer']['eval_interval'] is not None and i_step % cfg['trainer']['eval_interval'] == 0:
@@ -208,6 +212,7 @@ def main():
             batch = test_driver.interact(cfg['trainer']['d_batch'])
             batch = to_tensors(batch, model.device)
             batch = prepare_data(batch)
+
             eval_steps = [-1, 20, 10]
             eval_losses = model.eval_step(batch, model_steps=eval_steps)
             logger.log(to_np(eval_losses), Scope.TEST(), i_step)
