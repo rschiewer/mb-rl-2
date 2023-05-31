@@ -527,6 +527,7 @@ if gettrace() or 'PYCHARM_HOSTED' in os.environ:
         return func
 else:
     print('Compiling functions with compile_if_not_debug decorator')
+    torch.set_float32_matmul_precision('high')
     compile_if_not_debug = torch.compile
 
 
