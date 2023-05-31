@@ -1,8 +1,10 @@
 import io
+import os
 import pickle
 import re
 import sys
 import random
+import time
 from enum import Enum, auto
 from inspect import stack
 from itertools import product
@@ -302,13 +304,25 @@ def to_onehot(x: Union[torch.Tensor, np.ndarray],
     return x
 
 
-def fig_to_img(fig, clear_fig: bool = True):
+def fig_to_img(fig: plt.Figure,
+               clear_fig: bool = True):
     buffer = io.BytesIO()
     fig.savefig(buffer, bbox_inches='tight')
     if clear_fig:
         plt.clf()
     buffer.seek(0)
     return Image.open(buffer)
+
+
+def anim_to_gif(anim: animation.Animation,
+                fps: int = 10):
+    timestamp = time.time_ns()
+    tmp_file_name = f'{timestamp}.gif'
+    anim.save(tmp_file_name, writer='pillow', fps=fps)
+    with open(tmp_file_name, 'rb') as f:
+        img = Image.open(f)
+    os.remove(tmp_file_name)
+    return img
 
 
 def unsqueeze_right(to_expand: Union[np.ndarray, torch.Tensor], target: Union[np.ndarray, torch.Tensor]):
