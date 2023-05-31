@@ -357,7 +357,11 @@ def join_trajectories(t1: Dict[str, np.ndarray], t2: Dict[str, np.ndarray]):
 
 def trajectories_from_simulation(model_mem: Dict[str, List[torch.Tensor]]):
     n_trajs = model_mem['o'][0].shape[0]
-    trajs = {k: torch.stack(model_mem[k]).detach().cpu().numpy() for k in ('o', 'a', 'r', 'terminal')}
+    if isinstance(model_mem['o'], list):  # time dimension is list
+        trajs = {k: torch.stack(model_mem[k]).detach().cpu().numpy() for k in ('o', 'a', 'r', 'terminal')}
+    else:  # time dimension is tensor
+        trajs = {k: model_mem[k].detach().cpu().numpy() for k in ('o', 'a', 'r', 'terminal')}
+
     trajs = [{k: v[:, i] for k, v in trajs.items()} for i in range(n_trajs)]
     return trajs
 
@@ -869,20 +873,22 @@ def visualize_trajectory(trajectory: Dict[str, np.ndarray]):
     n_steps = trajectory['o'].shape[0]
 
     fig, ax = plt.subplots(2, 2, figsize=(10, 10))
+    color_cycle = iter(plt.rcParams['axes.prop_cycle'].by_key()['color'])
 
-    # headings
+    # headings and preparations
     ax[0, 0].set_title('Observation')
     ax[1, 0].set_title('Reward')
     ax[1, 1].set_title('Terminal Flag')
-
-    # plotting
     ax[0, 0].set_xlim(-1, 1)
     ax[0, 0].set_ylim(-1, 1)
-    pos = ax[0, 0].scatter(x=trajectory['o'][0, 0], y=trajectory['o'][0, 1])  # init pos
-    angle, stepwidth = trajectory['a'][0]
-    dx, dy = np.arccos(angle) * stepwidth, np.arcsin(angle) * stepwidth
+
+    # plotting
+    c = next(color_cycle)
+    pos = ax[0, 0].scatter(x=trajectory['o'][0, 0], y=trajectory['o'][0, 1], marker='o', c=c)  # init pos agent
+    goal = ax[0, 0].scatter(x=trajectory['o'][0, 2], y=trajectory['o'][0, 3], marker='x', c=c)  # init pos goal
+    #angle, stepwidth = trajectory['a'][0]
+    #dx, dy = np.arccos(angle) * stepwidth, np.arcsin(angle) * stepwidth
     # act = ax[0, 0].arrow(x=trajectory['o'][0, 0], y=trajectory['o'][0, 1], dx=dx, dy=dy)  # init action
-    ax[0, 0].scatter(x=trajectory['o'][0, 2], y=trajectory['o'][0, 3])  # goal
     ax[1, 0].plot(trajectory['r'])
     ax[1, 1].plot(trajectory['terminal'])
 
@@ -890,8 +896,8 @@ def visualize_trajectory(trajectory: Dict[str, np.ndarray]):
     time_marker_terminal = ax[1, 1].axvline(x=0, color='gray', linestyle='dotted')
 
     def animate_r(i):
-        # draw position
-        pos.set_offsets([trajectory['o'][i]])
+        pos.set_offsets([trajectory['o'][i, 0:2]])
+        goal.set_offsets([trajectory['o'][i, 2:4]])
         # draw action
         # angle, stepwidth = trajectory['a'][i]
         # dx, dy = np.arccos(angle) * stepwidth, np.arcsin(angle) * stepwidth
@@ -900,7 +906,53 @@ def visualize_trajectory(trajectory: Dict[str, np.ndarray]):
         # act.set_offsets([dx, dy])
         time_marker_r.set_xdata(i)
         time_marker_terminal.set_xdata(i)
-        return pos, time_marker_r, time_marker_terminal
+        return pos, goal, time_marker_r, time_marker_terminal
+
+    ani = animation.FuncAnimation(fig, animate_r, frames=n_steps, interval=100, blit=True)
+    return fig, ani
+
+
+def visualize_overlaid_trajectories(*trajectories: Dict[str, np.ndarray]):
+    n_steps = set([t['o'].shape[0] for t in trajectories])
+    assert len(n_steps) == 1, f'All provided trajectories must have the same length, but found {n_steps}!'
+    n_steps = n_steps.pop()
+
+    fig, ax = plt.subplots(2, 2, figsize=(10, 10))
+    color_cycle = iter(plt.rcParams['axes.prop_cycle'].by_key()['color'])
+
+    ax[0, 0].set_title('Observation')
+    ax[1, 0].set_title('Reward')
+    ax[1, 1].set_title('Terminal Flag')
+    ax[0, 0].set_xlim(-1, 1)
+    ax[0, 0].set_ylim(-1, 1)
+
+    positions = []
+    goals = []
+    for trajectory in trajectories:
+        c = next(color_cycle)
+        pos = ax[0, 0].scatter(x=trajectory['o'][0, 0], y=trajectory['o'][0, 1], marker='o', c=c)  # init pos agent
+        goal = ax[0, 0].scatter(x=trajectory['o'][0, 2], y=trajectory['o'][0, 3], marker='x', c=c)  # init pos goal
+        ax[1, 0].plot(trajectory['r'])
+        ax[1, 1].plot(trajectory['terminal'])
+        positions.append(pos)
+        goals.append(goal)
+
+    time_marker_r = ax[1, 0].axvline(x=0, color='gray', linestyle='dotted')
+    time_marker_terminal = ax[1, 1].axvline(x=0, color='gray', linestyle='dotted')
+
+    def animate_r(i):
+        for i_traj, trajectory in enumerate(trajectories):
+            positions[i_traj].set_offsets([trajectory['o'][i, 0:2]])
+            goals[i_traj].set_offsets([trajectory['o'][i, 2:4]])
+        # draw action
+        # angle, stepwidth = trajectory['a'][i]
+        # dx, dy = np.arccos(angle) * stepwidth, np.arcsin(angle) * stepwidth
+        # ax[0, 0].arrow(x=trajectory['o'][i, 0], y=trajectory['o'][i, 1], dx=dx, dy=dy)
+        # draw time markers
+        # act.set_offsets([dx, dy])
+        time_marker_r.set_xdata(i)
+        time_marker_terminal.set_xdata(i)
+        return *positions, *goals, time_marker_r, time_marker_terminal
 
     ani = animation.FuncAnimation(fig, animate_r, frames=n_steps, interval=100, blit=True)
     return fig, ani
