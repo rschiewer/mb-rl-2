@@ -822,6 +822,12 @@ def visualize_trajectory(trajectory: Dict[str, np.ndarray]):
 
     fig, ax = plt.subplots(2, 2, figsize=(10, 10))
 
+    # headings
+    ax[0, 0].set_title('Observation')
+    ax[1, 0].set_title('Reward')
+    ax[1, 1].set_title('Terminal Flag')
+
+    # plotting
     ax[0, 0].set_xlim(-1, 1)
     ax[0, 0].set_ylim(-1, 1)
     pos = ax[0, 0].scatter(x=trajectory['o'][0, 0], y=trajectory['o'][0, 1])  # init pos
