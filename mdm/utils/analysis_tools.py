@@ -226,4 +226,5 @@ def plot_trajectory_stats(mem, bins: int):
 
     ax.flat[5].set_title('successful episodes')
     ax.flat[5].pie([successful_true, successful_false], labels=['true', 'false'], autopct='%1.1f%%')
-    plt.show()
+
+    return fig
