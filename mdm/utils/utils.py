@@ -479,7 +479,6 @@ def valid_subtrajectories(data: Dict[str, torch.Tensor],
     n_trajs = data['o'].shape[1]
     l_trajs = (1 - data['mask']).sum(dim=0).detach().cpu().numpy().squeeze()
     i_start = np.random.randint(low=[0 for _ in range(n_trajs)], high=np.maximum(l_trajs - length, 1))
-    i_start = np.zeros_like(i_start)
     i_matrix = np.tile(np.arange(0, length), (n_trajs, 1)) + i_start[..., None]
     i_matrix = torch.from_numpy(i_matrix).to(device=data['o'].device, dtype=torch.int64)
 
@@ -504,8 +503,7 @@ def valid_subtrajectories_2(data: Dict[str, torch.Tensor],
     ret_data = {k: [] for k in data}
     for i_traj in range(n_trajs):
         traj_len = (1 - data['mask'][:, i_traj]).sum().detach().cpu().numpy()
-        # i_start = random.randint(0, np.maximum(traj_len - length, 1))
-        i_start = 0
+        i_start = random.randint(0, np.maximum(traj_len - length, 1))
         i_end = i_start + length
         for k, v in data.items():
             ret_data[k].append(v[i_start:i_end, i_traj])
