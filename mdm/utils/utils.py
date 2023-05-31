@@ -10,10 +10,12 @@ from inspect import stack
 from itertools import product
 from pathlib import Path
 from typing import Any
+from threading import Thread
 
 import gym
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
+import neptune.types
 import numpy as np
 import numpy.ma as ma
 import pandas as pd
@@ -317,12 +319,47 @@ def fig_to_img(fig: plt.Figure,
 def anim_to_gif(anim: animation.Animation,
                 fps: int = 10):
     timestamp = time.time_ns()
-    tmp_file_name = f'{timestamp}.gif'
+    pid = os.getpid()
+    tmp_file_name = f'{pid}_{timestamp}.gif'
     anim.save(tmp_file_name, writer='pillow', fps=fps)
+
     with open(tmp_file_name, 'rb') as f:
         img = Image.open(f)
+        img.load()
     os.remove(tmp_file_name)
+
     return img
+
+
+def anim_to_vid(anim: animation.Animation,
+                fps: int = 10):
+    timestamp = time.time_ns()
+    pid = os.getpid()
+    tmp_file_name = f'.{pid}_{timestamp}.mp4'
+    anim.save(tmp_file_name, writer='ffmpeg')
+
+    return tmp_file_name
+
+    #with open(tmp_file_name, 'rb') as f:
+    #    buffer = io.BytesIO(f.read())
+    #os.remove(tmp_file_name)
+
+    #return buffer
+
+
+def join_trajectories(t1: Dict[str, np.ndarray], t2: Dict[str, np.ndarray]):
+    joined = {}
+    for k, v in t1.items():
+        assert k in t2
+        joined[k] = v + t2[k]
+    return joined
+
+
+def trajectories_from_simulation(model_mem: Dict[str, List[torch.Tensor]]):
+    n_trajs = model_mem['o'][0].shape[0]
+    trajs = {k: torch.stack(model_mem[k]).detach().cpu().numpy() for k in ('o', 'a', 'r', 'terminal')}
+    trajs = [{k: v[:, i] for k, v in trajs.items()} for i in range(n_trajs)]
+    return trajs
 
 
 def unsqueeze_right(to_expand: Union[np.ndarray, torch.Tensor], target: Union[np.ndarray, torch.Tensor]):
@@ -463,7 +500,7 @@ def valid_subtrajectories_2(data: Dict[str, torch.Tensor],
     ret_data = {k: [] for k in data}
     for i_traj in range(n_trajs):
         traj_len = (1 - data['mask'][:, i_traj]).sum().detach().cpu().numpy()
-        #i_start = random.randint(0, np.maximum(traj_len - length, 1))
+        # i_start = random.randint(0, np.maximum(traj_len - length, 1))
         i_start = 0
         i_end = i_start + length
         for k, v in data.items():
@@ -472,9 +509,6 @@ def valid_subtrajectories_2(data: Dict[str, torch.Tensor],
     ret_data = {k: torch.stack(v, dim=1) for k, v in ret_data.items()}
 
     return ret_data
-
-
-
 
 
 """
