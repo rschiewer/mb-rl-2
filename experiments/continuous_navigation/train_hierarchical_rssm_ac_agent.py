@@ -84,7 +84,12 @@ def main():
         case False:
             print('starting with empty training memory...')
 
-    #plot_trajectory_stats(mem, 20)
+    #visualize_trajectory(mem[0])
+    # TODO: plot stats of initial trajectories and log them
+    #fig = plot_trajectory_stats(mem, 20)
+    #plt.show()
+    #quit()
+
 
     train_driver = OfflineRLDriver(mem, sampling_type=SamplingType.RANDOM)
     test_mem = load_memory(here() / cfg['test_samples'])
@@ -124,7 +129,7 @@ def main():
         #    assert torch.all(model_batch_2[k] == v)
 
         #model_batch = batch
-        train_steps = [-1, cfg['trainer']['subtrajectory_len'] * model.strides[1]]
+        train_steps = [-1, cfg['trainer']['subtrajectory_len'] // model.strides[1]]
         # now = time.time()
         train_losses = model.train_step(model_batch, opt_model, model_steps=train_steps)
         # print(time.time() - now)
