@@ -849,4 +849,4 @@ def visualize_trajectory(trajectory: Dict[str, np.ndarray]):
         return pos, time_marker_r, time_marker_terminal
 
     ani = animation.FuncAnimation(fig, animate_r, frames=n_steps, interval=100, blit=True)
-    plt.show()
+    return fig, ani
