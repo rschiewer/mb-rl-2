@@ -1,10 +1,15 @@
+import io
+import shutil
 from typing import Dict, Any, Union
 import os
 from pathlib import Path
+import time
+from threading import Thread
 
 import neptune
 from matplotlib.figure import Figure
 from neptune import Run
+from neptune.types import File
 import numpy as np
 from PIL import Image
 
@@ -81,19 +86,35 @@ class NeptuneLogger(Logger):
                     self.log({name: v}, scope, time_step=time_step)
             elif isinstance(value, Figure):
                 self.log_plot(value, full_scope, time_step=time_step)
+            elif isinstance(value, Path):
+                self.log_file(value, full_scope, time_step=time_step)
+            elif isinstance(value, str) and Path(value).exists():
+                self.log_file(value, full_scope, time_step=time_step)
             else:
                 self._run[str(full_scope)].log(value, step=time_step)
 
-    def log_object(self, object: Any, scope: Union[Scope, str], time_step: int = None):
-        raise NotImplementedError('Directly logging objects is not supported')
+    def log_object(self, object: Any, scope: Scope, time_step: int = None):
+        if isinstance(object, io.BytesIO):
+            timestamp = time.time_ns()
+            pid = os.getpid()
+            tmp_file_name = f'.{pid}_{timestamp}'
+            with open(tmp_file_name, 'wb') as f:
+                f.write(object.read())
+            self._run[str(scope)].log(tmp_file_name, step=time_step)
+            os.remove(tmp_file_name)
+        else:
+            raise ValueError('Unknown type for logging')
 
     def log_file(self,
                  path: Union[str, Path],
                  scope: Scope,
                  time_step: int = None):
-        self._run[str(scope)].upload(str(path))
+
+        scope /= f'{time_step}'
+        self._run[str(scope)].upload(str(path), wait=True)
+        #self._run[str(scope)].append(str(new_path), wait=True)
 
     def log_plot(self, figure: Image, scope: Union[Scope, str], time_step: int = None):
-        self._run[str(scope)].log(figure)
+        self._run[str(scope)].log(figure, step=time_step)
 
 
