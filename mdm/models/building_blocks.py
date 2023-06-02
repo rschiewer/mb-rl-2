@@ -354,13 +354,13 @@ class GaussianDecoder(OutputDecoder):
         # if self.s_x_orig != (1,):
         #    params = params.reshape(*params.shape[:-1], *self.s_x_orig, 2)
         mu, logvar = torch.tensor_split(params, 2, dim=-1)
-        #sigma = torch.exp(0.5 * logvar) + self.epsilon
         sigma = torch.log(1 + torch.exp(logvar)) + self.epsilon
         d = torch.distributions.Normal(loc=mu, scale=sigma)
+        #d = torch.distributions.Independent(d, 1)
         if sample:
             s = d.rsample()
         else:
-            s = d.loc
+            s = d.mean
         return d, s
 
 
@@ -437,11 +437,13 @@ class BinomialDecoder(OutputDecoder):
         params = self._mdl(x_enc)
         params = params.reshape(*params.shape[:-1], *self.s_x_orig)
         d = torch.distributions.ContinuousBernoulli(logits=params, lims=(0.49999, 0.50001))
+        #d = torch.distributions.Independent(d, 1)
         #d = torch.distributions.RelaxedBernoulli(temperature=self._temperature, logits=params)
         if sample:
             s = d.rsample()
         else:
-            s = d.probs.round().to(torch.float32) + d.probs - d.probs.detach()
+            s = d.mean
+            #s = d.probs.round().to(torch.float32) + d.probs - d.probs.detach()
         return d, s
         #d = torch.distributions.Bernoulli(logits=params)
         #if sample:
@@ -727,15 +729,12 @@ class RSSMCell(torch.nn.Module):
 
         self.n_latent_categories = 16
         if latent_dist == 'normal':
-            d_z_post_in = d_h + d_z * 2
             d_z_final = d_z * 2
             d_z_smpl = d_z
         elif latent_dist == 'bernoulli':
-            d_z_post_in = d_h + d_z
             d_z_final = d_z
             d_z_smpl = d_z
         elif latent_dist == 'categorical':
-            d_z_post_in = d_h + d_z * self.n_latent_categories
             d_z_final = d_z * self.n_latent_categories
             d_z_smpl = d_z * self.n_latent_categories
         else:
@@ -743,7 +742,7 @@ class RSSMCell(torch.nn.Module):
         self.d_z_smpl = d_z_smpl
 
         z_prior_lws = (d_h, *z_prior_lws, d_z_final)
-        z_post_lws = (d_z_post_in + self.d_o_encoded, *z_post_lws, d_z_final)
+        z_post_lws = (d_h + self.d_o_encoded, *z_post_lws, d_z_final)
 
         if rnn_type == 'lstm':
             rnn_constr = torch.nn.LSTM
@@ -843,7 +842,7 @@ class RSSMCell(torch.nn.Module):
                 context: torch.Tensor | None = None,
                 sample: bool = True):
         h, next_state = self.imagine(a, last_state, context, sample)
-        z_post, z_smpl = self.build_z_post(h, next_state['z_prior'], self.o_encoder(o), sample)
+        z_post, z_smpl = self.build_z_post(h, self.o_encoder(o), sample)
 
         # overwrite chosen z sample and distribution with posterior
         next_state['z'] = z_smpl
@@ -893,6 +892,7 @@ class RSSMCell(torch.nn.Module):
             mu, logvar = torch.tensor_split(z_prior_params, 2, dim=-1)
             sigma = torch.log(1 + torch.exp(logvar)) + self.epsilon
             z_prior = torch.distributions.Normal(loc=mu, scale=sigma)
+            #z_prior = torch.distributions.Independent(z_prior, 1)
             z_smpl = z_prior.rsample() if sample else mu
         elif self.latent_dist == 'bernoulli':
             z_prior = torch.distributions.ContinuousBernoulli(logits=z_prior_params)
@@ -909,20 +909,19 @@ class RSSMCell(torch.nn.Module):
 
     def build_z_post(self,
                      h: torch.Tensor,
-                     z_prior: torch.distributions.Distribution,
-                     x_posterior: torch.Tensor,
+                     o_enc: torch.Tensor,
                      sample: bool = True) -> [torch.distributions.Distribution, torch.Tensor]:
-        z_prior_params = torch.concat(get_dist_params(z_prior), dim=-1)
-        z_post_inp = torch.concat([h, z_prior_params, x_posterior], dim=-1)
+        z_post_inp = torch.concat([h, o_enc], dim=-1)
         z_post_params = self._z_post(z_post_inp)
         if self.latent_dist == 'normal':
             mu, logvar = torch.tensor_split(z_post_params, 2, dim=-1)
             sigma = torch.log(1 + torch.exp(logvar)) + self.epsilon
             z_post = torch.distributions.Normal(loc=mu, scale=sigma)
+            #z_post = torch.distributions.Independent(z_post, 1)
             z_smpl = z_post.rsample() if sample else mu
         elif self.latent_dist == 'bernoulli':
             z_post = torch.distributions.ContinuousBernoulli(logits=z_post_params)
-            z_smpl = z_post.rsample() if sample else z_prior.probs
+            z_smpl = z_post.rsample() if sample else z_post.mean
         else:  # categorical
             z_post_params = z_post_params.reshape((z_post_params.shape[0], self.d_z, self.n_latent_categories))
             z_post = torch.distributions.OneHotCategorical(logits=z_post_params)
