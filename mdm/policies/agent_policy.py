@@ -73,7 +73,8 @@ class LatentAgentPolicy(Policy):
         _, _, self._current_env_state = self.model.forward_static(trajectory=env_data, n_steps=1, n_warmup=1,
                                                                   start_state=self._current_env_state,
                                                                   level=self.agent.level,
-                                                                  use_ema_modules=self._use_ema_modules)
+                                                                  use_ema_modules=self._use_ema_modules,
+                                                                  sample_state=False, sample_output=False)
         agent_o = self.agent.preproc_o(self._current_env_state)
         a_dist, a, v = self.agent(agent_o)
         return a.detach().cpu().numpy()
@@ -153,7 +154,8 @@ class HierarchicalLatentAgentPolicy(Policy):
             state = self._grounded_env_states[i_lvl]
             mem, _, new_state = self.model.forward_static(data_filtered, start_state=state, level=i_lvl,
                                                           n_steps=-1, n_warmup=-1,
-                                                          use_ema_modules=self._use_ema_modules)
+                                                          use_ema_modules=self._use_ema_modules,
+                                                          sample_state=False, sample_output=False)
             self._grounded_env_states[i_lvl] = new_state
 
             # store updated state in cache for upper level

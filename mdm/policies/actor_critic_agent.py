@@ -330,7 +330,8 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             mem, mem_ema, next_env_state = sim_env.forward_static(trajectory=trajectory, start_state=env_state,
                                                                   level=self.level, n_steps=1, n_warmup=0,
                                                                   use_ema_modules=self.use_slow_world_model,
-                                                                  memory=env_mem, memory_other=ema_env_mem)
+                                                                  memory=env_mem, memory_other=ema_env_mem,
+                                                                  sample_state=False, sample_output=False)
             r = self.build_step_reward(mem[self.observation_key][-1], mem['r'][-1], goal)
             novelty = kl_divergence(mem_ema['z_dist'][-1], mem['z_dist'][-1]).mean(dim=-1)
             timestep = {'o': agent_o, 'a': a, 'r': r, 'terminal': mem['terminal'][-1], 'v': v, 'ema_v': ema_v,
@@ -393,6 +394,8 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         o = step[self.observation_key]
         if isinstance(o, torchd.Distribution):
             o = o.mode  # use most probable o if a distribution is provided
+
+        o = o.detach()  # don't propagate trhough multiple time steps
 
         if self.goal_seeking:
             # detach goal to avoid propagating gradients to upper level model into other agents
