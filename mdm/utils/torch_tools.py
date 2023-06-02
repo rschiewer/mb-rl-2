@@ -498,7 +498,7 @@ def pad_first_timestep(o: torch.Tensor,
     return o, a, r, term, trunc, mask
 
 
-@torch.jit.script
+#@torch.jit.script
 def update_ema_modules(modules: List[Dict[str, torch.Tensor]], ema_modules: List[Dict[str, torch.Tensor]],
                        coeff: float):
     with torch.no_grad():

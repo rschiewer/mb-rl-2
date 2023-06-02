@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import copy
+from itertools import chain
 import random
+import sys
 from collections import OrderedDict
 
 import torch.distributions as torchd
@@ -30,7 +32,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                  r_max_agents: Sequence[ActorCriticAgent] = (None,),
                  goal_seeking_agents: Sequence[ActorCriticAgent] = (None,),
                  ema_regularization: float = 0.0,
-                 ema_coeff: float = 0.0):
+                 ema_coeff: float = 0.99,
+                 ema_update_interval: int = sys.maxsize):
         super(HierarchicalRSSM, self).__init__()
 
         assert len(links) == len(rssm_modules) - 1
@@ -55,6 +58,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             for i_param, param in enumerate(ema_mod.parameters()):
                 param.detach_()
 
+        #rssm_modules = [torch.compile(m) for m in rssm_modules]
         self.rssm_modules = ModuleList(list(rssm_modules))
         self.links = (*links, lvl_k_link)
         self.upwards_filters = ModuleList(upwards_filters)
@@ -65,6 +69,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         self.goal_seeking_agents = tuple(goal_seeking_agents)
         self.ema_regularization = ema_regularization
         self.ema_coeff = ema_coeff
+        self.ema_update_interval = ema_update_interval
         self.dbg_timestep = 0
 
     @property
@@ -596,9 +601,12 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         torch.nn.utils.clip_grad_norm_(self.parameters(), 10.0)
         optimizer.step()
         # update ema modules
-        rssm_params = [OrderedDict(m.named_parameters()) for m in self.rssm_modules]
-        ema_params = [OrderedDict(m.named_parameters()) for m in self._ema_rssm_modules]
-        update_ema_modules(rssm_params, ema_params, self.ema_coeff)
+        if self._current_train_step % self.ema_update_interval == 0:
+            with torch.no_grad():
+                rssm_params = chain.from_iterable([m.parameters() for m in self.rssm_modules])
+                ema_params = chain.from_iterable([m.parameters() for m in self._ema_rssm_modules])
+                for param, ema_param in zip(rssm_params, ema_params):
+                    ema_param[:] = self.ema_coeff * ema_param + (1 - self.ema_coeff) * param
 
         return losses
 
@@ -760,7 +768,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         if detach_qs:
             qs = [detach_dist(q) if q is not None else None for q in qs]
         kl = [torch.distributions.kl_divergence(p, q) * m for p, q, m in zip(ps, qs, mask) if None not in (p, q)]
-        kl[0] *= 0  # 0-th prior is totally uninformed and should not be optimized
         kl = torch.stack(kl, dim=0).mean()
         # if len(kl) > 1:
         #    kl = kl[1:].mean()  # ignore first prior since it's totally uninformed

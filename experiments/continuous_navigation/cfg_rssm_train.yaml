@@ -15,7 +15,7 @@ mdm:
          d_h: 64
          d_a: null
          n_hidden_layers: 3
-         hidden_dropout: 0.1
+         hidden_dropout: 0.0
          epsilon: 0.01
          z_prior_lws: [ 64, 64, 64 ]
          z_post_lws: [ 64, 64, 64 ]
@@ -51,7 +51,7 @@ mdm:
          d_h: 64
          d_a: 2
          n_hidden_layers: 3
-         hidden_dropout: 0.1
+         hidden_dropout: 0.0
          epsilon: 0.01
          z_prior_lws: [ 64, 64, 64 ]
          z_post_lws: [ 64, 64, 64 ]
@@ -103,10 +103,11 @@ mdm:
             class: "MaxUpwardsFilter"
             window_size: 2
    warmup_steps: [ 'rand', 'rand' ]
-   kl_betas: [1.0, 1.0]
+   kl_betas: [0.1, 0.1]
    kl_reg_betas: [ 0.0, 0.0 ]
    ema_regularization: 0.0
    ema_coeff: 0.99
+   ema_update_interval: 2
 
 optim:
    type: 'adam'  # 'adamW' 'adam'
@@ -115,7 +116,7 @@ optim:
 trainer:
    n_train_steps: 8000
    eval_interval: 20
-   d_batch: 2048
+   d_batch: 4096
    subtrajectory_len: 10
    collect_envs: 50
    collect_interval: 5

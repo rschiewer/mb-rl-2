@@ -1,5 +1,5 @@
 import copy
-import random
+from itertools import chain
 from typing import Tuple, Sequence, Optional, Dict, List
 from collections import namedtuple, OrderedDict
 from copy import deepcopy
@@ -159,9 +159,9 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                                                                                               returns, gae_advantages,
                                                                                               model_novelty, discount):
             # ACTOR
-            #advantage = R - v_.detach()
-            #policy_losses.append(-advantage)
-            #policy_losses.append(-gae_advantage_)
+            # advantage = R - v_.detach()
+            # policy_losses.append(-advantage)
+            # policy_losses.append(-gae_advantage_)
             policy_losses.append(-R)
             # ppo_r = a_dist.log_prob(a.detach()) / detach_dist(ema_a_dist).log_prob(a.detach())
             # ppo_actor_loss = -((R.detach() - v.detach()) * torch.clip(ppo_r, torch.tensor(0.8, device=sim_env.device),
@@ -208,9 +208,14 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         critic_optimizer.step()
 
         # update EMA model
-        agent_params = [OrderedDict(m.named_parameters()) for m in (self.actor_net, self.critic_net)]
-        ema_params = [OrderedDict(m.named_parameters()) for m in (self._ema_actor_net, self._ema_critic_net)]
-        update_ema_modules(agent_params, ema_params, self.ema_coeff)
+        with torch.no_grad():
+            params = chain.from_iterable([m.parameters() for m in self.actor_net] +
+                                         [m.parameters() for m in self.critic_net])
+            ema_params = chain.from_iterable([m.parameters() for m in self._ema_actor_net] +
+                                             [m.parameters() for m in self._ema_critic_net])
+            for param, ema_param in zip(params, ema_params):
+                ema_param[:] = self.ema_coeff * ema_param + (1 - self.ema_coeff) * param
+
         # update exploration
         self.update_exploration()
 
