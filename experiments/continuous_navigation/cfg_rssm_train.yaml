@@ -1,8 +1,8 @@
 ---
 neptune_cfg: "../neptune_settings.yaml"
 env_name: "gym_nav2d:nav2dEasy-v0" #"gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-v0"
-prefill_memory: "random" #"offline-dataset" # "random", False
-prefill_episodes: 50000
+prefill_memory: "offline-dataset" #"offline-dataset" # "random", False
+prefill_episodes: null #5000
 train_samples: "nav2d_Easy_train.samples" #"nav2d_Easy_train.samples"
 test_samples: "nav2d_Easy_expert.samples" #"nav2d_Easy_expert.samples"
 checkpoint_path: "checkpoints"
@@ -11,40 +11,40 @@ final_model_path: "trained_models/model"
 mdm:
    rssm_modules:
       # RSSM no. 1
-      -  d_z: 8
+      -  d_z: 10
          d_h: 64
          d_a: null
          n_hidden_layers: 3
          hidden_dropout: 0.1
-         epsilon: 0.000001
-         z_prior_lws: [ 64, 64 ]
-         z_post_lws: [ 64, 64 ]
-         layer_norm: True
+         epsilon: 0.01
+         z_prior_lws: [ 64, 64, 64 ]
+         z_post_lws: [ 64, 64, 64 ]
+         layer_norm: False
          activation: "relu"
          rnn_type: "lstm"
          latent_dist: "normal"  #"normal" "categorical" "bernoulli"
          o_encoder:
             class: "MLPEncoder"
             d_x_encoded: 32
-            lws: [ 32 ]
-            layer_norm: True
+            lws: [ 64, 64]
+            layer_norm: False
             activation: "relu"
          o_decoder:
             class: "GaussianDecoder"
-            lws: [ 32, 32 ]
-            layer_norm: True
+            lws: [ 64, 64]
+            layer_norm: False
             activation: "relu"
-            epsilon: 0.000001
+            epsilon: 0.01
          r_decoder:
             class: "GaussianDecoder"
-            lws: [ 32, 32 ]
-            layer_norm: True
+            lws: [ 64, 64]
+            layer_norm: False
             activation: "relu"
-            epsilon: 0.000001
+            epsilon: 0.01
          term_decoder:
             class: "BinomialDecoder"
-            lws: [ 32, 32 ]
-            layer_norm: True
+            lws: [ 64, 64]
+            layer_norm: False
             activation: "relu"
       # RSSM no. 2
       -  d_z: 10
@@ -52,35 +52,35 @@ mdm:
          d_a: 2
          n_hidden_layers: 3
          hidden_dropout: 0.1
-         epsilon: 0.000001
-         z_prior_lws: [ 64, 64 ]
-         z_post_lws: [ 64, 64 ]
-         layer_norm: True
+         epsilon: 0.01
+         z_prior_lws: [ 64, 64, 64 ]
+         z_post_lws: [ 64, 64, 64 ]
+         layer_norm: False
          activation: "relu"
          rnn_type: "lstm"
          latent_dist: "normal"  #"normal" "categorical" "bernoulli"
          o_encoder:
             class: "MLPEncoder"
-            lws: [ 32 ]
-            layer_norm: True
+            lws: [ 64, 64]
+            layer_norm: False
             activation: "relu"
             d_x_encoded: 32
          o_decoder:
             class: "GaussianDecoder"
-            lws: [ 32, 32 ]
-            layer_norm: True
+            lws: [ 64, 64]
+            layer_norm: False
             activation: "relu"
-            epsilon: 0.000001
+            epsilon: 0.01
          r_decoder:
             class: "GaussianDecoder"
-            lws: [ 32, 32 ]
-            layer_norm: True
+            lws: [ 64, 64]
+            layer_norm: False
             activation: "relu"
-            epsilon: 0.000001
+            epsilon: 0.01
          term_decoder:
             class: "BinomialDecoder"
-            lws: [ 32, 32 ]
-            layer_norm: True
+            lws: [ 64, 64]
+            layer_norm: False
             activation: "relu"
    links: [ 'z' ]  # Links for observation filters between RSSM levels
    upwards_filters:
@@ -93,7 +93,7 @@ mdm:
          #   class: "LearnableUpwardsFilter"
          #   window_size: 2
          #   lws: [ 32, 32 ]
-         #   layer_norm: True
+         #   layer_norm: False
          #   activation: "relu"
          #   model_type: "det_tanh"
          r:
@@ -103,25 +103,25 @@ mdm:
             class: "MaxUpwardsFilter"
             window_size: 2
    warmup_steps: [ 'rand', 'rand' ]
-   kl_betas: [ 1.0, 1.0 ]
+   kl_betas: [1.0, 1.0]
    kl_reg_betas: [ 0.0, 0.0 ]
-   ema_regularization: 0.1
-   ema_coeff: 0.98
+   ema_regularization: 0.0
+   ema_coeff: 0.99
 
 optim:
    type: 'adam'  # 'adamW' 'adam'
    lr: 0.001 #0.0002
 
 trainer:
-   n_train_steps: 10000
+   n_train_steps: 8000
    eval_interval: 20
    d_batch: 2048
-   subtrajectory_len: 15
+   subtrajectory_len: 10
    collect_envs: 50
-   collect_interval: 10
-   agent_train_interval: 2
+   collect_interval: 5
+   agent_train_interval: 4
    agent_model_steps: [ 10, 10 ]
-   agent_model_max_warmup_steps: [ 5, 2 ]
+   agent_model_max_warmup_steps: [ 5, 3 ]
 
 agents:
    r_max:
@@ -155,9 +155,9 @@ agents:
       # level 0
       - eps_exploration_init: 0.2
         eps_exploration_coeff: 0.99
-        act_entropy_exploration_coeff: 0.1
+        act_entropy_exploration_coeff: 0.01
         learn_act_entropy_exploration_coeff: False
-        novelty_exploration_coeff: 0.1
+        novelty_exploration_coeff: 0.01
         tr_policy_kl_coeff: 0.1
         tr_policy_ema_update_coeff: 0.98
         use_ema_world_model: False
