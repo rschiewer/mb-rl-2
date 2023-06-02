@@ -336,7 +336,7 @@ def anim_to_vid(anim: animation.Animation,
     timestamp = time.time_ns()
     pid = os.getpid()
     tmp_file_name = f'.{pid}_{timestamp}.mp4'
-    anim.save(tmp_file_name, writer='ffmpeg')
+    anim.save(tmp_file_name, writer='ffmpeg', fps=fps)
 
     return tmp_file_name
 
