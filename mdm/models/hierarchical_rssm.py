@@ -644,7 +644,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         losses = {}
         for i_lvl in range(self.levels):
             mask_lvl = self.compute_mask(targets[i_lvl])
-            mask_lvl = torch.zeros_like(mask_lvl)
             # fig, ax = plt.subplots(1, 2, figsize=(10, 10))
             # fig.suptitle(f'Level {i_lvl}')
             # ax[0].matshow(mask_lvl[:, 0:50].detach().cpu().numpy().squeeze(-1).transpose())
