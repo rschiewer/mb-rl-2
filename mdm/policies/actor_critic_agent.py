@@ -94,7 +94,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         x = actor_net(x)
         mu, logvar = torch.tensor_split(x, 2, dim=-1)
         mu = torch.tanh(mu) * (self.max_a - self.min_a) / 2 + (self.min_a + self.max_a) / 2
-        sigma = torch.log(1 + torch.exp(logvar)) + 0.001
+        sigma = torch.log(1 + torch.exp(logvar)) + 0.01
         d = torch.distributions.Normal(loc=mu, scale=sigma)
         return d
 
@@ -146,7 +146,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         # calculate losses
         # from https://github.com/pytorch/examples/blob/main/reinforcement_learning/actor_critic.py
         returns, discount = self._calc_returns(r, v, terminal, gamma=0.99)
-        gae_advantages, _ = self._calc_gae(r, v, terminal, gamma=0.99, lambda_=0.99)
+        gae_advantages, _ = self._calc_gae(r, v, terminal, gamma=0.99, lambda_=0.95)
         # returns = torch.stack(returns)
         # returns = (returns - returns.mean()) / (returns.std() + 0.0001)
 
@@ -161,8 +161,8 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             # ACTOR
             # advantage = R - v_.detach()
             # policy_losses.append(-advantage)
-            # policy_losses.append(-gae_advantage_)
-            policy_losses.append(-R)
+            policy_losses.append(-gae_advantage_)
+            #policy_losses.append(-R)
             # ppo_r = a_dist.log_prob(a.detach()) / detach_dist(ema_a_dist).log_prob(a.detach())
             # ppo_actor_loss = -((R.detach() - v.detach()) * torch.clip(ppo_r, torch.tensor(0.8, device=sim_env.device),
             #                                                          torch.tensor(1.2, device=sim_env.device)))
@@ -398,9 +398,9 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                   goal: torch.Tensor | torchd.Distribution | None = None):
         o = step[self.observation_key]
         if isinstance(o, torchd.Distribution):
-            o = o.mode  # use most probable o if a distribution is provided
+            o = o.mean  # use most probable o if a distribution is provided
 
-        o = o.detach()  # don't propagate trhough multiple time steps
+        #o = o.detach()  # don't propagate trhough multiple time steps
 
         if self.goal_seeking:
             # detach goal to avoid propagating gradients to upper level model into other agents

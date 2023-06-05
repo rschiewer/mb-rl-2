@@ -6,6 +6,7 @@ import random
 import sys
 from collections import OrderedDict
 
+import torch
 import torch.distributions as torchd
 from torch.distributions import kl_divergence
 from torch.nn import ModuleList, ModuleDict
@@ -58,7 +59,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             for i_param, param in enumerate(ema_mod.parameters()):
                 param.detach_()
 
-        #rssm_modules = [torch.compile(m) for m in rssm_modules]
+        # rssm_modules = [torch.compile(m) for m in rssm_modules]
         self.rssm_modules = ModuleList(list(rssm_modules))
         self.links = (*links, lvl_k_link)
         self.upwards_filters = ModuleList(upwards_filters)
@@ -342,7 +343,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         state_below = start_state_below
         for t in range(n_steps):
             _, a_t, _ = agent(state[agent.observation_key])
-            a_t = a_t.detach()  # prevent gradients from flowing through agent back into world model
+            #a_t = a_t.detach()  # prevent gradients from flowing through agent back into world model
             pred, next_state = mdl(a=a_t, last_state=state, use_posterior=False, sample_state=sample_state,
                                    sample_output=sample_output, reconstruct=reconstruct)
             # get simulated ground truth for this step from level below
@@ -427,11 +428,9 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 use_posterior = False
             a_t = a[t]
 
-            pred, next_state = mdl(a=a_t, o=o_t, last_state=state,
-                                   use_posterior=use_posterior, sample_state=sample_state, sample_output=sample_output,
-                                   reconstruct=reconstruct)
-            pred_other, next_state_other = mdl_other(a=a_t, o=o_t,
-                                                     last_state=state, use_posterior=use_posterior,
+            pred, next_state = mdl(a=a_t, o=o_t, last_state=state, use_posterior=use_posterior,
+                                   sample_state=sample_state, sample_output=sample_output, reconstruct=reconstruct)
+            pred_other, next_state_other = mdl_other(a=a_t, o=o_t, last_state=state, use_posterior=use_posterior,
                                                      sample_state=sample_state, sample_output=sample_output,
                                                      reconstruct=reconstruct)
 
@@ -700,11 +699,15 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                   kl_beta: float,
                   kl_reg_beta: float = 0.0):
         mask = 1 - mask  # use mask to multiply irrelevant steps with zero
+        # raise NotImplementedError('choose loss')
         rec_o = self._neg_log_prob(pred['o_dist'], targets['o'], mask)
         rec_r = self._neg_log_prob(pred['r_dist'], targets['r'], mask)
         rec_term = self._neg_log_prob(pred['terminal_dist'], targets['terminal'], mask)
+        # rec_o = self._mse(pred['o'], targets['o'], mask)
+        # rec_r = self._mse(pred['r'], targets['r'], mask)
+        # rec_term = self._mse(pred['terminal'], targets['terminal'], mask)
         kl_z = self._kl_div(pred['z_post'], pred['z_prior'], mask)
-        kl_reg_z = torch.tensor(0.0, device=self.device, dtype=torch.float32) #self._kl_reg(pred['z_post'], mask)
+        kl_reg_z = torch.tensor(0.0, dtype=torch.float32, device=self.device)  # self._kl_reg(pred['z_post'], mask)
         contrastive_z = self.ema_regularization * self._contrastive_loss(pred['z'], mask)
 
         mae_o = self._mae(pred['o'], targets['o'], mask)
@@ -767,7 +770,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             ps = [detach_dist(p) if p is not None else None for p in ps]
         if detach_qs:
             qs = [detach_dist(q) if q is not None else None for q in qs]
-        kl = [torch.distributions.kl_divergence(p, q) * m for p, q, m in zip(ps, qs, mask) if None not in (p, q)]
+        kl = [kl_divergence(p, q) * m for p, q, m in zip(ps, qs, mask) if None not in (p, q)]
         kl = torch.stack(kl, dim=0).mean()
         # if len(kl) > 1:
         #    kl = kl[1:].mean()  # ignore first prior since it's totally uninformed
@@ -788,7 +791,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         else:
             raise ValueError(f'No regularization distribution for distribution {ps[0]} found')
 
-        kl_reg = [torch.distributions.kl_divergence(p, reg_dist) * m for p, m in zip(ps, mask) if p is not None]
+        kl_reg = [kl_divergence(p, reg_dist) * m for p, m in zip(ps, mask) if p is not None]
         kl_reg = torch.stack(kl_reg, dim=0).mean()
         return kl_reg
 
@@ -798,6 +801,15 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         y_hats = torch.stack(y_hats, dim=0)
         mask = mask.reshape(*mask.shape + (1,) * (y_hats.ndim - mask.ndim))  # append size 1 dimensions for broadcasting
         return torch.mean(torch.abs(ys - y_hats) * mask)
+
+    @staticmethod
+    @compile_if_not_debug
+    def _mse(y_hats: List[torch.Tensor],
+             ys: torch.Tensor,
+             mask: torch.Tensor):
+        mask = unsqueeze_right(mask, ys)
+        y_hats = torch.stack(y_hats)
+        return torch.mean(((y_hats - ys) ** 2) * mask)
 
     """
     def forward_old(self, o, a, r, terminal, n_warmup: int = -1, level: int = 0,
