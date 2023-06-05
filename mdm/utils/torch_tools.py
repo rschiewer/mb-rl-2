@@ -363,6 +363,8 @@ def detach_dist(d: torch.distributions.Distribution):
         return type(d)(logits=d.logits.detach())
     elif isinstance(d, torch.distributions.Bernoulli):
         return type(d)(probs=d.probs.detach())
+    elif isinstance(d, torch.distributions.Independent):
+        return detach_dist(d.base_dist)
     #elif hasattr(d, 'logits'):
     #    return type(d)(logits=d.logits.detach())
     #elif hasattr(d, 'probs'):
@@ -520,7 +522,7 @@ def to_np(data_dict: Dict[str, Union[torch.Tensor, Dict]]):
 
 
 # define torch.compile decorator depending on whether we're in debug mode or not
-if gettrace() or 'PYCHARM_HOSTED' in os.environ:
+if gettrace() or 'PYCHARM_HOSTED' in os.environ or True:
     print('Debugging or running in PyCharm IDE, disabling torch.compile')
 
     def compile_if_not_debug(func):
