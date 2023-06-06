@@ -23,25 +23,25 @@ class DynamicsModel(torch.nn.Module, ABC):
     def train_step(self,
                    training_data: Dict[str, torch.Tensor],
                    optimizer: torch.optim.Optimizer,
-                   **kwargs) -> Dict[str, torch.Tensor]:
+                   **kwargs) -> Any:
         results = self._train_step(training_data, optimizer, **kwargs)
         self._current_train_step += 1
         return results
 
     def eval_step(self,
                   training_data: Dict[str, torch.Tensor],
-                  **kwargs) -> Dict[str, torch.Tensor]:
+                  **kwargs) -> Any:
         return self._eval_step(training_data, **kwargs)
 
     @abstractmethod
     def _train_step(self,
                     training_data: Dict[str, torch.Tensor],
                     optimizer: torch.optim.Optimizer,
-                    **kwargs) -> Dict[str, torch.Tensor]:
+                    **kwargs) -> Any:
         pass
 
     @abstractmethod
     def _eval_step(self,
                    training_data: Dict[str, torch.Tensor],
-                   **kwargs) -> Dict[str, torch.Tensor]:
+                   **kwargs) -> Any:
         pass

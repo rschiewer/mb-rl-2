@@ -1,3 +1,4 @@
+from typing import List, Dict
 import random
 import os
 
@@ -10,7 +11,8 @@ from mdm.policies.agent_policy import HierarchicalLatentAgentPolicy, LatentAgent
 from mdm.training.gym_driver import collect_data
 from mdm.utils.torch_tools import to_tensors, to_np
 from mdm.utils.utils import prepare_data, valid_subtrajectories, trajectory_statistics, trajectories_from_simulation, \
-    visualize_overlaid_trajectories, anim_to_vid
+    visualize_overlaid_trajectories, anim_to_vid, get_dist_params
+from mdm.models.building_blocks import RSSMCell
 
 
 def agent_train_mode(agents):
@@ -23,6 +25,15 @@ def agent_eval_mode(agents):
     for a in agents:
         if a is None: continue
         a[0].eval()
+
+
+def rssm_states_seq_to_batch(mem: Dict[str, List[torch.Tensor]],
+                             rssm_instance: RSSMCell):
+    state_keys = rssm_instance.init_state(1, 'cpu')
+    states = {k: v for k, v in mem.items() if k in state_keys}
+    states = rssm_instance.state_seq_to_batch(**states)
+
+    return states
 
 
 def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collect_fn, eval_env, test_driver,
@@ -45,7 +56,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
 
         # model_batch = batch
         # now = time.time()
-        train_losses = model.train_step(model_batch, opt_model, model_steps=model_train_steps)
+        train_losses, pred = model.train_step(model_batch, opt_model, model_steps=model_train_steps)
         # print(time.time() - now)
         logger.log(to_np(train_losses), Scope.TRAIN(), i_step)
 
@@ -57,39 +68,16 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
         if i_step % cfg['trainer']['agent_train_interval'] == 0:
             agent_train_mode(r_max_agents + goal_seeking_agents)
             agent_model_steps = cfg['trainer']['agent_model_steps']
-            agent_model_max_warmup_steps = cfg['trainer']['agent_model_max_warmup_steps']
-            agent_model_warmup_steps = [random.randint(1, n_wu) for n_wu in agent_model_max_warmup_steps]
 
-            trajectory_below = valid_subtrajectories(batch, agent_model_warmup_steps[0])
             for l in range(model.levels):
-                # model.reset_debug_counter()
-                n_wu = agent_model_warmup_steps[l]
-                n_steps = agent_model_steps[l]
-
-                if l == 0:
-                    _, _, start_state_lvl = model.forward_static(trajectory_below, level=0, n_steps=n_wu, n_warmup=-1,
-                                                                 sample_state=False, sample_output=False)
-                else:
-                    _, _, _, start_state_lvl, start_state_below = model.ground_level(trajectory_below=trajectory_below,
-                                                                                     level=l, sample_state=False,
-                                                                                     sample_output=False)
-                    # we don't have groundtruth trajectories with actions, so make actions up but don't use
-                    # them for training.
-                    # TODO: Can we use the warmup actions for training as well? Maybe two separate act_in_sim calls so
-                    _, _, _, start_state_lvl = model.forward_dynamic(start_state=start_state_lvl,
-                                                                     start_state_below=start_state_below, level=l,
-                                                                     n_steps=n_wu - 1, n_warmup=-1,
-                                                                     sample_state=False, sample_output=False)
-
+                # use all time steps of teacher forcing rollout from model as starting point
+                start_state_lvl = rssm_states_seq_to_batch(pred[l], model.rssm_modules[l])
                 # prevent gradient flow into the start state
                 start_state_lvl = model.rssm_modules[l].detach_state(start_state_lvl)
-                #start_state_lvl['z'] = start_state_lvl['z'].detach()
-                #start_state_lvl['rnn_state'] = (start_state_lvl['rnn_state'][0].detach(),  # assumes LSTM state
-                #                                start_state_lvl['rnn_state'][1].detach())
 
                 # r_max agent
                 r_max_agent, r_max_actor_opt, r_max_critic_opt = model.r_max_agents[l]
-                r_max_simulation = r_max_agent.act_in_sim(start_state_lvl, model, n_steps - n_wu)
+                r_max_simulation = r_max_agent.act_in_sim(start_state_lvl, model, agent_model_steps[l])
                 r_max_losses = r_max_agent.train_step(r_max_simulation['agent'], actor_optimizer=r_max_actor_opt,
                                                       critic_optimizer=r_max_critic_opt)
                 r_max_losses['obtained_reward'] = torch.stack(r_max_simulation['agent']['r']).mean()
@@ -112,7 +100,6 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                     state = start_state_lvl
                     # start at chunk_size - 1 because start_state_lvl is not recorded in r_max_simulation
                     for t in range(chunk_size - 1, total_steps, chunk_size):
-                        # for t in range(0, total_steps, chunk_size):
                         goal = r_max_simulation['model']['z'][t]
                         goal_simulation = goal_agent.act_in_sim(state, model, chunk_size, goal, agent_memory=agent_mem)
                         # ground goal agent with r_max agent trajectory after every chunk
@@ -126,11 +113,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                     goal_losses['obtained_reward'] = torch.stack(goal_simulation['agent']['r']).mean()
                     logger.log(to_np(goal_losses), Scope.TRAIN() / f'goal_seeking_agent/{l}/', i_step)
 
-                # prepare grounding information for next level
-                trajectory_below = r_max_simulation['model']
-
         if i_step % cfg['trainer']['collect_interval'] == 0:
-            # collect_simple()
             collect_fn()
 
         # eval
@@ -143,7 +126,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
             batch = to_tensors(batch, model.device)
             batch = prepare_data(batch)
             eval_steps = [-1, 20, 10]
-            eval_losses = model.eval_step(batch, model_steps=eval_steps, sample_state=False, sample_output=False)
+            eval_losses, pred = model.eval_step(batch, model_steps=eval_steps, sample_state=False, sample_output=False)
             logger.log(to_np(eval_losses), Scope.TEST(), i_step)
 
             # hierarchical agent

@@ -8,7 +8,7 @@ from enum import Enum
 import torch
 import numpy as np
 from mdm.utils.torch_tools import (layers_with_activation as lwa, get_dist_params, RnnStateType,
-                                   sample_from_categorical, ManagedStatefulTrainingModule, detach_dist)
+                                   sample_from_categorical, ManagedStatefulTrainingModule, detach_dist, concat_dists)
 
 
 class DeprecatedRSSM(torch.nn.Module):
@@ -756,7 +756,8 @@ class RSSMCell(torch.nn.Module):
                                dropout=hidden_dropout)
         self._z_prior = torch.nn.Sequential(lwa(z_prior_lws, activation, layer_norm=layer_norm, name='z_prior'))
         self._z_post = torch.nn.Sequential(lwa(z_post_lws, activation, layer_norm=layer_norm, name='z_post'))
-        self._z_embed_net = torch.nn.Sequential(lwa([d_z_smpl, 64,64,64,64, d_z_smpl], 'relu', layer_norm=True, name='z_embed'))
+        self._z_embed_net = torch.nn.Sequential(
+            lwa([d_z_smpl, 64, 64, 64, 64, d_z_smpl], 'relu', layer_norm=True, name='z_embed'))
 
     @property
     def o_shape(self):
@@ -935,7 +936,7 @@ class RSSMCell(torch.nn.Module):
         return z_post, z_smpl
 
     def detach_state(self,
-                     state):
+                     state: Dict[str, torch.Tensor | torch.distributions.Distribution]):
         if self.rnn_type == 'lstm':
             rnn_state_detached = state['rnn_state'][0].detach(), state['rnn_state'][1].detach()
         else:
@@ -946,6 +947,24 @@ class RSSMCell(torch.nn.Module):
                 'z_prior': detach_dist(state['z_prior']),
                 'z_post': detach_dist(state['z_post']) if state['z_post'] is not None else None,
                 'rnn_state': rnn_state_detached}
+
+    def state_seq_to_batch(self,
+                           z: List[torch.Tensor],
+                           z_dist: List[torch.distributions.Distribution],
+                           z_prior: List[torch.distributions.Distribution],
+                           z_post: List[torch.distributions.Distribution],
+                           rnn_state: List[torch.Tensor | Tuple[torch.Tensor]]):
+        z = torch.concat(z, dim=0)
+        z_dist = concat_dists(z_dist)
+        z_prior = concat_dists(z_prior)
+        z_post = concat_dists(z_post)
+
+        if self.rnn_type == 'lstm':
+            rnn_state = torch.concat([t[0] for t in rnn_state], dim=1), torch.concat([t[1] for t in rnn_state], dim=1)
+        else:
+            rnn_state = torch.concat(rnn_state, dim=1)
+
+        return {'z': z, 'z_dist': z_dist, 'z_prior': z_prior, 'z_post': z_post, 'rnn_state': rnn_state}
 
 
 class CompiledRSSMCell(torch.nn.Module):

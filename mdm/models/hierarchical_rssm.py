@@ -443,10 +443,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 data.append(v)
                 memory_other[k] = data
 
-            # dbg_timescale = memory.get('dbg_step', [])
-            # dbg_timescale.append(self.dbg_timestep)
-            # memory['dbg_step'] = dbg_timescale
-            # self.dbg_timestep += 1
             state = next_state
 
         return memory, memory_other, state
@@ -587,11 +583,11 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
     def _train_step(self,
                     training_data: Dict[str, torch.Tensor],
                     optimizer: torch.optim.Optimizer,
-                    **kwargs) -> Dict[str, torch.Tensor]:
+                    **kwargs):
         optimizer.zero_grad(set_to_none=True)
-        losses_tf = self.eval_step(training_data, force_warmup=[-1 for _ in self.rssm_modules], **kwargs)
-        losses_one = self.eval_step(training_data, force_warmup=[1 for _ in self.rssm_modules], **kwargs)
-        losses_wu = self.eval_step(training_data, **kwargs)
+        losses_tf, pred_tf = self.eval_step(training_data, force_warmup=[-1 for _ in self.rssm_modules], **kwargs)
+        losses_one, pred_one = self.eval_step(training_data, force_warmup=[1 for _ in self.rssm_modules], **kwargs)
+        losses_wu, pred_wu = self.eval_step(training_data, **kwargs)
 
         losses = {}
         for k in losses_tf:
@@ -607,7 +603,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 for param, ema_param in zip(rssm_params, ema_params):
                     ema_param[:] = self.ema_coeff * ema_param + (1 - self.ema_coeff) * param
 
-        return losses
+        return losses, pred_tf
 
     @staticmethod
     @compile_if_not_debug
@@ -664,7 +660,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             losses.update(loss_level)
         losses['total'] = torch.stack([v for k, v in losses.items() if k.startswith('total')]).mean()
 
-        return losses
+        return losses, pred
 
     def maybe_sample_warmup_steps(self,
                                   training_data: Dict[str, torch.Tensor],

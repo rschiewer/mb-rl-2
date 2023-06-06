@@ -13,7 +13,6 @@ from mdm.training.gym_driver import collect_data, GymEpisodeDriver
 from mdm.policies.agent_policy import *
 
 
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-log', default=False, action='store_true')

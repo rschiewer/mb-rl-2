@@ -12,6 +12,18 @@ RnnStateType = TypeVar('RnnStateType', torch.Tensor, Tuple[torch.Tensor, torch.T
 _Placeholder = namedtuple('placeholder', 'device')
 
 
+# define torch.compile decorator depending on whether we're in debug mode or not
+if gettrace() or 'PYCHARM_HOSTED' in os.environ or True:
+    print('Debugging or running in PyCharm IDE, disabling torch.compile')
+
+    def compile_if_not_debug(func):
+        return func
+else:
+    print('Compiling functions with compile_if_not_debug decorator')
+    torch.set_float32_matmul_precision('high')
+    compile_if_not_debug = torch.compile
+
+
 class DeviceMixin:
 
     def __new__(cls, *args, **kwargs):
@@ -372,6 +384,21 @@ def detach_dist(d: torch.distributions.Distribution):
         raise RuntimeError(f'Can\'t detach the given distribution: {d}')
 
 
+@compile_if_not_debug
+def concat_dists(dists: List[torch.distributions.Distribution],
+                 dim: int = 0):
+    assert len(set([type(d) for d in dists])) == 1, 'All distributions have to share the same class'
+
+    first_elem = dists[0]
+    params_batched = {par_name: [par_val] for par_name, par_val in get_dist_params(first_elem).items()}
+    for d in dists[1:]:
+        for par_name, par_val in get_dist_params(d).items():
+            params_batched[par_name].append(par_val)
+    params_batched = {par_name: torch.concat(par_val, dim=dim) for par_name, par_val in
+                      params_batched.items()}
+    return type(first_elem)(**params_batched)
+
+
 def extract_sub_distribution(d: torch.distributions.Distribution,
                              *idx: int | Sequence[int] | torch.Tensor,
                              keepdim: bool = False):
@@ -519,16 +546,5 @@ def to_np(data_dict: Dict[str, Union[torch.Tensor, Dict]]):
             raise ValueError(f'Unsupported type: {type(k)}')
     return np_data_dict
 
-
-# define torch.compile decorator depending on whether we're in debug mode or not
-if gettrace() or 'PYCHARM_HOSTED' in os.environ or True:
-    print('Debugging or running in PyCharm IDE, disabling torch.compile')
-
-    def compile_if_not_debug(func):
-        return func
-else:
-    print('Compiling functions with compile_if_not_debug decorator')
-    torch.set_float32_matmul_precision('high')
-    compile_if_not_debug = torch.compile
 
 
