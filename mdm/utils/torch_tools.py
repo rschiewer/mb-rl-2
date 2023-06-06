@@ -362,7 +362,8 @@ def detach_dist(d: torch.distributions.Distribution):
     elif isinstance(d, torch.distributions.Bernoulli):
         return type(d)(probs=d.probs.detach())
     elif isinstance(d, torch.distributions.Independent):
-        return detach_dist(d.base_dist)
+        return torch.distributions.Independent(detach_dist(d.base_dist),
+                                               reinterpreted_batch_ndims=d.reinterpreted_batch_ndims)
     #elif hasattr(d, 'logits'):
     #    return type(d)(logits=d.logits.detach())
     #elif hasattr(d, 'probs'):
