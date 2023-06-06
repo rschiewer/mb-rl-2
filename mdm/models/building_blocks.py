@@ -436,7 +436,7 @@ class BinomialDecoder(OutputDecoder):
                 sample: bool = True):
         params = self._mdl(x_enc)
         params = params.reshape(*params.shape[:-1], *self.s_x_orig)
-        d = torch.distributions.ContinuousBernoulli(logits=params, lims=(0.49999, 0.50001))
+        d = torch.distributions.ContinuousBernoulli(logits=params)
         # d = torch.distributions.Independent(d, 1)
         # d = torch.distributions.RelaxedBernoulli(temperature=self._temperature, logits=params)
         if sample:
@@ -756,6 +756,7 @@ class RSSMCell(torch.nn.Module):
                                dropout=hidden_dropout)
         self._z_prior = torch.nn.Sequential(lwa(z_prior_lws, activation, layer_norm=layer_norm, name='z_prior'))
         self._z_post = torch.nn.Sequential(lwa(z_post_lws, activation, layer_norm=layer_norm, name='z_post'))
+        self._z_embed_net = torch.nn.Sequential(lwa([d_z_smpl, 64,64,64,64, d_z_smpl], 'relu', layer_norm=True, name='z_embed'))
 
     @property
     def o_shape(self):
@@ -770,7 +771,7 @@ class RSSMCell(torch.nn.Module):
                    device: torch.device):
         z = self.zero_z(d_batch, device)
         rnn_state = self.zero_rnn_state(d_batch, device)
-        return {'z': z, 'z_prior': None, 'z_post': None, 'rnn_state': rnn_state}
+        return {'z': z, 'z_dist': None, 'z_prior': None, 'z_post': None, 'rnn_state': rnn_state}
 
     def zero_s(self,
                d_batch: int,
@@ -827,7 +828,8 @@ class RSSMCell(torch.nn.Module):
             last_state = {'z': self.zero_z(a.shape[0], a.device),
                           'rnn_state': self.zero_rnn_state(a.shape[0], a.device)}
 
-        inp = torch.concat([last_state['z'], a, context], dim=-1)
+        z_embed = self._z_embed_net(last_state['z'])
+        inp = torch.concat([z_embed, a, context], dim=-1)
         inp = inp.unsqueeze(0)  # add time dim
         h, next_rnn_state = self._rnn(inp, last_state['rnn_state'])
         h = h.squeeze(0)  # remove time dim
