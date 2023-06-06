@@ -342,13 +342,11 @@ def conv_layers_with_activation(channels: Sequence[int], kernel_sizes: Sequence[
 def get_dist_params(d: torch.distributions.Distribution):
     if isinstance(d, (torch.distributions.Normal, torch.distributions.Cauchy, torch.distributions.Gumbel,
                       torch.distributions.Laplace, torch.distributions.LogNormal)):
-        return d.loc, d.scale
+        return {'loc': d.loc, 'scale': d.scale}
     elif isinstance(d, torch.distributions.RelaxedOneHotCategorical):
-        return d.logits, d.temperature
-    elif hasattr(d, 'logits'):
-        return (d.logits,)
-    elif hasattr(d, 'probs'):
-        return (d.probs,)
+        return {'logits': d.logits, 'temperature': d.temperature}
+    elif isinstance(d, torch.distributions.ContinuousBernoulli):
+        return {'logits': d.logits}
     else:
         raise RuntimeError(f'Can\'t extract parameters of the given distribution: {d}')
 
