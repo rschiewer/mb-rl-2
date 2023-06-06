@@ -17,13 +17,18 @@ from mdm.utils.torch_tools import FuzzyDeviceMixin, update_ema_modules, detach_d
 
 class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
 
-    def __init__(self,
-                 level: int,
+    def __init__(self, level: int,
                  observation_key: str,
-                 d_a: int,
                  d_o: int,
+                 d_a: int,
                  min_a: float | Sequence[float] = None,
                  max_a: float | Sequence[float] = None,
+                 actor_lws: Sequence[int] = (),
+                 actor_act_fn: str = 'relu',
+                 actor_layer_norm: bool = True,
+                 critic_lws: Sequence[int] = (),
+                 critic_act_fn: str = 'relu',
+                 critic_layer_norm: bool = True,
                  tr_policy_ema_update_coeff: float = 0.99,
                  tr_policy_kl_coeff: float = 0.0,
                  eps_exploration_init: float = 0,
@@ -69,10 +74,10 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         self.use_slow_world_model = use_ema_world_model
         self.goal_seeking = goal_seeking
 
-        self.actor_net = torch.nn.Sequential(lwa(lws=[d_o, 64, 64, d_a * 2], activation='relu', layer_norm=True,
-                                                 name='actor_net'))
-        self.critic_net = torch.nn.Sequential(lwa(lws=[d_o, 64, 64, 1], activation='relu', layer_norm=True,
-                                                  name='actor_net'))
+        self.actor_net = torch.nn.Sequential(lwa(lws=[d_o, *actor_lws, d_a * 2], activation=actor_act_fn,
+                                                 layer_norm=actor_layer_norm, name='actor_net'))
+        self.critic_net = torch.nn.Sequential(lwa(lws=[d_o, *critic_lws, 1], activation=critic_act_fn,
+                                                  layer_norm=critic_layer_norm, name='critic net'))
 
         self._ema_actor_net = copy.deepcopy(self.actor_net)
         self._ema_critic_net = copy.deepcopy(self.critic_net)
@@ -162,7 +167,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             # advantage = R - v_.detach()
             # policy_losses.append(-advantage)
             policy_losses.append(-gae_advantage_)
-            #policy_losses.append(-R)
+            # policy_losses.append(-R)
             # ppo_r = a_dist.log_prob(a.detach()) / detach_dist(ema_a_dist).log_prob(a.detach())
             # ppo_actor_loss = -((R.detach() - v.detach()) * torch.clip(ppo_r, torch.tensor(0.8, device=sim_env.device),
             #                                                          torch.tensor(1.2, device=sim_env.device)))
@@ -400,7 +405,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         if isinstance(o, torchd.Distribution):
             o = o.mean  # use most probable o if a distribution is provided
 
-        #o = o.detach()  # don't propagate trhough multiple time steps
+        # o = o.detach()  # don't propagate trhough multiple time steps
 
         if self.goal_seeking:
             # detach goal to avoid propagating gradients to upper level model into other agents

@@ -1,9 +1,9 @@
 ---
 neptune_cfg: "../neptune_settings.yaml"
 env_name: "gym_nav2d:nav2dEasy-v0" #"gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-v0"
-prefill_memory: "offline-dataset" #"offline-dataset" # "random", False
-prefill_episodes: null #5000
-train_samples: "nav2d_Easy_train.samples" #"nav2d_Easy_train.samples"
+prefill_memory: "random" #"offline-dataset" # "random", False
+prefill_episodes: 1000
+train_samples: null #"nav2d_Easy_train.samples" #"nav2d_Easy_train.samples"
 test_samples: "nav2d_Easy_expert.samples" #"nav2d_Easy_expert.samples"
 checkpoint_path: "checkpoints"
 final_model_path: "trained_models/model"
@@ -11,15 +11,15 @@ final_model_path: "trained_models/model"
 mdm:
    rssm_modules:
       # RSSM no. 1
-      -  d_z: 10
+      -  d_z: 32
          d_h: 64
          d_a: null
          n_hidden_layers: 3
          hidden_dropout: 0.0
-         epsilon: 0.01
+         epsilon: 0.1
          z_prior_lws: [ 64, 64, 64 ]
          z_post_lws: [ 64, 64, 64 ]
-         layer_norm: False
+         layer_norm: True
          activation: "relu"
          rnn_type: "lstm"
          latent_dist: "normal"  #"normal" "categorical" "bernoulli"
@@ -27,102 +27,101 @@ mdm:
             class: "MLPEncoder"
             d_x_encoded: 32
             lws: [ 64, 64]
-            layer_norm: False
+            layer_norm: True
             activation: "relu"
          o_decoder:
             class: "GaussianDecoder"
             lws: [ 64, 64]
-            layer_norm: False
+            layer_norm: True
             activation: "relu"
-            epsilon: 0.01
+            epsilon: 0.1
          r_decoder:
             class: "GaussianDecoder"
             lws: [ 64, 64]
-            layer_norm: False
+            layer_norm: True
             activation: "relu"
-            epsilon: 0.01
+            epsilon: 0.1
          term_decoder:
             class: "BinomialDecoder"
             lws: [ 64, 64]
-            layer_norm: False
+            layer_norm: True
             activation: "relu"
       # RSSM no. 2
-      -  d_z: 10
+      -  d_z: 32
          d_h: 64
          d_a: 2
          n_hidden_layers: 3
          hidden_dropout: 0.0
-         epsilon: 0.01
+         epsilon: 0.1
          z_prior_lws: [ 64, 64, 64 ]
          z_post_lws: [ 64, 64, 64 ]
-         layer_norm: False
+         layer_norm: True
          activation: "relu"
          rnn_type: "lstm"
          latent_dist: "normal"  #"normal" "categorical" "bernoulli"
          o_encoder:
             class: "MLPEncoder"
             lws: [ 64, 64]
-            layer_norm: False
+            layer_norm: True
             activation: "relu"
             d_x_encoded: 32
          o_decoder:
             class: "GaussianDecoder"
             lws: [ 64, 64]
-            layer_norm: False
+            layer_norm: True
             activation: "relu"
-            epsilon: 0.01
+            epsilon: 0.1
          r_decoder:
             class: "GaussianDecoder"
             lws: [ 64, 64]
-            layer_norm: False
+            layer_norm: True
             activation: "relu"
-            epsilon: 0.01
+            epsilon: 0.1
          term_decoder:
             class: "BinomialDecoder"
             lws: [ 64, 64]
-            layer_norm: False
+            layer_norm: True
             activation: "relu"
    links: [ 'z' ]  # Links for observation filters between RSSM levels
    upwards_filters:
       # Connection between RSSM1 and RSSM2
       -  o:
             class: "PickOneUpwardsFilter"
-            window_size: 2
+            window_size: 4
             offset: -1
          #a:
          #   class: "LearnableUpwardsFilter"
          #   window_size: 2
          #   lws: [ 32, 32 ]
-         #   layer_norm: False
+         #   layer_norm: True
          #   activation: "relu"
          #   model_type: "det_tanh"
          r:
             class: "AvgUpwardsFilter"
-            window_size: 2
+            window_size: 4
          terminal:
             class: "MaxUpwardsFilter"
-            window_size: 2
+            window_size: 4
    warmup_steps: [ 'rand', 'rand' ]
    kl_betas: [0.1, 0.1]
    kl_reg_betas: [ 0.0, 0.0 ]
-   ema_regularization: 0.0
+   ema_regularization: 0.01
    ema_coeff: 0.99
    ema_update_interval: 2
 
 optim:
    type: 'adam'  # 'adamW' 'adam'
-   lr: 0.001 #0.0002
+   lr: 0.002 #0.0002
 
 trainer:
-   n_train_steps: 8000
-   eval_interval: 20
-   d_batch: 4096
-   subtrajectory_len: 10
+   n_train_steps: 20000
+   eval_interval: 50
+   d_batch: 1024
+   subtrajectory_len: 15
    collect_envs: 50
-   collect_interval: 5
-   agent_train_interval: 4
-   agent_model_steps: [ 10, 10 ]
-   agent_model_max_warmup_steps: [ 5, 3 ]
+   collect_interval: 20
+   agent_train_interval: 1
+   agent_model_steps: [ 15, 10 ]
 
 agents:
    r_max:
@@ -139,6 +138,12 @@ agents:
         lr_critic: 0.005
         min_a: null
         max_a: null
+        actor_lws: [64, 64]
+        critic_lws: [64, 64]
+        actor_act_fn: "relu"
+        critic_act_fn: "relu"
+        actor_layer_norm: True
+        critic_layer_norm: True
       # level 1
       - eps_exploration_init: 0.2
         eps_exploration_coeff: 0.99
@@ -152,13 +157,19 @@ agents:
         lr_critic: 0.005
         min_a: -1.0
         max_a: 1.0
+        actor_lws: [64, 64]
+        critic_lws: [64, 64]
+        actor_act_fn: "relu"
+        critic_act_fn: "relu"
+        actor_layer_norm: True
+        critic_layer_norm: True
    goal_seeking:
       # level 0
       - eps_exploration_init: 0.2
         eps_exploration_coeff: 0.99
-        act_entropy_exploration_coeff: 0.01
+        act_entropy_exploration_coeff: 0.1
         learn_act_entropy_exploration_coeff: False
-        novelty_exploration_coeff: 0.01
+        novelty_exploration_coeff: 0.1
         tr_policy_kl_coeff: 0.1
         tr_policy_ema_update_coeff: 0.98
         use_ema_world_model: False
@@ -166,6 +177,12 @@ agents:
         lr_critic: 0.005
         min_a: null
         max_a: null
+        actor_lws: [64, 64]
+        critic_lws: [64, 64]
+        actor_act_fn: "relu"
+        critic_act_fn: "relu"
+        actor_layer_norm: True
+        critic_layer_norm: True
 
 eval:
    warmup_steps: [ 2, 1 ]
