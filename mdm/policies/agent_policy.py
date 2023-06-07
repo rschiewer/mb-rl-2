@@ -212,7 +212,7 @@ class HierarchicalLatentAgentPolicy(Policy):
                                               sample_actions=False, sample_model=False, reconstruct=True)
                 state = simulation['model_state']
                 self._act_cache[i_lvl] += simulation['agent']['a']
-                new_goals += simulation['model']['z']
+                new_goals += simulation['model']['o']  # TODO: this was 'z' before, check what's correct
             goals_from_above = new_goals
 
         self._action_queue += self._act_cache[0]
