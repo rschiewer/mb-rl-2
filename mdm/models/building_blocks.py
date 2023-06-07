@@ -436,7 +436,8 @@ class BinomialDecoder(OutputDecoder):
                 sample: bool = True):
         params = self._mdl(x_enc)
         params = params.reshape(*params.shape[:-1], *self.s_x_orig)
-        d = torch.distributions.ContinuousBernoulli(logits=params)
+        probs = torch.nn.functional.sigmoid(params)
+        d = torch.distributions.ContinuousBernoulli(probs=probs)
         # d = torch.distributions.Independent(d, 1)
         # d = torch.distributions.RelaxedBernoulli(temperature=self._temperature, logits=params)
         if sample:
@@ -757,7 +758,7 @@ class RSSMCell(torch.nn.Module):
         self._z_prior = torch.nn.Sequential(lwa(z_prior_lws, activation, layer_norm=layer_norm, name='z_prior'))
         self._z_post = torch.nn.Sequential(lwa(z_post_lws, activation, layer_norm=layer_norm, name='z_post'))
         self._z_embed_net = torch.nn.Sequential(
-            lwa([d_z_smpl, 64, 64, 64, 64, d_z_smpl], 'relu', layer_norm=True, name='z_embed'))
+            lwa([d_z_smpl, 64, 64, d_z_smpl], 'relu', layer_norm=True, name='z_embed'))
 
     @property
     def o_shape(self):

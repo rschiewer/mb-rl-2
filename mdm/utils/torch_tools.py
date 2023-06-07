@@ -13,7 +13,7 @@ _Placeholder = namedtuple('placeholder', 'device')
 
 
 # define torch.compile decorator depending on whether we're in debug mode or not
-if gettrace() or 'PYCHARM_HOSTED' in os.environ or True:
+if gettrace() or 'PYCHARM_HOSTED' in os.environ:
     print('Debugging or running in PyCharm IDE, disabling torch.compile')
 
     def compile_if_not_debug(func):
@@ -370,7 +370,7 @@ def detach_dist(d: torch.distributions.Distribution):
     elif isinstance(d, torch.distributions.RelaxedOneHotCategorical):
         return type(d)(temperature=d.temperature.detach(), logits=d.logits.detach())
     elif isinstance(d, torch.distributions.ContinuousBernoulli):
-        return type(d)(logits=d.logits.detach())
+        return type(d)(probs=d.probs.detach())
     elif isinstance(d, torch.distributions.Bernoulli):
         return type(d)(probs=d.probs.detach())
     elif isinstance(d, torch.distributions.Independent):
