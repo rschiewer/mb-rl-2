@@ -75,8 +75,19 @@ class LatentAgentPolicy(Policy):
                                                                   level=self.agent.level,
                                                                   use_ema_modules=self._use_ema_modules,
                                                                   sample_state=False, sample_output=False)
+        if torch.isnan(self._current_env_state['z']).any():
+            raise RuntimeError(f'Invalid NAN state: {self._current_env_state["z"]}')
+        if torch.isinf(self._current_env_state['z']).any():
+            raise RuntimeError(f'Invalid inf state: {self._current_env_state["z"]}')
+
         agent_o = self.agent.preproc_o(self._current_env_state)
-        a_dist, a, v = self.agent(agent_o)
+        a_dist, a, v = self.agent(agent_o, sample=False)
+
+        if torch.isnan(a).any():
+            raise RuntimeError(f'Invalid NAN action: {a}')
+        if torch.isinf(a).any():
+            raise RuntimeError(f'Invalid inf action: {a}')
+
         return a.detach().cpu().numpy()
 
 
@@ -186,7 +197,8 @@ class HierarchicalLatentAgentPolicy(Policy):
         # one r_max step on highest level
         state = self._grounded_env_states[i_highest]
         agent = self.model.r_max_agents[i_highest][0]
-        simulation = agent.act_in_sim(env_state=state, sim_env=self.model, n_steps=1)
+        simulation = agent.act_in_sim(env_state=state, sim_env=self.model, n_steps=1, sample_actions=False,
+                                      sample_model=False, reconstruct=True)
         self._act_cache[i_highest] += simulation['agent']['a']
 
         goals_from_above = simulation['model']['o']
@@ -196,7 +208,8 @@ class HierarchicalLatentAgentPolicy(Policy):
             n_steps = self.model.strides[i_lvl + 1]
             new_goals = []
             for goal in goals_from_above:
-                simulation = agent.act_in_sim(env_state=state, sim_env=self.model, n_steps=n_steps, goal=goal)
+                simulation = agent.act_in_sim(env_state=state, sim_env=self.model, n_steps=n_steps, goal=goal,
+                                              sample_actions=False, sample_model=False, reconstruct=True)
                 state = simulation['model_state']
                 self._act_cache[i_lvl] += simulation['agent']['a']
                 new_goals += simulation['model']['z']

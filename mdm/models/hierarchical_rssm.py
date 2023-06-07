@@ -342,13 +342,15 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         state = start_state
         state_below = start_state_below
         for t in range(n_steps):
-            _, a_t, _ = agent(state[agent.observation_key])
-            #a_t = a_t.detach()  # prevent gradients from flowing through agent back into world model
+            _, a_t, _ = agent(state[agent.observation_key], sample=True)
+            a_t = a_t.detach()  # prevent gradients from flowing through agent back into world model
             pred, next_state = mdl(a=a_t, last_state=state, use_posterior=False, sample_state=sample_state,
                                    sample_output=sample_output, reconstruct=reconstruct)
             # get simulated ground truth for this step from level below
             simulation = self.goal_seeking_agents[lvl_below][0].act_in_sim(env_state=state_below, sim_env=self,
-                                                                           n_steps=chunk_size, goal=pred['o'])
+                                                                           n_steps=chunk_size, goal=pred['o'],
+                                                                           sample_actions=True, sample_model=True,
+                                                                           reconstruct=True)
             simulated_ground_truth = self.filter_up(o=simulation['model']['z'], r=simulation['model']['r'],
                                                     terminal=simulation['model']['terminal'], level=level,
                                                     n_steps=chunk_size)
@@ -586,14 +588,15 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                     **kwargs):
         optimizer.zero_grad(set_to_none=True)
         losses_tf, pred_tf = self.eval_step(training_data, force_warmup=[-1 for _ in self.rssm_modules], **kwargs)
-        losses_one, pred_one = self.eval_step(training_data, force_warmup=[1 for _ in self.rssm_modules], **kwargs)
-        losses_wu, pred_wu = self.eval_step(training_data, **kwargs)
+        #losses_one, pred_one = self.eval_step(training_data, force_warmup=[1 for _ in self.rssm_modules], **kwargs)
+        #losses_wu, pred_wu = self.eval_step(training_data, **kwargs)
 
-        losses = {}
-        for k in losses_tf:
-            losses[k] = (losses_tf[k] + losses_wu[k] + losses_one[k]) / 3
+        losses = losses_tf
+        #losses = {}
+        #for k in losses_tf:
+        #    losses[k] = (losses_tf[k] + losses_wu[k] + losses_one[k]) / 3
         losses['total'].backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), 10.0)
+        torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
         optimizer.step()
         # update ema modules
         if self._current_train_step % self.ema_update_interval == 0:
@@ -702,9 +705,10 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         # rec_o = self._mse(pred['o'], targets['o'], mask)
         # rec_r = self._mse(pred['r'], targets['r'], mask)
         # rec_term = self._mse(pred['terminal'], targets['terminal'], mask)
-        kl_z = self._kl_div(pred['z_post'], pred['z_prior'], mask)
+        kl_z = self._kl_div(pred['z_post'], pred['z_prior'], mask, detach_qs=True) \
+               + self._kl_div(pred['z_prior'], pred['z_post'], mask, detach_qs=True)
         kl_reg_z = torch.tensor(0.0, dtype=torch.float32, device=self.device)  # self._kl_reg(pred['z_post'], mask)
-        contrastive_z = self.ema_regularization * self._contrastive_loss(pred['z'], mask)
+        contrastive_z = torch.tensor(0.0, device=self.device) # self.ema_regularization * self._contrastive_loss(pred['z'], mask)
 
         mae_o = self._mae(pred['o'], targets['o'], mask)
         mae_r = self._mae(pred['r'], targets['r'], mask)

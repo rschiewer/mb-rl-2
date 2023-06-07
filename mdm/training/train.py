@@ -45,6 +45,9 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
         batch = train_driver.interact(cfg['trainer']['d_batch'])
         batch = to_tensors(batch, model.device)
         batch = prepare_data(batch)
+        # for easier diagnosis and debugging
+        batch['time_step'] = torch.arange(0, batch['a'].shape[0], device=model.device)
+        batch['time_step'] = batch['time_step'][:, None, None].repeat(1, batch['a'].shape[1], 1)
 
         # train model normal
         model.train()

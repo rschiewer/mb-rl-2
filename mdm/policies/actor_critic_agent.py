@@ -107,6 +107,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
     def forward(self,
                 o: torch.Tensor,
                 use_ema_modules: bool = False,
+                sample: bool = True,
                 **kwargs):
         if o.shape == self.d_o:  # add batch dim if not there already
             o = o.unsqueeze(0)
@@ -117,7 +118,11 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         else:
             state_values = self.critic_net(o)
             a_dist = self._act_dist(self.actor_net, o)
-        a_smpl = a_dist.rsample()
+
+        if sample:
+            a_smpl = a_dist.rsample()
+        else:
+            a_smpl = a_dist.loc
 
         if self.eps > 0 and self.training:
             noise = torchd.Normal(loc=torch.zeros_like(a_smpl), scale=torch.full_like(a_smpl, self.eps)).sample()
@@ -322,7 +327,10 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                    sim_env: 'HierarchicalRSSM',
                    n_steps: int,
                    goal: torch.Tensor = None,
-                   agent_memory: Dict[str, List[torch.Tensor]] | None = None):
+                   agent_memory: Dict[str, List[torch.Tensor]] | None = None,
+                   sample_actions: bool = True,
+                   sample_model: bool = True,
+                   reconstruct: bool = True):
         """
         This function can
         * train agent
@@ -334,14 +342,15 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         env_mem, ema_env_mem = {}, {}
         for t in range(n_steps):
             agent_o = self.preproc_o(env_state, goal)
-            a_dist, a, v = self(agent_o)
+            a_dist, a, v = self(agent_o, sample=sample_actions)
             ema_a_dist, _, ema_v = self(agent_o, use_ema_modules=True)
             trajectory = {'o': None, 'a': a.unsqueeze(0), 'r': None, 'terminal': None}
             mem, mem_ema, next_env_state = sim_env.forward_static(trajectory=trajectory, start_state=env_state,
                                                                   level=self.level, n_steps=1, n_warmup=0,
                                                                   use_ema_modules=self.use_slow_world_model,
                                                                   memory=env_mem, memory_other=ema_env_mem,
-                                                                  sample_state=False, sample_output=False)
+                                                                  sample_state=sample_model, sample_output=sample_model,
+                                                                  reconstruct=reconstruct)
             r = self.build_step_reward(mem[self.observation_key][-1], mem['r'][-1], goal)
             novelty = kl_divergence(mem_ema['z_dist'][-1], mem['z_dist'][-1]).mean(dim=-1)
             timestep = {'o': agent_o, 'a': a, 'r': r, 'terminal': mem['terminal'][-1], 'v': v, 'ema_v': ema_v,
@@ -405,7 +414,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         if isinstance(o, torchd.Distribution):
             o = o.mean  # use most probable o if a distribution is provided
 
-        # o = o.detach()  # don't propagate trhough multiple time steps
+        o = o.detach()  # don't propagate trhough multiple time steps
 
         if self.goal_seeking:
             # detach goal to avoid propagating gradients to upper level model into other agents
