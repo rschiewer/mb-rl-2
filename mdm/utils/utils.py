@@ -86,6 +86,7 @@ def cfg_infer_missing_values(cfg: dict,
         module_args['r_decoder']['d_x_encoded'] = d_state
         module_args['term_decoder']['s_x_orig'] = 1
         module_args['term_decoder']['d_x_encoded'] = d_state
+        module_args['name'] = f'rssm_level_{i_module}'
 
     # for i_filter, filter_args in enumerate(cfg['mdm']['upwards_filters']):
     #    rssm = cfg['mdm']['rssm_modules'][i_filter]
