@@ -3,6 +3,7 @@ import random
 import os
 
 import torch
+from torchviz import make_dot
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
@@ -11,7 +12,7 @@ from mdm.policies.agent_policy import HierarchicalLatentAgentPolicy, LatentAgent
 from mdm.training.gym_driver import collect_data
 from mdm.utils.torch_tools import to_tensors, to_np
 from mdm.utils.utils import prepare_data, valid_subtrajectories, trajectory_statistics, trajectories_from_simulation, \
-    visualize_overlaid_trajectories, anim_to_vid, get_dist_params
+    visualize_overlaid_trajectories, anim_to_vid, get_dist_params, rssm_states_seq_to_batch
 from mdm.models.building_blocks import RSSMCell
 
 
@@ -27,18 +28,9 @@ def agent_eval_mode(agents):
         a[0].eval()
 
 
-def rssm_states_seq_to_batch(mem: Dict[str, List[torch.Tensor]],
-                             rssm_instance: RSSMCell):
-    state_keys = rssm_instance.init_state(1, 'cpu')
-    states = {k: v for k, v in mem.items() if k in state_keys}
-    states = rssm_instance.state_seq_to_batch(**states)
-
-    return states
-
-
 def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collect_fn, eval_env, test_driver,
                 train_driver, logger):
-    model_train_steps = [-1, cfg['trainer']['subtrajectory_len'] // model.strides[1]]
+    model_train_steps = [-1, 10]
     logger.start_session()
     model.prepare_for_training()
     for i_step in tqdm(range(cfg['trainer']['n_train_steps']), desc='Training Progress'):
@@ -60,6 +52,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
         # model_batch = batch
         # now = time.time()
         train_losses, pred = model.train_step(model_batch, opt_model, model_steps=model_train_steps)
+        #make_dot(pred[0]['r'][-1].mean(), dict(model.named_parameters())).view()
         # print(time.time() - now)
         logger.log(to_np(train_losses), Scope.TRAIN(), i_step)
 
@@ -74,13 +67,15 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
 
             for l in range(model.levels):
                 # use all time steps of teacher forcing rollout from model as starting point
-                start_state_lvl = rssm_states_seq_to_batch(pred[l], model.rssm_modules[l])
+                start_state_lvl = rssm_states_seq_to_batch(pred[l], model.rssm_modules[l], i_end=-1)
                 # prevent gradient flow into the start state
                 start_state_lvl = model.rssm_modules[l].detach_state(start_state_lvl)
 
                 # r_max agent
                 r_max_agent, r_max_actor_opt, r_max_critic_opt = model.r_max_agents[l]
-                r_max_simulation = r_max_agent.act_in_sim(start_state_lvl, model, agent_model_steps[l])
+                r_max_simulation = r_max_agent.act_in_sim(start_state_lvl, model, agent_model_steps[l],
+                                                          sample_model=True, sample_actions=True,
+                                                          reconstruct=False)
                 r_max_losses = r_max_agent.train_step(r_max_simulation['agent'], actor_optimizer=r_max_actor_opt,
                                                       critic_optimizer=r_max_critic_opt)
                 r_max_losses['obtained_reward'] = torch.stack(r_max_simulation['agent']['r']).mean()
@@ -104,7 +99,9 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                     # start at chunk_size - 1 because start_state_lvl is not recorded in r_max_simulation
                     for t in range(chunk_size - 1, total_steps, chunk_size):
                         goal = r_max_simulation['model']['z'][t]
-                        goal_simulation = goal_agent.act_in_sim(state, model, chunk_size, goal, agent_memory=agent_mem)
+                        goal_simulation = goal_agent.act_in_sim(state, model, chunk_size, goal, agent_memory=agent_mem,
+                                                                sample_model=True, sample_actions=True,
+                                                                reconstruct=False)
                         # ground goal agent with r_max agent trajectory after every chunk
                         # state = {'z': r_max_simulation['model']['z'][t].detach(),
                         #         'rnn_state': (r_max_simulation['model']['rnn_state'][t][0].detach(),
