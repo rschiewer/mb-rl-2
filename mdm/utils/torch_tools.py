@@ -13,7 +13,7 @@ _Placeholder = namedtuple('placeholder', 'device')
 
 
 # define torch.compile decorator depending on whether we're in debug mode or not
-if gettrace() or 'PYCHARM_HOSTED' in os.environ:
+if gettrace() or 'PYCHARM_HOSTED' in os.environ or True:
     print('Debugging or running in PyCharm IDE, disabling torch.compile')
 
     def compile_if_not_debug(func):
@@ -385,18 +385,36 @@ def detach_dist(d: torch.distributions.Distribution):
 
 
 @compile_if_not_debug
+def stack_dists(dists: List[torch.distributions.Distribution]):
+    assert len(set([type(d) for d in dists])) == 1, 'All distributions have to share the same class'
+
+    first_elem = dists[0]
+    params = {par_name: [par_val] for par_name, par_val in get_dist_params(first_elem).items()}
+    for d in dists[1:]:
+        for par_name, par_val in get_dist_params(d).items():
+            params[par_name].append(par_val)
+    params = {par_name: torch.stack(par_val) for par_name, par_val in params.items()}
+    return type(first_elem)(**params)
+
+
+@compile_if_not_debug
 def concat_dists(dists: List[torch.distributions.Distribution],
                  dim: int = 0):
     assert len(set([type(d) for d in dists])) == 1, 'All distributions have to share the same class'
 
     first_elem = dists[0]
-    params_batched = {par_name: [par_val] for par_name, par_val in get_dist_params(first_elem).items()}
+    params = {par_name: [par_val] for par_name, par_val in get_dist_params(first_elem).items()}
     for d in dists[1:]:
         for par_name, par_val in get_dist_params(d).items():
-            params_batched[par_name].append(par_val)
-    params_batched = {par_name: torch.concat(par_val, dim=dim) for par_name, par_val in
-                      params_batched.items()}
-    return type(first_elem)(**params_batched)
+            params[par_name].append(par_val)
+    params = {par_name: torch.concat(par_val, dim=dim) for par_name, par_val in params.items()}
+    return type(first_elem)(**params)
+
+#@compile_if_not_debug
+#def unbind_dist(dist: torch.distributions.Distribution,
+#                dim: int = 0):
+#    params = get_dist_params(dist)
+#    for k, v in params.items():
 
 
 def extract_sub_distribution(d: torch.distributions.Distribution,
