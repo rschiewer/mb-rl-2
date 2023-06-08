@@ -291,7 +291,7 @@ class OneHotEncoder(InputEncoder):
                  **kwargs):
         super(OneHotEncoder, self).__init__(s_x_orig, d_x_encoded)
         lws = (np.prod(s_x_orig), *lws, d_x_encoded)
-        self._mdl = torch.nn.Sequential(*lwa(lws, activation, layer_norm=layer_norm))
+        self._mdl = torch.nn.Sequential(lwa(lws, activation, layer_norm=layer_norm, name='one_hot_encoder'))
 
     def forward(self,
                 o: torch.Tensor):
@@ -310,7 +310,7 @@ class MLPEncoder(InputEncoder):
                  **kwargs):
         super(MLPEncoder, self).__init__(s_x_orig, d_x_encoded)
         lws = (np.prod(s_x_orig), *lws, d_x_encoded)
-        self._mdl = torch.nn.Sequential(*lwa(lws, activation, layer_norm=layer_norm))
+        self._mdl = torch.nn.Sequential(lwa(lws, activation, layer_norm=layer_norm, name='mlp_encoder'))
 
     def forward(self,
                 o: torch.Tensor):
@@ -346,7 +346,7 @@ class GaussianDecoder(OutputDecoder):
         super().__init__(s_x_orig, d_x_encoded)
 
         lws = (d_x_encoded, *lws, np.prod(s_x_orig) * 2)
-        self._mdl = torch.nn.Sequential(*lwa(lws, activation, layer_norm=layer_norm))
+        self._mdl = torch.nn.Sequential(lwa(lws, activation, layer_norm=layer_norm, name='gaussian_decoder'))
         self.epsilon = epsilon
 
     def forward(self, x_enc: torch.Tensor, sample: bool = True):
@@ -379,7 +379,7 @@ class OneHotDecoder(OutputDecoder, ManagedStatefulTrainingModule):
 
         n_categories = s_x_orig[-1]
         lws = (d_x_encoded, *lws, np.prod(s_x_orig))
-        self._mdl = torch.nn.Sequential(*lwa(lws, activation, layer_norm=layer_norm))
+        self._mdl = torch.nn.Sequential(lwa(lws, activation, layer_norm=layer_norm, name='one_hot_decoder'))
         self.n_categories = n_categories
         self._temp = temperature
         if temperature_min is None:
@@ -429,7 +429,7 @@ class BinomialDecoder(OutputDecoder):
         super(BinomialDecoder, self).__init__(s_x_orig, d_x_encoded)
 
         lws = (d_x_encoded, *lws, np.prod(s_x_orig))
-        self._mdl = torch.nn.Sequential(*lwa(lws, activation, layer_norm=layer_norm))
+        self._mdl = torch.nn.Sequential(lwa(lws, activation, layer_norm=layer_norm, name='binomial_decoder'))
 
     def forward(self,
                 x_enc: torch.Tensor,
@@ -438,10 +438,12 @@ class BinomialDecoder(OutputDecoder):
         params = params.reshape(*params.shape[:-1], *self.s_x_orig)
         probs = torch.nn.functional.sigmoid(params)
         d = torch.distributions.ContinuousBernoulli(probs=probs)
+        # d = torch.distributions.Bernoulli(logits=params)
         # d = torch.distributions.Independent(d, 1)
         # d = torch.distributions.RelaxedBernoulli(temperature=self._temperature, logits=params)
         if sample:
             s = d.rsample()
+            # s = d.sample()
         else:
             s = d.mean
             # s = d.probs.round().to(torch.float32) + d.probs - d.probs.detach()
@@ -467,8 +469,8 @@ class MLPDecoder(OutputDecoder):
         super(MLPDecoder, self).__init__(s_x_orig, d_x_encoded)
 
         lws = (d_x_encoded, *lws, np.prod(s_x_orig))
-        self._mdl = torch.nn.Sequential(*lwa(lws, activation, layer_norm=layer_norm,
-                                             final_activation_function=final_activation))
+        self._mdl = torch.nn.Sequential(lwa(lws, activation, layer_norm=layer_norm,
+                                            final_activation_function=final_activation, name='mlp_decoder'))
 
     def forward(self,
                 x_enc: torch.Tensor,
@@ -600,7 +602,7 @@ class LearnableUpwardsFilter(UpwardsFilter):
             self._pipeline = self._prob_mdl_categorical
         else:
             raise ValueError(f'Unsupported model type: {model_type}')
-        self._mdl = torch.nn.Sequential(*lwa(lws, activation, layer_norm=layer_norm))
+        self._mdl = torch.nn.Sequential(lwa(lws, activation, layer_norm=layer_norm, name='learnable_upwards_filter'))
 
     def _point_estimate(self,
                         x: torch.Tensor,
@@ -706,7 +708,8 @@ class RSSMCell(torch.nn.Module):
                  layer_norm: bool = False,
                  activation: str = 'relu',
                  rnn_type: str = 'lstm',
-                 latent_dist: str = 'normal'):
+                 latent_dist: str = 'normal',
+                 name: str = 'rssm_cell'):
         super().__init__()
 
         assert o_decoder.d_x_encoded == d_z + d_h
@@ -755,10 +758,10 @@ class RSSMCell(torch.nn.Module):
         d_det_core = d_z_smpl + d_a
         self._rnn = rnn_constr(d_det_core, hidden_size=d_h, num_layers=n_hidden_layers, batch_first=False,
                                dropout=hidden_dropout)
-        self._z_prior = torch.nn.Sequential(lwa(z_prior_lws, activation, layer_norm=layer_norm, name='z_prior'))
-        self._z_post = torch.nn.Sequential(lwa(z_post_lws, activation, layer_norm=layer_norm, name='z_post'))
-        self._z_embed_net = torch.nn.Sequential(
-            lwa([d_z_smpl, 64, 64, d_z_smpl], 'relu', layer_norm=True, name='z_embed'))
+        self._z_prior = torch.nn.Sequential(lwa(z_prior_lws, activation, layer_norm=layer_norm, name=f'{name}_z_prior'))
+        self._z_post = torch.nn.Sequential(lwa(z_post_lws, activation, layer_norm=layer_norm, name=f'{name}_z_post'))
+        self._z_embed_net = torch.nn.Sequential(lwa([d_z_smpl, 64, 64, d_z_smpl], 'relu', layer_norm=True,
+                                                    name=f'{name}_z_embed'))
 
     @property
     def o_shape(self):
@@ -956,9 +959,9 @@ class RSSMCell(torch.nn.Module):
                            z_post: List[torch.distributions.Distribution],
                            rnn_state: List[torch.Tensor | Tuple[torch.Tensor]]):
         z = torch.concat(z, dim=0)
-        z_dist = concat_dists(z_dist)
-        z_prior = concat_dists(z_prior)
-        z_post = concat_dists(z_post)
+        z_dist = concat_dists(z_dist, dim=0)
+        z_prior = concat_dists(z_prior, dim=0)
+        z_post = concat_dists(z_post, dim=0)
 
         if self.rnn_type == 'lstm':
             rnn_state = torch.concat([t[0] for t in rnn_state], dim=1), torch.concat([t[1] for t in rnn_state], dim=1)
