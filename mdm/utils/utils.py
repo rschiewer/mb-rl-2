@@ -9,7 +9,7 @@ from enum import Enum, auto
 from inspect import stack
 from itertools import product
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 from threading import Thread
 
 import gym
@@ -908,6 +908,30 @@ def visualize_trajectory(trajectory: Dict[str, np.ndarray]):
 
     ani = animation.FuncAnimation(fig, animate_r, frames=n_steps, interval=100, blit=True)
     return fig, ani
+
+
+def rssm_states_seq_to_batch(mem: Dict[str, List[torch.Tensor]],
+                             rssm_instance: RSSMCell,
+                             i_start: int = 0,
+                             i_end: int = sys.maxsize):
+    state_keys = rssm_instance.init_state(1, 'cpu')
+    states = {k: v[i_start: i_end] for k, v in mem.items() if k in state_keys}
+    states = rssm_instance.state_seq_to_batch(**states)
+
+    return states
+
+
+def seq_to_batch(seq: Dict[str, List[torch.Tensor]],
+                 keys: Iterable[str],
+                 i_start: int = 0,
+                 i_end: int = sys.maxsize):
+    seq_filtered = {k: v[i_start: i_end] for k, v in seq.items() if k in keys}
+
+    for k, v in seq_filtered.items():
+        first_elem = v[0]
+        if isinstance(first_elem, torch.Tensor):
+            pass
+
 
 
 def visualize_overlaid_trajectories(*trajectories: Dict[str, np.ndarray]):
