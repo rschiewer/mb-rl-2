@@ -151,7 +151,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         terminal.insert(0, torch.zeros_like(terminal[0]))
 
         # if self.ema_reg:
-        #   v = [torch.min(v, ema_v) for v, ema_v in zip(v, ema_v)]
+        v = [torch.min(v, ema_v) for v, ema_v in zip(v, ema_v)]
 
         # calculate losses
         # from https://github.com/pytorch/examples/blob/main/reinforcement_learning/actor_critic.py
@@ -213,7 +213,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         actor_optimizer.zero_grad(set_to_none=True)
         critic_optimizer.zero_grad(set_to_none=True)
         losses['total'].backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(self.parameters(), 10.0)
         actor_optimizer.step()
         critic_optimizer.step()
 
@@ -439,32 +439,3 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             return self.goal_similarity(o, goal)
         else:
             return r
-
-
-# helper class for use of agent directly inside RSSM
-class FixedLengthActionSequence:
-
-    def __init__(self,
-                 agent: ActorCriticAgent,
-                 d_batch: int,
-                 n_actions: int):
-        self.agent = agent
-        self.d_batch = d_batch
-        self.max_actions = n_actions
-        self.n_actions_left = n_actions
-
-    @property
-    def shape(self):
-        return self.n_actions_left, self.d_batch, self.agent.d_a
-
-    def __len__(self):
-        return self.n_actions_left
-
-    def next_action(self,
-                    o: torch.Tensor):
-        if self.n_actions_left > 0:
-            a_dist, a, v = self.agent(o)
-            self.n_actions_left -= 1
-        else:
-            raise StopIteration
-        return a
