@@ -1,6 +1,7 @@
 from typing import List, Dict
 import random
 import os
+import time
 
 import torch
 from torchviz import make_dot
@@ -12,7 +13,7 @@ from mdm.policies.agent_policy import HierarchicalLatentAgentPolicy, LatentAgent
 from mdm.training.gym_driver import collect_data
 from mdm.utils.torch_tools import to_tensors, to_np
 from mdm.utils.utils import prepare_data, valid_subtrajectories, trajectory_statistics, trajectories_from_simulation, \
-    visualize_overlaid_trajectories, anim_to_vid, get_dist_params, rssm_states_seq_to_batch
+    visualize_overlaid_trajectories, anim_to_vid, get_dist_params, rssm_states_seq_to_batch, log_params
 from mdm.models.building_blocks import RSSMCell
 
 
@@ -38,13 +39,12 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
         batch = to_tensors(batch, model.device)
         batch = prepare_data(batch)
         # for easier diagnosis and debugging
-        batch['time_step'] = torch.arange(0, batch['a'].shape[0], device=model.device)
-        batch['time_step'] = batch['time_step'][:, None, None].repeat(1, batch['a'].shape[1], 1)
 
         # train model normal
         model.train()
         agent_eval_mode(r_max_agents + goal_seeking_agents)
-        model_batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
+        #model_batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
+        model_batch = batch
         # model_batch_2 = valid_subtrajectories_2(batch, cfg['trainer']['subtrajectory_len'])
         # for k, v in model_batch.items():
         #    assert torch.all(model_batch_2[k] == v)
@@ -94,6 +94,11 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                     total_steps = len(r_max_simulation['model']['z'])
                     chunk_size = model.strides[l + 1]
                     agent_mem = {}
+
+                    # TODO: Die for-loop stellt sicher, dass von start_state_lvl an alle chunk_size schritte ein Ziel
+                    #       verfolgt wird. Ist der finale Abschnitt der Trajektorie jedoch kürzer als chunk_size,
+                    #       wird das letzte Ziel nicht mehr verfolgt. Da es sich aber um den finalen reward handeln
+                    #       könnte, sollte das dennoch passieren.
 
                     state = start_state_lvl
                     # start at chunk_size - 1 because start_state_lvl is not recorded in r_max_simulation
@@ -157,6 +162,19 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
             os.remove(vid_path)
             plt.close(fig)
 
+            # log model and agent params
+            log_params(model, logger, Scope.PARAMETERS() / 'model', time_step=i_step)
+            for i_agent, agent in enumerate(r_max_agents):
+                if agent is None:
+                    continue
+                agent = agent[0]
+                log_params(agent, logger, Scope.PARAMETERS() / f'agent/r_max_agent_{i_agent}', time_step=i_step)
+            for i_agent, agent in enumerate(goal_seeking_agents):
+                if agent is None:
+                    continue
+                agent = agent[0]
+                log_params(agent, logger, Scope.PARAMETERS() / f'agent/goal_seeking_agent_{i_agent}', time_step=i_step)
+
             # latent state distribution
             # warmup_steps = cfg['eval']['warmup_steps']
             # pred, _, targets = model.forward_all_levels(batch, model_steps=eval_steps, warmup_steps=warmup_steps)
@@ -180,3 +198,12 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
             #    logger.log_plot(fig_to_img(fig), Scope.TEST() / f'latent_state_distribution/{l}', i_step)
             #    plt.close(fig)
             #    del fig
+
+        if i_step % cfg['trainer']['checkpoint_interval'] == 0:
+            timestamp = time.time_ns()
+            pid = os.getpid()
+            model_path = f'.checkpoint_model_weights_{pid}_{timestamp}_{logger.run_id}.ptmdl'
+            torch.save(model, model_path)
+            logger.log_file(model_path, Scope.DATA() / 'weights')
+            os.remove(model_path)
+

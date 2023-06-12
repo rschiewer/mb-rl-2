@@ -27,6 +27,7 @@ from mdm.gridworld.gridworld import Gridworld, CellType
 from mdm.memory.trajectory_memory import flatten_and_unsqueeze, TrajectoryMemory
 from mdm.models.building_blocks import *
 from mdm.policies.actor_critic_agent import ActorCriticAgent
+from mdm.logging.logger import Logger, Scope
 
 SliceType = TypeVar("SliceType", bound=Sequence)
 BasicDtype = TypeVar('BasicDtype', int, float, np.single, np.double, bool)
@@ -341,11 +342,11 @@ def anim_to_vid(anim: animation.Animation,
 
     return tmp_file_name
 
-    #with open(tmp_file_name, 'rb') as f:
+    # with open(tmp_file_name, 'rb') as f:
     #    buffer = io.BytesIO(f.read())
-    #os.remove(tmp_file_name)
+    # os.remove(tmp_file_name)
 
-    #return buffer
+    # return buffer
 
 
 def join_trajectories(t1: Dict[str, np.ndarray], t2: Dict[str, np.ndarray]):
@@ -460,6 +461,9 @@ def prepare_data(data: Dict[str, Union[torch.Tensor, np.ndarray]],
 
     for k in remove_keys:
         del data[k]
+
+    # data['time_step'] = torch.arange(0, data['o'].shape[0], device=data['o'].device)
+    # data['time_step'] = data['time_step'][:, None, None].repeat(1, data['o'].shape[1], 1)
 
     return data
 
@@ -885,8 +889,8 @@ def visualize_trajectory(trajectory: Dict[str, np.ndarray]):
     c = next(color_cycle)
     pos = ax[0, 0].scatter(x=trajectory['o'][0, 0], y=trajectory['o'][0, 1], marker='o', c=c)  # init pos agent
     goal = ax[0, 0].scatter(x=trajectory['o'][0, 2], y=trajectory['o'][0, 3], marker='x', c=c)  # init pos goal
-    #angle, stepwidth = trajectory['a'][0]
-    #dx, dy = np.arccos(angle) * stepwidth, np.arcsin(angle) * stepwidth
+    # angle, stepwidth = trajectory['a'][0]
+    # dx, dy = np.arccos(angle) * stepwidth, np.arcsin(angle) * stepwidth
     # act = ax[0, 0].arrow(x=trajectory['o'][0, 0], y=trajectory['o'][0, 1], dx=dx, dy=dy)  # init action
     ax[1, 0].plot(trajectory['r'])
     ax[1, 1].plot(trajectory['terminal'])
@@ -916,6 +920,8 @@ def rssm_states_seq_to_batch(mem: Dict[str, List[torch.Tensor]],
                              i_start: int = 0,
                              i_end: int = sys.maxsize):
     state_keys = rssm_instance.init_state(1, 'cpu')
+    #if 'time_step' in mem:
+    #    state_keys = [*state_keys, 'time_step']
     states = {k: v[i_start: i_end] for k, v in mem.items() if k in state_keys}
     states = rssm_instance.state_seq_to_batch(**states)
 
@@ -933,6 +939,22 @@ def seq_to_batch(seq: Dict[str, List[torch.Tensor]],
         if isinstance(first_elem, torch.Tensor):
             pass
 
+
+def log_params(model: torch.nn.Module,
+               logger: Logger,
+               scope: Scope,
+               time_step: int):
+    max_param = sys.float_info.min
+    min_param = sys.float_info.max
+    for name, param in model.named_parameters():
+        full_scope = scope / name
+        param_np = param.detach().cpu().numpy()
+        logger.log({'mean': param_np.mean(), 'std': param_np.std(), 'min': param_np.min(), 'max': param_np.max()}, full_scope, time_step=time_step)
+        if param_np.min() < min_param:
+            min_param = param_np.min()
+        if param_np.max() > max_param:
+            max_param = param_np.max()
+    logger.log({'largest_param': max_param, 'smallest_param': min_param}, scope, time_step=time_step)
 
 
 def visualize_overlaid_trajectories(*trajectories: Dict[str, np.ndarray]):
