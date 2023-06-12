@@ -67,18 +67,26 @@ class LatentAgentPolicy(Policy):
         if isinstance(env, CacheLastStepEnv):  # add batch dim if unbatched env
             o, a, r, terminal, truncated = [x.unsqueeze(1) for x in (o, a, r, terminal, truncated)]
         # prepare data
-        env_data = {'o': o, 'a': a, 'r': r, 'terminal': terminal, 'truncated': truncated, 'mask': torch.empty_like(r)}
+        env_data = {'o': o, 'a': a, 'r': r, 'terminal': terminal, 'truncated': truncated, 'mask': torch.zeros_like(r)}
         env_data = prepare_data(env_data)
+
+        for k, v in env_data.items():
+            if torch.isnan(v).any():
+                raise RuntimeError(f'Invalid NAN input for key {k} in step {env.current_step}: {v}')
+            if torch.isinf(v).any():
+                raise RuntimeError(f'Invalid inf input for key {k} in step {env.current_step}: {v}')
+
         # digest new groundtruth data in level 0 model
         _, _, self._current_env_state = self.model.forward_static(trajectory=env_data, n_steps=1, n_warmup=1,
                                                                   start_state=self._current_env_state,
                                                                   level=self.agent.level,
                                                                   use_ema_modules=self._use_ema_modules,
                                                                   sample_state=False, sample_output=False)
+
         if torch.isnan(self._current_env_state['z']).any():
-            raise RuntimeError(f'Invalid NAN state: {self._current_env_state["z"]}')
+            raise RuntimeError(f'Invalid NAN state in step {env.current_step}: {self._current_env_state["z"]}')
         if torch.isinf(self._current_env_state['z']).any():
-            raise RuntimeError(f'Invalid inf state: {self._current_env_state["z"]}')
+            raise RuntimeError(f'Invalid inf state in step {env.current_step}: {self._current_env_state["z"]}')
 
         agent_o = self.agent.preproc_o(self._current_env_state)
         a_dist, a, v = self.agent(agent_o, sample=False)
