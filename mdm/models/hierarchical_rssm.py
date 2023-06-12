@@ -705,10 +705,13 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         # rec_o = self._mse(pred['o'], targets['o'], mask)
         # rec_r = self._mse(pred['r'], targets['r'], mask)
         # rec_term = self._mse(pred['terminal'], targets['terminal'], mask)
-        kl_z = self._kl_div(pred['z_post'], pred['z_prior'], mask, detach_qs=True) \
-               + self._kl_div(pred['z_prior'], pred['z_post'], mask, detach_qs=True)
-        kl_reg_z = torch.tensor(0.0, dtype=torch.float32, device=self.device)  # self._kl_reg(pred['z_post'], mask)
-        contrastive_z = torch.tensor(0.0, device=self.device) # self.ema_regularization * self._contrastive_loss(pred['z'], mask)
+        # kl_z = self._kl_div(pred['z_post'], pred['z_prior'], mask)
+        kl_z = (0.8 * self._kl_div(pred['z_post'], pred['z_prior'], mask, detach_ps=True)
+                + 0.2 * self._kl_div( pred['z_post'], pred['z_prior'], mask, detach_qs=True))
+        # torch.tensor(0.0, dtype=torch.float32, device=self.device)  # self._kl_reg(pred['z_post'], mask)
+        kl_reg_z = self._kl_reg(pred['z_post'], mask)
+        contrastive_z = torch.tensor(0.0,
+                                     device=self.device)  # self.ema_regularization * self._contrastive_loss(pred['z'], mask)
 
         mae_o = self._mae(pred['o'], targets['o'], mask)
         mae_r = self._mae(pred['r'], targets['r'], mask)
