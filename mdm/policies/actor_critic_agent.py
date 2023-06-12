@@ -77,7 +77,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         self.actor_net = torch.nn.Sequential(lwa(lws=[d_o, *actor_lws, d_a * 2], activation=actor_act_fn,
                                                  layer_norm=actor_layer_norm, name='actor_net'))
         self.critic_net = torch.nn.Sequential(lwa(lws=[d_o, *critic_lws, 1], activation=critic_act_fn,
-                                                  layer_norm=critic_layer_norm, name='critic net'))
+                                                  layer_norm=critic_layer_norm, name='critic_net'))
 
         self._ema_actor_net = copy.deepcopy(self.actor_net)
         self._ema_critic_net = copy.deepcopy(self.critic_net)
@@ -99,7 +99,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         x = actor_net(x)
         mu, logvar = torch.tensor_split(x, 2, dim=-1)
         mu = torch.tanh(mu) * (self.max_a - self.min_a) / 2 + (self.min_a + self.max_a) / 2
-        sigma = torch.log(1 + torch.exp(logvar)) + 0.01
+        sigma = torch.nn.functional.softplus(logvar) + 0.01
         d = torch.distributions.Normal(loc=mu, scale=sigma)
         return d
 
@@ -151,12 +151,12 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         terminal.insert(0, torch.zeros_like(terminal[0]))
 
         # if self.ema_reg:
-        v = [torch.min(v, ema_v) for v, ema_v in zip(v, ema_v)]
+        v_reg = [torch.min(v, ema_v) for v, ema_v in zip(v, ema_v)]  # use this for policy targets
 
         # calculate losses
         # from https://github.com/pytorch/examples/blob/main/reinforcement_learning/actor_critic.py
-        returns, discount = self._calc_returns(r, v, terminal, gamma=0.99)
-        gae_advantages, _ = self._calc_gae(r, v, terminal, gamma=0.99, lambda_=0.95)
+        returns, discount = self._calc_returns(r, v_reg, terminal, gamma=0.99)
+        gae_advantages, _ = self._calc_gae(r, v_reg, terminal, gamma=0.99, lambda_=0.95)
         # returns = torch.stack(returns)
         # returns = (returns - returns.mean()) / (returns.std() + 0.0001)
 
@@ -171,8 +171,8 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             # ACTOR
             # advantage = R - v_.detach()
             # policy_losses.append(-advantage)
-            policy_losses.append(-gae_advantage_)
-            # policy_losses.append(-R)
+            #policy_losses.append(-gae_advantage_)
+            policy_losses.append(-R)
             # ppo_r = a_dist.log_prob(a.detach()) / detach_dist(ema_a_dist).log_prob(a.detach())
             # ppo_actor_loss = -((R.detach() - v.detach()) * torch.clip(ppo_r, torch.tensor(0.8, device=sim_env.device),
             #                                                          torch.tensor(1.2, device=sim_env.device)))
@@ -201,19 +201,28 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
 
         return {'total': loss, 'policy': policy_loss, 'value': value_loss, 'policy_trust_region_loss': ppo_loss,
                 'model_novelty_reward_aug': model_novelty_reward_aug, 'action_entropy_reward_aug': entropy_reward_aug,
-                'eps_exploration': self.eps}
+                'eps_exploration': self.eps, 'monitoring_a_dist_mean': torch.stack([d.loc for d in a_dist]).mean(),
+                'monitoring_a_dist_std': torch.stack([d.scale for d in a_dist]).mean()}
 
     def train_step(self,
                    simulation_data: Dict[str, torch.Tensor],
                    actor_optimizer: torch.optim.Optimizer,
                    critic_optimizer: torch.optim.Optimizer,
                    **kwargs):
-        losses = self.eval_step(**simulation_data)
-
         actor_optimizer.zero_grad(set_to_none=True)
         critic_optimizer.zero_grad(set_to_none=True)
+
+        losses = self.eval_step(**simulation_data)
+
+        invalid_losses = ''
+        for k, v in losses.items():
+            if torch.isnan(v).any() or torch.isinf(v).any():
+                invalid_losses += f'{k}, {v}\n'
+        if len(invalid_losses) > 0:
+            raise RuntimeError(f'Invalid loss in {self._agent_repr} detected: {invalid_losses}')
+
         losses['total'].backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), 10.0)
+        torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
         actor_optimizer.step()
         critic_optimizer.step()
 
@@ -342,7 +351,16 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         env_mem, ema_env_mem = {}, {}
         for t in range(n_steps):
             agent_o = self.preproc_o(env_state, goal)
+            
             a_dist, a, v = self(agent_o, sample=sample_actions)
+
+            if torch.isnan(env_state['z']).any() or torch.isinf(env_state['z']).any():
+                raise RuntimeError(f'Invalid env state in act_in_sim: {env_state["z"]}')
+            if torch.isnan(agent_o).any() or torch.isinf(agent_o).any():
+                raise RuntimeError(f'Invalid agent observation in act_in_sim: {agent_o}')
+            if torch.isnan(a).any() or torch.isinf(a).any():
+                raise RuntimeError(f'Invalid agent action in act_in_sim: {a}')
+
             ema_a_dist, _, ema_v = self(agent_o, use_ema_modules=True)
             trajectory = {'o': None, 'a': a.unsqueeze(0), 'r': None, 'terminal': None}
             mem, mem_ema, next_env_state = sim_env.forward_static(trajectory=trajectory, start_state=env_state,
@@ -439,3 +457,14 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             return self.goal_similarity(o, goal)
         else:
             return r
+
+    @property
+    def _agent_repr(self):
+        agent_name = 'agent'
+        if self.goal_seeking:
+            agent_name = 'goal seeking ' + agent_name
+        else:
+            agent_name = 'r max ' + agent_name
+        agent_name = f'L{self.level}' + agent_name
+
+        return agent_name

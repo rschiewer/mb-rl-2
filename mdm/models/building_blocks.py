@@ -354,7 +354,7 @@ class GaussianDecoder(OutputDecoder):
         # if self.s_x_orig != (1,):
         #    params = params.reshape(*params.shape[:-1], *self.s_x_orig, 2)
         mu, logvar = torch.tensor_split(params, 2, dim=-1)
-        sigma = torch.log(1 + torch.exp(logvar)) + self.epsilon
+        sigma = torch.nn.functional.softplus(logvar) + self.epsilon
         d = torch.distributions.Normal(loc=mu, scale=sigma)
         # d = torch.distributions.Independent(d, 1)
         if sample:
@@ -833,12 +833,27 @@ class RSSMCell(torch.nn.Module):
             last_state = {'z': self.zero_z(a.shape[0], a.device),
                           'rnn_state': self.zero_rnn_state(a.shape[0], a.device)}
 
-        z_embed = self._z_embed_net(last_state['z'])
-        inp = torch.concat([z_embed, a, context], dim=-1)
+        #z_embed = self._z_embed_net(last_state['z'])
+
+        #if torch.isnan(z_embed).any():
+        #    raise RuntimeError(f'Invalid NAN embedded z in imagine: {z_embed}')
+
+        inp = torch.concat([last_state['z'], a, context], dim=-1)
         inp = inp.unsqueeze(0)  # add time dim
         h, next_rnn_state = self._rnn(inp, last_state['rnn_state'])
         h = h.squeeze(0)  # remove time dim
+
+        if torch.isnan(a).any() or torch.isinf(a).any():
+            raise RuntimeError(f'Invalid action in imagine: {a}')
+        if torch.isnan(last_state['z']).any() or torch.isinf(last_state['z']).any():
+            raise RuntimeError(f'Invalid last state in imagine: {last_state["z"]}')
+        if torch.isnan(h).any() or torch.isinf(h).any():
+            raise RuntimeError(f'Invalid h in imagine: {h}')
+
         z_prior, z_smpl = self.build_z_prior(h, sample)
+
+        if torch.isnan(z_smpl).any() or torch.isinf(z_smpl).any():
+            raise RuntimeError(f'Invalid z in imagine: {z_smpl}')
 
         return h, {'z': z_smpl, 'z_dist': z_prior, 'z_prior': z_prior, 'z_post': None, 'rnn_state': next_rnn_state}
 
@@ -849,7 +864,12 @@ class RSSMCell(torch.nn.Module):
                 context: torch.Tensor | None = None,
                 sample: bool = True):
         h, next_state = self.imagine(a, last_state, context, sample)
-        z_post, z_smpl = self.build_z_post(h, self.o_encoder(o), sample)
+        o_enc = self.o_encoder(o)
+        
+        if torch.isnan(o_enc).any():
+            raise RuntimeError(f'Invalid NAN encoded observation in observe: {o_enc}')
+
+        z_post, z_smpl = self.build_z_post(h, o_enc, sample)
 
         # overwrite chosen z sample and distribution with posterior
         next_state['z'] = z_smpl
@@ -889,6 +909,9 @@ class RSSMCell(torch.nn.Module):
         reconstruction = {'o': o_smpl, 'o_dist': o_dist, 'a': a, 'r_dist': r_dist, 'r': r_smpl,
                           'terminal_dist': term_dist, 'terminal': term_smpl, 's': s, 'h': h}
 
+        #if last_state is not None and 'time_step' in last_state:
+        #    next_state['time_step'] = (last_state['time_step'] + 1).detach()
+
         return reconstruction, next_state
 
     def build_z_prior(self,
@@ -897,7 +920,7 @@ class RSSMCell(torch.nn.Module):
         z_prior_params = self._z_prior(h)
         if self.latent_dist == 'normal':
             mu, logvar = torch.tensor_split(z_prior_params, 2, dim=-1)
-            sigma = torch.log(1 + torch.exp(logvar)) + self.epsilon
+            sigma = torch.nn.functional.softplus(logvar) + self.epsilon
             z_prior = torch.distributions.Normal(loc=mu, scale=sigma)
             # z_prior = torch.distributions.Independent(z_prior, 1)
             z_smpl = z_prior.rsample() if sample else mu
@@ -922,7 +945,7 @@ class RSSMCell(torch.nn.Module):
         z_post_params = self._z_post(z_post_inp)
         if self.latent_dist == 'normal':
             mu, logvar = torch.tensor_split(z_post_params, 2, dim=-1)
-            sigma = torch.log(1 + torch.exp(logvar)) + self.epsilon
+            sigma = torch.nn.functional.softplus(logvar) + self.epsilon
             z_post = torch.distributions.Normal(loc=mu, scale=sigma)
             # z_post = torch.distributions.Independent(z_post, 1)
             z_smpl = z_post.rsample() if sample else mu
@@ -946,18 +969,24 @@ class RSSMCell(torch.nn.Module):
         else:
             rnn_state_detached = state['rnn_state'].detach()
 
-        return {'z': state['z'].detach(),
-                'z_dist': detach_dist(state['z_dist']),
-                'z_prior': detach_dist(state['z_prior']),
-                'z_post': detach_dist(state['z_post']) if state['z_post'] is not None else None,
-                'rnn_state': rnn_state_detached}
+        detached_state = {'z': state['z'].detach(),
+                          'z_dist': detach_dist(state['z_dist']),
+                          'z_prior': detach_dist(state['z_prior']),
+                          'z_post': detach_dist(state['z_post']) if state['z_post'] is not None else None,
+                          'rnn_state': rnn_state_detached}
+
+        #if 'time_step' in state:
+        #    detached_state['time_step'] = state['time_step'].detach()
+
+        return detached_state
 
     def state_seq_to_batch(self,
                            z: List[torch.Tensor],
                            z_dist: List[torch.distributions.Distribution],
                            z_prior: List[torch.distributions.Distribution],
                            z_post: List[torch.distributions.Distribution],
-                           rnn_state: List[torch.Tensor | Tuple[torch.Tensor]]):
+                           rnn_state: List[torch.Tensor | Tuple[torch.Tensor]],
+                           time_step: List[torch.Tensor] = None):
         z = torch.concat(z, dim=0)
         z_dist = concat_dists(z_dist, dim=0)
         z_prior = concat_dists(z_prior, dim=0)
@@ -968,7 +997,12 @@ class RSSMCell(torch.nn.Module):
         else:
             rnn_state = torch.concat(rnn_state, dim=1)
 
-        return {'z': z, 'z_dist': z_dist, 'z_prior': z_prior, 'z_post': z_post, 'rnn_state': rnn_state}
+        state = {'z': z, 'z_dist': z_dist, 'z_prior': z_prior, 'z_post': z_post, 'rnn_state': rnn_state}
+
+        if time_step:
+            state['time_step'] = torch.concat(time_step, dim=0)
+
+        return state
 
 
 class CompiledRSSMCell(torch.nn.Module):
