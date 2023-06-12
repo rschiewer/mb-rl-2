@@ -2,7 +2,7 @@
 neptune_cfg: "../neptune_settings.yaml"
 env_name: "gym_nav2d:nav2dEasy-v0" #"gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-v0"
 prefill_memory: "random" #"offline-dataset" # "random", False
-prefill_episodes: 1000
+prefill_episodes: 10000
 train_samples: null #"nav2d_Easy_train.samples" #"nav2d_Easy_train.samples"
 test_samples: "nav2d_Easy_expert.samples" #"nav2d_Easy_expert.samples"
 checkpoint_path: "checkpoints"
@@ -11,7 +11,7 @@ final_model_path: "trained_models/model"
 mdm:
    rssm_modules:
       # RSSM no. 1
-      -  d_z: 32
+      -  d_z: 8
          d_h: 64
          d_a: null
          n_hidden_layers: 3
@@ -21,7 +21,7 @@ mdm:
          z_post_lws: [ 64, 64, 64 ]
          layer_norm: True
          activation: "relu"
-         rnn_type: "lstm"
+         rnn_type: "gru"
          latent_dist: "normal"  #"normal" "categorical" "bernoulli"
          o_encoder:
             class: "MLPEncoder"
@@ -47,7 +47,7 @@ mdm:
             layer_norm: True
             activation: "relu"
       # RSSM no. 2
-      -  d_z: 32
+      -  d_z: 8
          d_h: 64
          d_a: 2
          n_hidden_layers: 3
@@ -57,14 +57,14 @@ mdm:
          z_post_lws: [ 64, 64, 64 ]
          layer_norm: True
          activation: "relu"
-         rnn_type: "lstm"
+         rnn_type: "gru"
          latent_dist: "normal"  #"normal" "categorical" "bernoulli"
          o_encoder:
             class: "MLPEncoder"
-            lws: [ 64, 64]
+            lws: [ 64, 64 ]
             layer_norm: True
             activation: "relu"
-            d_x_encoded: 32
+            d_x_encoded: 8
          o_decoder:
             class: "GaussianDecoder"
             lws: [ 64, 64]
@@ -103,31 +103,32 @@ mdm:
             class: "MaxUpwardsFilter"
             window_size: 4
    warmup_steps: [ 'rand', 'rand' ]
-   kl_betas: [0.1, 0.1]
-   kl_reg_betas: [ 0.0, 0.0 ]
-   ema_regularization: 0.01
-   ema_coeff: 0.99
-   ema_update_interval: 2
+   kl_betas: [ 0.1, 0.1 ]
+   kl_reg_betas: [ 0.00, 0.00 ]
+   ema_regularization: 0.0
+   ema_coeff: 0.95
+   ema_update_interval: 4
 
 optim:
    type: 'adam'  # 'adamW' 'adam'
-   lr: 0.002 #0.0002
+   lr: 0.0008 #0.0002
 
 trainer:
    n_train_steps: 20000
    eval_interval: 50
-   d_batch: 1024
-   subtrajectory_len: 15
+   d_batch: 256
+   subtrajectory_len: 20
    collect_envs: 50
-   collect_interval: 20
+   collect_interval: 5
    agent_train_interval: 1
    agent_model_steps: [ 15, 10 ]
+   checkpoint_interval: 100
 
 agents:
    r_max:
       # level 0
-      - eps_exploration_init: 0.2
-        eps_exploration_coeff: 0.98
+      - eps_exploration_init: 0.3
+        eps_exploration_coeff: 0.99
         act_entropy_exploration_coeff: 0.1
         learn_act_entropy_exploration_coeff: False
         novelty_exploration_coeff: 0.1
@@ -135,7 +136,7 @@ agents:
         tr_policy_ema_update_coeff: 0.98
         use_ema_world_model: False
         lr_actor: 0.0005
-        lr_critic: 0.005
+        lr_critic: 0.002
         min_a: null
         max_a: null
         actor_lws: [64, 64]
@@ -145,7 +146,7 @@ agents:
         actor_layer_norm: True
         critic_layer_norm: True
       # level 1
-      - eps_exploration_init: 0.2
+      - eps_exploration_init: 0.3
         eps_exploration_coeff: 0.99
         act_entropy_exploration_coeff: 0.1
         learn_act_entropy_exploration_coeff: False
@@ -154,7 +155,7 @@ agents:
         tr_policy_ema_update_coeff: 0.98
         use_ema_world_model: False
         lr_actor: 0.0005
-        lr_critic: 0.005
+        lr_critic: 0.002
         min_a: -1.0
         max_a: 1.0
         actor_lws: [64, 64]
@@ -165,7 +166,7 @@ agents:
         critic_layer_norm: True
    goal_seeking:
       # level 0
-      - eps_exploration_init: 0.2
+      - eps_exploration_init: 0.3
         eps_exploration_coeff: 0.99
         act_entropy_exploration_coeff: 0.1
         learn_act_entropy_exploration_coeff: False
@@ -174,7 +175,7 @@ agents:
         tr_policy_ema_update_coeff: 0.98
         use_ema_world_model: False
         lr_actor: 0.0005
-        lr_critic: 0.005
+        lr_critic: 0.002
         min_a: null
         max_a: null
         actor_lws: [64, 64]
