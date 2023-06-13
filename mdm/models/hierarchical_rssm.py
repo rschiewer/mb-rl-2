@@ -32,6 +32,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                  kl_reg_betas: Sequence[float],
                  r_max_agents: Sequence[ActorCriticAgent] = (None,),
                  goal_seeking_agents: Sequence[ActorCriticAgent] = (None,),
+                 latent_overshooting: bool = False,
                  ema_regularization: float = 0.0,
                  ema_coeff: float = 0.99,
                  ema_update_interval: int = sys.maxsize):
@@ -68,6 +69,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         self.kl_reg_betas = tuple(kl_reg_betas)
         self.r_max_agents = tuple(r_max_agents)  # no module list to shield the agents from any pytorch functions
         self.goal_seeking_agents = tuple(goal_seeking_agents)
+        self.latent_overshooting = latent_overshooting
         self.ema_regularization = ema_regularization
         self.ema_coeff = ema_coeff
         self.ema_update_interval = ema_update_interval
@@ -617,51 +619,11 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         # losses_one, pred_one = self.eval_step(training_data, force_warmup=[1 for _ in self.rssm_modules], **kwargs)
         # losses_wu, pred_wu = self.eval_step(training_data, **kwargs)
 
-        """
-        TODO:
-        * es wird in jedem Zeitschritt der state NACH anwendung der Aktion gespeichert
-        * d.h. der erste all-zero state wird nicht gespeichert und die richtige Aktionssequenz für einen start_state
-          fängt einen Zeitschritt später an
-        * d.h. die Agenten werden niemals auf dem ersten state als start_state trainiert
-        * d.h. latent overshooting wird niemals vom ersten state an trainiert, wobei 0 schritt l.o. immer trainiert wrid
-        * sinnvolle Änderung: forward_static() und forward_dynamic() so verändern, dass immer der state des aktuellen
-          Zeitschritts gespeichert wird
-        * das zieht Änderungen an anderen Stellen im Code nach sich, dies muss geprüft werden!
-           * ground_level()
-           * train_model()
-        """
-
-        n_lo = [10, 5]
-        for l in range(self.levels):
-            offset = n_lo[l]
-            start_state = rssm_states_seq_to_batch(pred_tf[l], self.rssm_modules[l], i_end=-offset)
-            actions = torch.stack(pred_tf[l]['a'])  # make tensor (time x batch x d_a)
-            terminals = torch.stack(pred_tf[l]['terminal'])
-            #time_steps = torch.stack(pred_tf[l]['time_step'])
-            action_windows, terminal_windows, time_step_windows, z_post_windows = [], [], [], []
-            # select for every start state the next n_lo actions
-            # NOTE: since the rssm states are always recorded after an action was applied, correct actions and terminal
-            # flags for a start state at time step t start from t+1
-            for t in range(1, actions.shape[0] - offset + 1):
-                action_windows.append(actions[t: t + offset])
-                terminal_windows.append(terminals[t: t + offset])
-                #time_step_windows.append(time_steps[t: t + offset])
-                z_post_windows.append(stack_dists(pred_tf[l]['z_post'][t: t + offset]))
-            actions = torch.concat(action_windows, dim=1)  # concat all windows along batch dimension
-            terminals = torch.concat(terminal_windows, dim=1)
-            #time_steps = torch.concat(time_step_windows, dim=1)
-            mask = self.compute_mask(terminals)
-            #trajectory = {'a': actions, 'o': None, 'r': None, 'terminal': None, 'time_step': time_steps}
-            trajectory = {'a': actions, 'o': None, 'r': None, 'terminal': None}
-            pred_lo_lvl, _, _ = self.forward_static(trajectory, level=l, start_state=start_state, n_warmup=0,
-                                                    reconstruct=False)
-            z_post = concat_dists(z_post_windows, dim=1)
-            z_prior = stack_dists(pred_lo_lvl['z_prior'])
-            kl_0 = torch.mean(torch.distributions.kl_divergence(detach_dist(z_post), z_prior) * (1 - mask))
-            kl_1 = torch.mean(torch.distributions.kl_divergence(z_post, detach_dist(z_prior)) * (1 - mask))
-            kl = (0.8 * kl_0 + 0.2 * kl_1) / offset
-            losses_tf[f'kl_latent_overshooting_{l}'] = self.kl_betas[l] * kl
-            losses_tf['total'] += kl
+        if self.latent_overshooting:
+            losses_lo = self._latent_overshooting(pred_tf=pred_tf, n_lo=[10, 5])
+            losses_tf.update(losses_lo)
+            for v in losses_lo.values():
+                losses_tf['total'] += v
 
         losses = losses_tf
 
@@ -675,15 +637,75 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         losses['total'].backward()
         torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
         optimizer.step()
-        # update ema modules
+
         if self._current_train_step % self.ema_update_interval == 0:
-            with torch.no_grad():
-                rssm_params = chain.from_iterable([m.parameters() for m in self.rssm_modules])
-                ema_params = chain.from_iterable([m.parameters() for m in self._ema_rssm_modules])
-                for param, ema_param in zip(rssm_params, ema_params):
-                    ema_param[:] = self.ema_coeff * ema_param + (1 - self.ema_coeff) * param
+            self._update_ema_modules()
 
         return losses, pred_tf
+
+    @compile_if_not_debug
+    def _update_ema_modules(self):
+        with torch.no_grad():
+            rssm_params = chain.from_iterable([m.parameters() for m in self.rssm_modules])
+            ema_params = chain.from_iterable([m.parameters() for m in self._ema_rssm_modules])
+            for param, ema_param in zip(rssm_params, ema_params):
+                ema_param[:] = self.ema_coeff * ema_param + (1 - self.ema_coeff) * param
+
+    @compile_if_not_debug
+    def _latent_overshooting(self, pred_tf, n_lo):
+        """
+        TODO:
+        * es wird in jedem Zeitschritt der state NACH anwendung der Aktion gespeichert
+        * d.h. der erste all-zero state wird nicht gespeichert und die richtige Aktionssequenz für einen start_state
+          fängt einen Zeitschritt später an
+        * d.h. die Agenten werden niemals auf dem ersten state als start_state trainiert
+        * d.h. latent overshooting wird niemals vom ersten state an trainiert, wobei 0 schritt l.o. immer trainiert wrid
+        * sinnvolle Änderung: forward_static() und forward_dynamic() so verändern, dass immer der state des aktuellen
+          Zeitschritts gespeichert wird
+        * das zieht Änderungen an anderen Stellen im Code nach sich, dies muss geprüft werden!
+           * ground_level()
+           * train_model()
+        """
+        #for i in range(10):
+        #    d = concat_dists(pred_tf[0]['z_prior'], dim=1)
+        #    d2 = concat_dists(pred_tf[0]['z_post'], dim=1)
+
+        losses_lo = {}
+        for l in range(self.levels):
+            offset = n_lo[l]
+            start_state = rssm_states_seq_to_batch(pred_tf[l], self.rssm_modules[l], i_end=-offset)
+            start_state = self.rssm_modules[l].detach_state(start_state)
+            actions = torch.stack(pred_tf[l]['a']).detach()  # make tensor (time x batch x d_a)
+            terminals = torch.stack(pred_tf[l]['terminal']).detach()
+            # time_steps = torch.stack(pred_tf[l]['time_step'])
+            action_windows, terminal_windows, time_step_windows, z_post_windows = [], [], [], []
+            # select for every start state the next n_lo actions
+            # NOTE: since the rssm states are always recorded after an action was applied, correct actions and terminal
+            # flags for a start state at time step t start from t+1
+            for t in range(1, actions.shape[0] - offset + 1):
+                action_windows.append(actions[t: t + offset])
+                terminal_windows.append(terminals[t: t + offset])
+                # time_step_windows.append(time_steps[t: t + offset])
+                z_post_windows.append(stack_dists(pred_tf[l]['z_post'][t: t + offset]))
+            actions = torch.concat(action_windows, dim=1)  # concat all windows along batch dimension
+            terminals = torch.concat(terminal_windows, dim=1)
+            # time_steps = torch.concat(time_step_windows, dim=1)
+            mask = self.compute_mask(terminals)
+            # trajectory = {'a': actions, 'o': None, 'r': None, 'terminal': None, 'time_step': time_steps}
+            trajectory = {'a': actions, 'o': None, 'r': None, 'terminal': None}
+            pred_lo_lvl, _, _ = self.forward_static(trajectory, level=l, start_state=start_state, n_warmup=0,
+                                                    reconstruct=False)
+            z_post = concat_dists(z_post_windows, dim=1)
+            z_prior = stack_dists(pred_lo_lvl['z_prior'])
+            mask = unsqueeze_right(mask, z_prior.loc)
+            kl_0 = torch.mean(torch.distributions.kl_divergence(detach_dist(z_post), z_prior) * (1 - mask))
+            kl_1 = torch.mean(torch.distributions.kl_divergence(z_post, detach_dist(z_prior)) * (1 - mask))
+            kl = (0.8 * kl_0 + 0.2 * kl_1) / offset
+            #kl = torch.mean(torch.distributions.kl_divergence(z_post, z_prior))
+            losses_lo[f'kl_latent_overshooting_{l}'] = self.kl_betas[l] * kl
+            #losses_tf[f'kl_latent_overshooting_{l}'] = self.kl_betas[l] * kl
+            #losses_tf['total'] += kl
+        return losses_lo
 
     @staticmethod
     @compile_if_not_debug
