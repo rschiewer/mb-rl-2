@@ -157,9 +157,9 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
             trajs_orig = trajectories_from_simulation(batch)
             trajs_sim = trajectories_from_simulation(pred[0])
             fig, anim = visualize_overlaid_trajectories(trajs_sim[0], trajs_orig[0])
-            vid_path = anim_to_vid(anim)
-            logger.log({'live_model': vid_path}, Scope.TEST() / 'model_prediction_video/', i_step)
-            os.remove(vid_path)
+            vid = anim_to_vid(anim)
+            logger.log({'live_model': vid}, Scope.TEST() / 'model_prediction_video/', i_step)
+            #os.remove(vid)
             plt.close(fig)
 
             # log model and agent params

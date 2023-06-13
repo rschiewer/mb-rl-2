@@ -1,3 +1,4 @@
+import copy
 import io
 import os
 import pickle
@@ -38,6 +39,44 @@ class DistributionType(Enum):
     NONE = auto()
     NORMAL = auto()
     CATEGORICAL = auto()
+
+
+class InMemoryFile:
+
+    def __init__(self,
+                 resource: str | Path | io.BytesIO | io.FileIO,
+                 extension: str = None):
+        if isinstance(resource, (str, Path)):
+            self.extension = str(resource)[str(resource).rindex('.') + 1:]
+            with open(resource, 'rb') as f:
+                self.buffer = io.BytesIO(f.read())
+        elif isinstance(resource (io.BytesIO, io.FileIO)):
+            assert extension is not None, f'File extension required for buffers'
+            self.buffer = copy.copy(resource)
+            self.extension = extension
+        else:
+            raise ValueError(f'Unknown resource: {resource}')
+
+    @staticmethod
+    def consume_file(path: str | Path):
+        in_memory_file = InMemoryFile(path)
+        os.remove(path)
+        return in_memory_file
+
+
+class TempFile:
+
+    def __init__(self,
+                 path: str | Path):
+        self.path = path
+        self.extension = str(path)[str(path).rindex('.') + 1:]
+
+    def __del__(self):
+        try:
+            os.remove(self.path)
+        except FileNotFoundError as err:
+            print(f'Tried to delete temporary file {self.path}, but file was not found. Please make sure temporary ',
+                  ' files have been properly deleted')
 
 
 def here() -> Path:
@@ -322,7 +361,7 @@ def anim_to_gif(anim: animation.Animation,
                 fps: int = 10):
     timestamp = time.time_ns()
     pid = os.getpid()
-    tmp_file_name = f'{pid}_{timestamp}.gif'
+    tmp_file_name = f'.{pid}_{timestamp}_gif_anim.gif'
     anim.save(tmp_file_name, writer='pillow', fps=fps)
 
     with open(tmp_file_name, 'rb') as f:
@@ -337,16 +376,12 @@ def anim_to_vid(anim: animation.Animation,
                 fps: int = 10):
     timestamp = time.time_ns()
     pid = os.getpid()
-    tmp_file_name = f'.{pid}_{timestamp}.mp4'
+    tmp_file_name = f'.{pid}_{timestamp}_video_anim.mp4'
     anim.save(tmp_file_name, writer='ffmpeg', fps=fps)
 
-    return tmp_file_name
+    f = TempFile(tmp_file_name)
 
-    # with open(tmp_file_name, 'rb') as f:
-    #    buffer = io.BytesIO(f.read())
-    # os.remove(tmp_file_name)
-
-    # return buffer
+    return f
 
 
 def join_trajectories(t1: Dict[str, np.ndarray], t2: Dict[str, np.ndarray]):
@@ -561,8 +596,8 @@ def prepare_data_gridworld(s: Union[np.ndarray, torch.Tensor],
                            env: Gridworld,
                            subtrajectory_len: int = 0,
                            ) -> Tuple[Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
-Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
-Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray]]:
+                Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
+                Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray]]:
     s, a, r, terminal, truncated, mask = flatten_and_unsqueeze(s, a, r, terminal, truncated, mask)
     s = to_onehot(s, max(env.grid_w, env.grid_h))
     # s = normalize_obs(s, env)

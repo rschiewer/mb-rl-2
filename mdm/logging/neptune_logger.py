@@ -4,6 +4,7 @@ from typing import Dict, Any, Union
 import os
 from pathlib import Path
 import time
+import asyncio
 from threading import Thread
 
 import neptune
@@ -14,6 +15,7 @@ import numpy as np
 from PIL import Image
 
 from mdm.logging.logger import Logger, Scope
+from mdm.utils.utils import InMemoryFile, TempFile
 
 
 class NeptuneLogger(Logger):
@@ -86,7 +88,7 @@ class NeptuneLogger(Logger):
                     self.log({name: v}, scope, time_step=time_step)
             elif isinstance(value, Figure):
                 self.log_plot(value, full_scope, time_step=time_step)
-            elif isinstance(value, Path):
+            elif isinstance(value, (Path, InMemoryFile, TempFile)):
                 self.log_file(value, full_scope, time_step=time_step)
             elif isinstance(value, str) and Path(value).exists():
                 self.log_file(value, full_scope, time_step=time_step)
@@ -106,12 +108,20 @@ class NeptuneLogger(Logger):
             raise ValueError('Unknown type for logging')
 
     def log_file(self,
-                 path: Union[str, Path],
+                 path: str | Path | InMemoryFile | TempFile,
                  scope: Scope,
+                 type: str | None = None,
                  time_step: int = None):
 
         scope /= f'{time_step}'
-        self._run[str(scope)].upload(str(path), wait=True)
+        if isinstance(path, (str, Path)):
+            self._run[str(scope)].upload(str(path), wait=True)
+        elif isinstance(path, InMemoryFile):
+            stream_file = File.from_stream(path.buffer, extension=path.extension)
+            self._run[str(scope)].upload(stream_file, wait=False)
+        elif isinstance(path, TempFile):
+            self._run[str(scope)].upload(path.path, wait=False)
+
         #self._run[str(scope)].append(str(new_path), wait=True)
 
     def log_plot(self, figure: Image, scope: Union[Scope, str], time_step: int = None):

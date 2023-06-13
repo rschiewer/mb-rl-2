@@ -95,6 +95,7 @@ def main():
         # visualize_trajectory(collected_data_trajectories[0])
         train_mem.extend(collected_data_trajectories)
 
+    #with torch.autograd.detect_anomaly(check_nan=True):
     train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, simple_collect_fn, eval_env, test_driver,
                 train_driver, logger)
 
