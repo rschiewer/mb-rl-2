@@ -2,7 +2,7 @@
 neptune_cfg: "../neptune_settings.yaml"
 env_name: "gym_nav2d:nav2dEasy-v0" #"gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-v0"
 prefill_memory: "random" #"offline-dataset" # "random", False
-prefill_episodes: 100
+prefill_episodes: 10000
 train_samples: null #"nav2d_Easy_train.samples" #"nav2d_Easy_train.samples"
 test_samples: "nav2d_Easy_expert.samples" #"nav2d_Easy_expert.samples"
 checkpoint_path: "checkpoints"
