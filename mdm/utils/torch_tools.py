@@ -11,10 +11,10 @@ import numpy as np
 RnnStateType = TypeVar('RnnStateType', torch.Tensor, Tuple[torch.Tensor, torch.Tensor])
 _Placeholder = namedtuple('placeholder', 'device')
 
-
 # define torch.compile decorator depending on whether we're in debug mode or not
-if gettrace() or 'PYCHARM_HOSTED' in os.environ or True:
+if gettrace() or 'PYCHARM_HOSTED' in os.environ:
     print('Debugging or running in PyCharm IDE, disabling torch.compile')
+
 
     def compile_if_not_debug(func):
         return func
@@ -376,9 +376,9 @@ def detach_dist(d: torch.distributions.Distribution):
     elif isinstance(d, torch.distributions.Independent):
         return torch.distributions.Independent(detach_dist(d.base_dist),
                                                reinterpreted_batch_ndims=d.reinterpreted_batch_ndims)
-    #elif hasattr(d, 'logits'):
+    # elif hasattr(d, 'logits'):
     #    return type(d)(logits=d.logits.detach())
-    #elif hasattr(d, 'probs'):
+    # elif hasattr(d, 'probs'):
     #    return type(d)(probs=d.probs.detach())
     else:
         raise RuntimeError(f'Can\'t detach the given distribution: {d}')
@@ -386,35 +386,39 @@ def detach_dist(d: torch.distributions.Distribution):
 
 @compile_if_not_debug
 def stack_dists(dists: List[torch.distributions.Distribution]):
-    assert len(set([type(d) for d in dists])) == 1, 'All distributions have to share the same class'
+    cls = set([type(d) for d in dists])
+    assert len(cls) == 1, 'All distributions have to share the same class'
+    cls = cls.pop()
 
-    first_elem = dists[0]
-    params = {par_name: [par_val] for par_name, par_val in get_dist_params(first_elem).items()}
-    for d in dists[1:]:
-        for par_name, par_val in get_dist_params(d).items():
-            params[par_name].append(par_val)
-    params = {par_name: torch.stack(par_val) for par_name, par_val in params.items()}
-    return type(first_elem)(**params)
+    if cls in (torch.distributions.Normal, torch.distributions.Cauchy, torch.distributions.Gumbel,
+               torch.distributions.Laplace, torch.distributions.LogNormal):
+        loc = torch.stack([d.loc for d in dists])
+        scale = torch.stack([d.scale for d in dists])
+        return torch.distributions.Normal(loc=loc, scale=scale)
+    elif cls == torch.distributions.ContinuousBernoulli:
+        probs = torch.stack([d.probs for d in dists])
+        return torch.distributions.ContinuousBernoulli(probs=probs)
+    else:
+        raise ValueError(f'Unsupported distribution class: {cls}')
 
 
 @compile_if_not_debug
 def concat_dists(dists: List[torch.distributions.Distribution],
                  dim: int = 0):
-    assert len(set([type(d) for d in dists])) == 1, 'All distributions have to share the same class'
+    cls = set([type(d) for d in dists])
+    assert len(cls) == 1, 'All distributions have to share the same class'
+    cls = cls.pop()
 
-    first_elem = dists[0]
-    params = {par_name: [par_val] for par_name, par_val in get_dist_params(first_elem).items()}
-    for d in dists[1:]:
-        for par_name, par_val in get_dist_params(d).items():
-            params[par_name].append(par_val)
-    params = {par_name: torch.concat(par_val, dim=dim) for par_name, par_val in params.items()}
-    return type(first_elem)(**params)
-
-#@compile_if_not_debug
-#def unbind_dist(dist: torch.distributions.Distribution,
-#                dim: int = 0):
-#    params = get_dist_params(dist)
-#    for k, v in params.items():
+    if cls in (torch.distributions.Normal, torch.distributions.Cauchy, torch.distributions.Gumbel,
+               torch.distributions.Laplace, torch.distributions.LogNormal):
+        loc = torch.concat([d.loc for d in dists], dim=dim)
+        scale = torch.concat([d.scale for d in dists], dim=dim)
+        return torch.distributions.Normal(loc=loc, scale=scale)
+    elif cls == torch.distributions.ContinuousBernoulli:
+        probs = torch.concat([d.probs for d in dists], dim=dim)
+        return torch.distributions.ContinuousBernoulli(probs=probs)
+    else:
+        raise ValueError(f'Unsupported distribution class: {cls}')
 
 
 def extract_sub_distribution(d: torch.distributions.Distribution,
@@ -544,7 +548,7 @@ def pad_first_timestep(o: torch.Tensor,
     return o, a, r, term, trunc, mask
 
 
-#@torch.jit.script
+# @torch.jit.script
 def update_ema_modules(modules: List[Dict[str, torch.Tensor]], ema_modules: List[Dict[str, torch.Tensor]],
                        coeff: float):
     with torch.no_grad():
@@ -563,6 +567,3 @@ def to_np(data_dict: Dict[str, Union[torch.Tensor, Dict]]):
         else:
             raise ValueError(f'Unsupported type: {type(k)}')
     return np_data_dict
-
-
-
