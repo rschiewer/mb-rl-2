@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import io
 import os
@@ -77,6 +78,16 @@ class TempFile:
         except FileNotFoundError as err:
             print(f'Tried to delete temporary file {self.path}, but file was not found. Please make sure temporary ',
                   ' files have been properly deleted')
+
+
+class TempFigure:
+
+    def __init__(self,
+                 fig: plt.Figure):
+        self.fig = fig
+
+    def __del__(self):
+        plt.close(self.fig)
 
 
 def here() -> Path:
@@ -379,7 +390,7 @@ def anim_to_vid(anim: animation.Animation,
     tmp_file_name = f'.{pid}_{timestamp}_video_anim.mp4'
     anim.save(tmp_file_name, writer='ffmpeg', fps=fps)
 
-    f = TempFile(tmp_file_name)
+    f = InMemoryFile.consume_file(tmp_file_name)
 
     return f
 
@@ -959,6 +970,7 @@ def rssm_states_seq_to_batch(mem: Dict[str, List[torch.Tensor]],
     #    state_keys = [*state_keys, 'time_step']
     states = {k: v[i_start: i_end] for k, v in mem.items() if k in state_keys}
     states = rssm_instance.state_seq_to_batch(**states)
+    del state_keys
 
     return states
 
@@ -979,17 +991,19 @@ def log_params(model: torch.nn.Module,
                logger: Logger,
                scope: Scope,
                time_step: int):
-    max_param = sys.float_info.min
-    min_param = sys.float_info.max
-    for name, param in model.named_parameters():
-        full_scope = scope / name
-        param_np = param.detach().cpu().numpy()
-        logger.log({'mean': param_np.mean(), 'std': param_np.std(), 'min': param_np.min(), 'max': param_np.max()}, full_scope, time_step=time_step)
-        if param_np.min() < min_param:
-            min_param = param_np.min()
-        if param_np.max() > max_param:
-            max_param = param_np.max()
-    logger.log({'largest_param': max_param, 'smallest_param': min_param}, scope, time_step=time_step)
+    async def _log_fn():
+        max_param = sys.float_info.min
+        min_param = sys.float_info.max
+        for name, param in model.named_parameters():
+            full_scope = scope / name
+            param_np = param.detach().cpu().numpy()
+            logger.log({'mean': param_np.mean(), 'std': param_np.std(), 'min': param_np.min(), 'max': param_np.max()}, full_scope, time_step=time_step)
+            if param_np.min() < min_param:
+                min_param = param_np.min()
+            if param_np.max() > max_param:
+                max_param = param_np.max()
+        logger.log({'largest_param': max_param, 'smallest_param': min_param}, scope, time_step=time_step)
+    asyncio.run(_log_fn())
 
 
 def visualize_overlaid_trajectories(*trajectories: Dict[str, np.ndarray]):
