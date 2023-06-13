@@ -3,6 +3,7 @@ from collections import namedtuple, OrderedDict
 from functools import reduce, wraps
 from math import ceil
 from sys import gettrace
+from functools import partial
 import os
 
 import torch
@@ -21,7 +22,7 @@ if gettrace() or 'PYCHARM_HOSTED' in os.environ:
 else:
     print('Compiling functions with compile_if_not_debug decorator')
     torch.set_float32_matmul_precision('high')
-    compile_if_not_debug = torch.compile
+    compile_if_not_debug = torch.compile  # partial(torch.compile, dynamic=True)
 
 
 class DeviceMixin:
@@ -363,6 +364,7 @@ def get_dist_params(d: torch.distributions.Distribution):
         raise RuntimeError(f'Can\'t extract parameters of the given distribution: {d}')
 
 
+@compile_if_not_debug
 def detach_dist(d: torch.distributions.Distribution):
     if isinstance(d, (torch.distributions.Normal, torch.distributions.Cauchy, torch.distributions.Gumbel,
                       torch.distributions.Laplace, torch.distributions.LogNormal)):

@@ -43,7 +43,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
         # train model normal
         model.train()
         agent_eval_mode(r_max_agents + goal_seeking_agents)
-        #model_batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
+        # model_batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
         model_batch = batch
         # model_batch_2 = valid_subtrajectories_2(batch, cfg['trainer']['subtrajectory_len'])
         # for k, v in model_batch.items():
@@ -52,7 +52,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
         # model_batch = batch
         # now = time.time()
         train_losses, pred = model.train_step(model_batch, opt_model, model_steps=model_train_steps)
-        #make_dot(pred[0]['r'][-1].mean(), dict(model.named_parameters())).view()
+        # make_dot(pred[0]['r'][-1].mean(), dict(model.named_parameters())).view()
         # print(time.time() - now)
         logger.log(to_np(train_losses), Scope.TRAIN(), i_step)
 
@@ -103,6 +103,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                     state = start_state_lvl
                     # start at chunk_size - 1 because start_state_lvl is not recorded in r_max_simulation
                     for t in range(chunk_size - 1, total_steps, chunk_size):
+                    #for t in range(chunk_size, total_steps, chunk_size):
                         goal = r_max_simulation['model']['z'][t]
                         goal_simulation = goal_agent.act_in_sim(state, model, chunk_size, goal, agent_memory=agent_mem,
                                                                 sample_model=True, sample_actions=True,
@@ -159,21 +160,16 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
             fig, anim = visualize_overlaid_trajectories(trajs_sim[0], trajs_orig[0])
             vid = anim_to_vid(anim)
             logger.log({'live_model': vid}, Scope.TEST() / 'model_prediction_video/', i_step)
-            #os.remove(vid)
-            plt.close(fig)
+            plt.close(fig)  # explicitly close to avoid memory leak
 
             # log model and agent params
             log_params(model, logger, Scope.PARAMETERS() / 'model', time_step=i_step)
-            for i_agent, agent in enumerate(r_max_agents):
-                if agent is None:
-                    continue
-                agent = agent[0]
-                log_params(agent, logger, Scope.PARAMETERS() / f'agent/r_max_agent_{i_agent}', time_step=i_step)
-            for i_agent, agent in enumerate(goal_seeking_agents):
-                if agent is None:
-                    continue
-                agent = agent[0]
-                log_params(agent, logger, Scope.PARAMETERS() / f'agent/goal_seeking_agent_{i_agent}', time_step=i_step)
+            for i_ag, ag in enumerate(r_max_agents):
+                if ag is None: continue
+                log_params(ag[0], logger, Scope.PARAMETERS() / f'agent/r_max_agent_{i_ag}', time_step=i_step)
+            for i_ag, ag in enumerate(goal_seeking_agents):
+                if ag is None: continue
+                log_params(ag[0], logger, Scope.PARAMETERS() / f'agent/goal_seeking_agent_{i_ag}', time_step=i_step)
 
             # latent state distribution
             # warmup_steps = cfg['eval']['warmup_steps']
@@ -207,3 +203,4 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
             logger.log_file(model_path, Scope.DATA() / 'weights')
             os.remove(model_path)
 
+        #print(torch.cuda.memory_allocated() / torch.cuda.max_memory_allocated())

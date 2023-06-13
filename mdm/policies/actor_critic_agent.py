@@ -169,8 +169,8 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                                                                                               returns, gae_advantages,
                                                                                               model_novelty, discount):
             # ACTOR
-            # advantage = R - v_.detach()
-            # policy_losses.append(-advantage)
+            advantage = R - v_.detach()
+            policy_losses.append(-advantage)
             #policy_losses.append(-gae_advantage_)
             policy_losses.append(-R)
             # ppo_r = a_dist.log_prob(a.detach()) / detach_dist(ema_a_dist).log_prob(a.detach())
@@ -214,19 +214,27 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
 
         losses = self.eval_step(**simulation_data)
 
-        invalid_losses = ''
-        for k, v in losses.items():
-            if torch.isnan(v).any() or torch.isinf(v).any():
-                invalid_losses += f'{k}, {v}\n'
-        if len(invalid_losses) > 0:
-            raise RuntimeError(f'Invalid loss in {self._agent_repr} detected: {invalid_losses}')
+        #invalid_losses = ''
+        #for k, v in losses.items():
+        #    if torch.isnan(v).any() or torch.isinf(v).any():
+        #        invalid_losses += f'{k}: {v}, '
+        #if len(invalid_losses) > 0:
+        #    raise RuntimeError(f'Invalid loss in {self._agent_repr} detected: {invalid_losses}')
 
         losses['total'].backward()
         torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
         actor_optimizer.step()
         critic_optimizer.step()
 
-        # update EMA model
+        self._update_ema_modules()
+
+        # update exploration
+        self.update_exploration()
+
+        return losses
+
+    @compile_if_not_debug
+    def _update_ema_modules(self):
         with torch.no_grad():
             params = chain.from_iterable([m.parameters() for m in self.actor_net] +
                                          [m.parameters() for m in self.critic_net])
@@ -234,11 +242,6 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                                              [m.parameters() for m in self._ema_critic_net])
             for param, ema_param in zip(params, ema_params):
                 ema_param[:] = self.ema_coeff * ema_param + (1 - self.ema_coeff) * param
-
-        # update exploration
-        self.update_exploration()
-
-        return losses
 
     """
     def sim_train_step(self,
@@ -465,6 +468,6 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             agent_name = 'goal seeking ' + agent_name
         else:
             agent_name = 'r max ' + agent_name
-        agent_name = f'L{self.level}' + agent_name
+        agent_name = f'L{self.level} ' + agent_name
 
         return agent_name

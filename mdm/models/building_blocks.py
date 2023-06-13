@@ -986,7 +986,8 @@ class RSSMCell(torch.nn.Module):
                            z_prior: List[torch.distributions.Distribution],
                            z_post: List[torch.distributions.Distribution],
                            rnn_state: List[torch.Tensor | Tuple[torch.Tensor]],
-                           time_step: List[torch.Tensor] = None):
+                           time_step: List[torch.Tensor] = None,
+                           **kwargs):
         z = torch.concat(z, dim=0)
         z_dist = concat_dists(z_dist, dim=0)
         z_prior = concat_dists(z_prior, dim=0)
@@ -999,8 +1000,8 @@ class RSSMCell(torch.nn.Module):
 
         state = {'z': z, 'z_dist': z_dist, 'z_prior': z_prior, 'z_post': z_post, 'rnn_state': rnn_state}
 
-        if time_step:
-            state['time_step'] = torch.concat(time_step, dim=0)
+        #if time_step:
+        #    state['time_step'] = torch.concat(time_step, dim=0)
 
         return state
 
