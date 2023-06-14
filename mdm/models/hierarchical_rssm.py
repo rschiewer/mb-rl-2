@@ -32,7 +32,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                  kl_reg_betas: Sequence[float],
                  r_max_agents: Sequence[ActorCriticAgent] = (None,),
                  goal_seeking_agents: Sequence[ActorCriticAgent] = (None,),
-                 latent_overshooting: bool = False,
+                 latent_overshooting: Sequence | bool = False,
                  ema_regularization: float = 0.0,
                  ema_coeff: float = 0.99,
                  ema_update_interval: int = sys.maxsize):
@@ -69,7 +69,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         self.kl_reg_betas = tuple(kl_reg_betas)
         self.r_max_agents = tuple(r_max_agents)  # no module list to shield the agents from any pytorch functions
         self.goal_seeking_agents = tuple(goal_seeking_agents)
-        self.latent_overshooting = latent_overshooting
+        self.latent_overshooting = latent_overshooting if latent_overshooting else []
         self.ema_regularization = ema_regularization
         self.ema_coeff = ema_coeff
         self.ema_update_interval = ema_update_interval
@@ -619,8 +619,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         # losses_one, pred_one = self.eval_step(training_data, force_warmup=[1 for _ in self.rssm_modules], **kwargs)
         # losses_wu, pred_wu = self.eval_step(training_data, **kwargs)
 
-        if self.latent_overshooting:
-            losses_lo = self._latent_overshooting(pred_tf=pred_tf, n_lo=[10, 5])
+        if len(self.latent_overshooting) > 0:
+            losses_lo = self._latent_overshooting(pred_tf=pred_tf, n_lo=self.latent_overshooting)
             losses_tf.update(losses_lo)
             for v in losses_lo.values():
                 losses_tf['total'] += v

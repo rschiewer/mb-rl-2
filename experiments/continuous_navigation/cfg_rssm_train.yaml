@@ -107,17 +107,17 @@ mdm:
    kl_reg_betas: [ 0.00, 0.00 ]
    ema_regularization: 0.0
    ema_coeff: 0.95
-   ema_update_interval: 4
-   latent_overshooting: True
+   ema_update_interval: 5
+   latent_overshooting: [10, 5]
 
 optim:
    type: 'adam'  # 'adamW' 'adam'
    lr: 0.0008 #0.0002
 
 trainer:
-   n_train_steps: 20000
+   n_train_steps: 10000
    eval_interval: 50
-   d_batch: 256
+   d_batch: 1024
    subtrajectory_len: 20
    collect_envs: 50
    collect_interval: 5
@@ -140,8 +140,8 @@ agents:
         lr_critic: 0.002
         min_a: null
         max_a: null
-        actor_lws: [64, 64]
-        critic_lws: [64, 64]
+        actor_lws: [ 64 ]
+        critic_lws: [ 64 ]
         actor_act_fn: "relu"
         critic_act_fn: "relu"
         actor_layer_norm: True
@@ -159,8 +159,8 @@ agents:
         lr_critic: 0.002
         min_a: -1.0
         max_a: 1.0
-        actor_lws: [64, 64]
-        critic_lws: [64, 64]
+        actor_lws: [ 32 ]
+        critic_lws: [ 32 ]
         actor_act_fn: "relu"
         critic_act_fn: "relu"
         actor_layer_norm: True
@@ -179,10 +179,10 @@ agents:
         lr_critic: 0.002
         min_a: null
         max_a: null
-        actor_lws: []
-        critic_lws: []
-        actor_act_fn: "relu"
-        critic_act_fn: "relu"
+        actor_lws: [ 32 ]
+        critic_lws: [ 32 ]
+        actor_act_fn: "identity"
+        critic_act_fn: "identity"
         actor_layer_norm: True
         critic_layer_norm: True
 
