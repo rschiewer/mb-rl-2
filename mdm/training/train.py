@@ -13,7 +13,7 @@ from mdm.policies.agent_policy import HierarchicalLatentAgentPolicy, LatentAgent
 from mdm.training.gym_driver import collect_data
 from mdm.utils.torch_tools import to_tensors, to_np
 from mdm.utils.utils import prepare_data, valid_subtrajectories, trajectory_statistics, trajectories_from_simulation, \
-    visualize_overlaid_trajectories, anim_to_vid, get_dist_params, rssm_states_seq_to_batch, log_params
+    visualize_overlaid_trajectories, anim_to_vid, get_dist_params, rssm_states_seq_to_batch, log_params, InMemoryFile
 from mdm.models.building_blocks import RSSMCell
 
 
@@ -159,6 +159,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
             trajs_sim = trajectories_from_simulation(pred[0])
             fig, anim = visualize_overlaid_trajectories(trajs_sim[0], trajs_orig[0])
             vid = anim_to_vid(anim)
+            vid.name = 'model_sim'
             logger.log({'live_model': vid}, Scope.TEST() / 'model_prediction_video/', i_step)
             plt.close(fig)  # explicitly close to avoid memory leak
 
@@ -200,7 +201,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
             pid = os.getpid()
             model_path = f'.checkpoint_model_weights_{pid}_{timestamp}_{logger.run_id}.ptmdl'
             torch.save(model, model_path)
-            logger.log_file(model_path, Scope.DATA() / 'weights')
-            os.remove(model_path)
+            cpt_file = InMemoryFile.consume_file(model_path, new_name='checkpoint')
+            logger.log_file(cpt_file, Scope.DATA() / 'weights')
 
         #print(torch.cuda.memory_allocated() / torch.cuda.max_memory_allocated())

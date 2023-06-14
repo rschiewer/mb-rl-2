@@ -90,8 +90,8 @@ class NeptuneLogger(Logger):
                 self.log_plot(value, full_scope, time_step=time_step)
             elif isinstance(value, (Path, InMemoryFile, TempFile)):
                 self.log_file(value, full_scope, time_step=time_step)
-            elif isinstance(value, str) and Path(value).exists():
-                self.log_file(value, full_scope, time_step=time_step)
+            #elif isinstance(value, str) and Path(value).exists():
+            #    self.log_file(value, full_scope, time_step=time_step)
             else:
                 self._run[str(full_scope)].log(value, step=time_step)
 
@@ -108,19 +108,29 @@ class NeptuneLogger(Logger):
             raise ValueError('Unknown type for logging')
 
     def log_file(self,
-                 path: str | Path | InMemoryFile | TempFile,
+                 path: str | Path | InMemoryFile,
                  scope: Scope,
-                 type: str | None = None,
                  time_step: int = None):
-
-        scope /= f'{time_step}'
         if isinstance(path, (str, Path)):
-            self._run[str(scope)].upload(str(path), wait=True)
-        elif isinstance(path, InMemoryFile):
-            stream_file = File.from_stream(path.buffer, extension=path.extension)
-            self._run[str(scope)].upload(stream_file, wait=False)
-        elif isinstance(path, TempFile):
-            self._run[str(scope)].upload(path.path, wait=False)
+            path = InMemoryFile(path)
+            #path = str(path)
+            #i_start = path.rindex('/') + 1 if '/' in path else 0
+            #fname = path[i_start:]
+            #if time_step:
+            #    fname = f'{time_step}_{fname}'
+            #self._run[str(scope / fname)].upload(path, wait=True)
+        #elif isinstance(path, InMemoryFile):
+        #    stream_file = File.from_stream(path.buffer, extension=path.extension)
+        #    self._run[str(scope)].upload(stream_file, wait=False)
+        #else:
+        #    raise ValueError(f'Unsupported resource format for upload: {type(path)}')
+
+        if time_step is not None:
+            path.name += f'_{time_step}'
+        scope /= path.name
+
+        stream_file = File.from_stream(path.buffer, extension=path.extension)
+        self._run[str(scope)].upload(stream_file, wait=False)
 
         #self._run[str(scope)].append(str(new_path), wait=True)
 
