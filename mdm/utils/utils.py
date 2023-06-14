@@ -46,21 +46,39 @@ class InMemoryFile:
 
     def __init__(self,
                  resource: str | Path | io.BytesIO | io.FileIO,
-                 extension: str = None):
+                 name: str = '',
+                 extension: str = ''):
         if isinstance(resource, (str, Path)):
-            self.extension = str(resource)[str(resource).rindex('.') + 1:]
+            resource = str(resource)
+            name_start = resource.rindex('/') + 1 if '/' in resource else 0
+            ext_start = resource.rindex('.') + 1 if '.' in resource else len(resource)
+            self.name = resource[name_start:ext_start].rstrip('.') if len(name) == 0 else name
+            self.extension = resource[ext_start:] if len(extension) == 0 else extension
             with open(resource, 'rb') as f:
                 self.buffer = io.BytesIO(f.read())
         elif isinstance(resource (io.BytesIO, io.FileIO)):
             assert extension is not None, f'File extension required for buffers'
             self.buffer = copy.copy(resource)
+            self.name = name
             self.extension = extension
         else:
             raise ValueError(f'Unknown resource: {resource}')
 
+        self.name = self.name.strip()
+        self.extension = self.extension.strip()
+
+    @property
+    def full_name(self):
+        full_name = self.name
+        if self.extension:
+            full_name += f'.{self.extension}'
+        return full_name
+
     @staticmethod
-    def consume_file(path: str | Path):
-        in_memory_file = InMemoryFile(path)
+    def consume_file(path: str | Path,
+                     new_name: str = '',
+                     new_extension: str = ''):
+        in_memory_file = InMemoryFile(path, new_name, new_extension)
         os.remove(path)
         return in_memory_file
 
@@ -143,6 +161,19 @@ def cfg_infer_missing_values(cfg: dict,
     #    rssm = cfg['mdm']['rssm_modules'][i_filter]
     #    next_rssm = cfg['mdm']['rssm_modules'][i_filter + 1]
     return cfg
+
+
+def build_model_opt(model: torch.nn.Module, cfg: dict):
+    optim_type = cfg['optim'].pop('type')
+    if optim_type == 'adam':
+        opt_model = torch.optim.Adam(model.parameters(), **cfg['optim'])
+    elif optim_type == 'adamW':
+        opt_model = torch.optim.AdamW(model.parameters(), **cfg['optim'])
+    elif optim_type == 'sgd':
+        opt_model = torch.optim.SGD(model.parameters(), **cfg['optim'])
+    else:
+        raise ValueError(f'Unknown optimizer type: {optim_type}')
+    return opt_model
 
 
 def build_rssms(cfg: dict):
