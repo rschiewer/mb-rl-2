@@ -17,7 +17,7 @@ class Scope:
     _HYPERPARAMETERS = 'hyperparameters'
     _DATA = 'data'
     _MISC = 'misc'
-    scope_check = re.compile('^[a-zA-Z0-9_/()=.]+$')
+    scope_check = re.compile('^[a-zA-Z0-9_/()=.-]+$')
 
     def __init__(self,
                  description: Union[Scope, str]):
