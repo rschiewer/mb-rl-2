@@ -22,7 +22,7 @@ def main():
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
     if args.log:
-        logger = NeptuneLogger(neptune_cfg['PROJECT_NAME'], api_token=neptune_cfg['NEPTUNE_API_TOKEN'])
+        logger = NeptuneLogger(**neptune_cfg)
     else:
         logger = NotLogger()
 
@@ -35,22 +35,26 @@ def main():
     cfg = cfg_infer_missing_values(cfg, env)  # fill in missing config values
     logger.start_session()
     logger.log(cfg, Scope.HYPERPARAMETERS())  # log complete config
-    cfg = build_rssms(cfg)  # generate RSSM cells and upwards filters
+
+    cfg = build_rssms(cfg)
     r_max_agents, goal_seeking_agents = build_agents(cfg, env, 'cuda')
-
     model = HierarchicalRSSM(**cfg['mdm'], r_max_agents=r_max_agents, goal_seeking_agents=goal_seeking_agents)
-    model = model.to('cuda')
-    # model = torch.load(here() / 'trained_models/model_MBRL-2422.ptmdl').to('cuda')
 
-    optim_type = cfg['optim'].pop('type')
-    if optim_type == 'adam':
-        opt_model = torch.optim.Adam(model.parameters(), **cfg['optim'])
-    elif optim_type == 'adamW':
-        opt_model = torch.optim.AdamW(model.parameters(), **cfg['optim'])
-    elif optim_type == 'sgd':
-        opt_model = torch.optim.SGD(model.parameters(), **cfg['optim'])
+    # load model if necessary
+    if cfg['pretrained_model'] is None:
+        print('Starting training from scratch')
     else:
-        raise ValueError(f'Unknown optimizer type: {optim_type}')
+        print(f'Using pretrained model {cfg["pretrained_model"]}')
+        mdl_path = here() / Path(f'trained_models/model_{cfg["pretrained_model"]}.ptmdl')
+        if not mdl_path.exists():
+            tmp_run = neptune.init_run(**neptune_cfg, with_id=cfg['pretrained_model'])
+            tmp_run[f'{Scope.DATA()}/weights/final_weights'].download(str(mdl_path))
+            tmp_run.stop()
+        pretrained_model = torch.load(here() / mdl_path)
+        copy_params(pretrained_model, model)
+    model = model.to('cuda')
+
+    opt_model = build_model_opt(model, cfg)
 
     collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['trainer']['collect_envs'])
     collect_env = CacheLastStepVecEnv(collect_env)
@@ -103,10 +107,11 @@ def main():
     p = here() / cfg['final_model_path'][:cfg['final_model_path'].rindex('/')]
     if not os.path.exists(p):
         os.makedirs(p)
-    model_path = f'{cfg["final_model_path"]}_{logger.run_id}.ptmdl'
-    torch.save(model, here() / model_path)
+    model_path = here() / f'{cfg["final_model_path"]}_{logger.run_id}.ptmdl'
+    torch.save(model, model_path)
+    model_weights = InMemoryFile(model_path, name='final_weights')
     logger.start_session()
-    logger.log_file(here() / model_path, Scope.DATA() / 'final_weights')
+    logger.log_file(model_weights, Scope.DATA() / 'weights')
     logger.stop_session()
     print(logger.run_id)
 
