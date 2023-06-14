@@ -225,7 +225,7 @@ def build_agents(cfg: dict,
             cfg_goal_seeking['d_a'] = cfg['mdm']['rssm_modules'][agent_lvl].d_a
             cfg_goal_seeking['d_o'] = cfg['mdm']['rssm_modules'][agent_lvl].d_z
             goal_seeking_agents.append(gen_agent_fn(agent_lvl, True, cfg_goal_seeking))
-    goal_seeking_agents.append(None)  # no homing agent needed on last level
+    #goal_seeking_agents.append(None)  # no homing agent needed on last level
 
     return r_max_agents, goal_seeking_agents
 
