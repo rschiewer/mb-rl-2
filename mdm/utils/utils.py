@@ -1081,3 +1081,12 @@ def visualize_overlaid_trajectories(*trajectories: Dict[str, np.ndarray]):
 
     ani = animation.FuncAnimation(fig, animate_r, frames=n_steps, interval=100, blit=True)
     return fig, ani
+
+
+def copy_params(src: 'HierarchicalRSSM',
+                dst: 'HierarchicalRSSM'):
+    dst.load_state_dict(src.state_dict())
+    for ag_src, ag_dst in zip(src.goal_seeking_agents, dst.goal_seeking_agents):
+        ag_dst[0].load_state_dict(ag_src[0].state_dict())
+    for ag_src, ag_dst in zip(src.r_max_agents, dst.r_max_agents):
+        ag_dst[0].load_state_dict(ag_src[0].state_dict())
