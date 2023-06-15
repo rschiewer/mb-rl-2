@@ -709,15 +709,19 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
     @staticmethod
     @compile_if_not_debug
-    def compute_mask(terminals: torch.Tensor, threshold: float | None = None):
+    def compute_mask(terminals: torch.Tensor,
+                     mode: str = 'deterministic',
+                     threshold: float | None = None):
         d_time = terminals.shape[0]
 
         mask = torch.zeros_like(terminals)
         for t in range(1, d_time):
             mask[t] = torch.maximum(mask[t - 1], terminals[t - 1])
 
-        if threshold is not None:
+        if mode == 'deterministic' and threshold is not None:
             mask = torch.where(mask > threshold, 1.0, 0.0)
+        elif mode == 'stochastic':
+            mask = torch.distributions.Bernoulli(probs=mask).sample()
 
         return mask.detach()
 
