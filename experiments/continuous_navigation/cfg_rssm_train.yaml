@@ -7,6 +7,7 @@ train_samples: null #"nav2d_Easy_train.samples" #"nav2d_Easy_train.samples"
 test_samples: "nav2d_Easy_expert.samples" #"nav2d_Easy_expert.samples"
 checkpoint_path: "checkpoints"
 final_model_path: "trained_models/model"
+pretrained_model: null #"MBRL-2908"
 
 mdm:
    rssm_modules:
@@ -117,11 +118,12 @@ optim:
 trainer:
    n_train_steps: 10000
    eval_interval: 50
-   d_batch: 1024
+   d_batch: 512
    subtrajectory_len: 20
    collect_envs: 50
    collect_interval: 5
    agent_train_interval: 1
+   model_train_steps: [-1, 15]
    agent_model_steps: [ 15, 10 ]
    checkpoint_interval: 100
 
@@ -140,8 +142,8 @@ agents:
         lr_critic: 0.002
         min_a: null
         max_a: null
-        actor_lws: [ 64 ]
-        critic_lws: [ 64 ]
+        actor_lws: [ 64, 64 ]
+        critic_lws: [ 64, 64 ]
         actor_act_fn: "relu"
         critic_act_fn: "relu"
         actor_layer_norm: True
@@ -159,8 +161,8 @@ agents:
         lr_critic: 0.002
         min_a: -1.0
         max_a: 1.0
-        actor_lws: [ 32 ]
-        critic_lws: [ 32 ]
+        actor_lws: [ 64, 64 ]
+        critic_lws: [ 64, 64 ]
         actor_act_fn: "relu"
         critic_act_fn: "relu"
         actor_layer_norm: True
@@ -169,7 +171,7 @@ agents:
       # level 0
       - eps_exploration_init: 0.3
         eps_exploration_coeff: 0.99
-        act_entropy_exploration_coeff: 0.1
+        act_entropy_exploration_coeff: 0.05
         learn_act_entropy_exploration_coeff: False
         novelty_exploration_coeff: 0.1
         tr_policy_kl_coeff: 0.1
@@ -179,10 +181,10 @@ agents:
         lr_critic: 0.002
         min_a: null
         max_a: null
-        actor_lws: [ 32 ]
-        critic_lws: [ 32 ]
-        actor_act_fn: "identity"
-        critic_act_fn: "identity"
+        actor_lws: [ 32, 32 ]
+        critic_lws: [ 32, 32 ]
+        actor_act_fn: "relu"
+        critic_act_fn: "relu"
         actor_layer_norm: True
         critic_layer_norm: True
 

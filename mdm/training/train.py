@@ -31,7 +31,7 @@ def agent_eval_mode(agents):
 
 def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collect_fn, eval_env, test_driver,
                 train_driver, logger):
-    model_train_steps = [-1, 10]
+    model_train_steps = cfg['trainer']['model_train_steps']
     logger.start_session()
     model.prepare_for_training()
     for i_step in tqdm(range(cfg['trainer']['n_train_steps']), desc='Training Progress'):
