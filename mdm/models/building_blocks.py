@@ -491,7 +491,9 @@ class UpwardsFilter(torch.nn.Module):
                  x: torch.Tensor,
                  pad_value: float = 0):
         n_timesteps = x.shape[0]
-        n_pad = n_timesteps % self.window_size
+        #n_pad = n_timesteps % self.window_size
+        overhang = n_timesteps % self.window_size
+        n_pad = 0 if overhang == 0 else self.window_size - overhang
         if n_pad > 0:
             x_pad = torch.full((n_pad, *x.shape[1:]), pad_value, device=x.device)
             x = torch.concat([x, x_pad], dim=0)
