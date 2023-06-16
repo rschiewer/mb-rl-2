@@ -354,13 +354,18 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                                                                            n_steps=chunk_size, goal=pred['o'],
                                                                            sample_actions=True, sample_model=True,
                                                                            reconstruct=True)
+            # If trajectory ended in the middle of a goal_seeking agent simulation, the last time step of the
+            # simulated chunk is still chosen as target observation. Similarly, the average reward including
+            # the invalid time steps after the final step are used for the average reward calculation.
             simulated_ground_truth = self.filter_up(o=simulation['model']['z'], r=simulation['model']['r'],
                                                     terminal=simulation['model']['terminal'], level=level,
                                                     n_steps=chunk_size)
             simulated_ground_truth = {k: v.squeeze(0) for k, v in simulated_ground_truth.items()}  # remove time dim
 
             # augment reward with how reachable the goal was for lower level
-            # simulated_ground_truth['r'] += 0.01 * simulation['agent']['r'][-1]
+            #simulated_ground_truth['r'] += 0.01 * simulation['agent']['r'][-1]
+            # augment reward with how different the final state of the agent is from the start state
+            #simulated_ground_truth['r'] += 0.01 * torch.mean((state_below['z'] - simulation['model']['z'][-1]) ** 2, dim=-1, keepdim=True)
 
             if t < n_warmup:  # if still in warmup, re-do last step with simulated ground truth and use posterior
                 pred, next_state = mdl(a=a_t, o=simulated_ground_truth['o'], last_state=state,
@@ -472,6 +477,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                   terminal: List[torch.Tensor],
                   level: int,
                   n_steps: int = -1,
+                  respect_terminal_flag: bool = True,
                   time_step: List[torch.Tensor] | None = None,
                   **kwargs):
         if n_steps == -1:
@@ -481,7 +487,12 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                                       'r': torch.stack(r[:n_steps]),
                                       'terminal': torch.stack(terminal[:n_steps])}
 
-        simulated_ground_truth = {k: filters[k](v).detach() for k, v in trajectory_below_processed.items()}
+        if respect_terminal_flag:
+            mask = self.compute_mask(trajectory_below_processed['terminal'], mode='stochastic').to(dtype=torch.bool)
+        else:
+            mask = None
+
+        simulated_ground_truth = {k: filters[k](v, mask=mask).detach() for k, v in trajectory_below_processed.items()}
 
         #if time_step is not None:
         #    ts = torch.stack(time_step[:n_steps])
@@ -616,8 +627,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                     **kwargs):
         optimizer.zero_grad(set_to_none=True)
         losses_tf, pred_tf = self.eval_step(training_data, force_warmup=[-1 for _ in self.rssm_modules], **kwargs)
-        # losses_one, pred_one = self.eval_step(training_data, force_warmup=[1 for _ in self.rssm_modules], **kwargs)
-        # losses_wu, pred_wu = self.eval_step(training_data, **kwargs)
 
         if len(self.latent_overshooting) > 0:
             losses_lo = self._latent_overshooting(pred_tf=pred_tf, n_lo=self.latent_overshooting)
@@ -631,9 +640,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             if torch.isnan(v).any() or torch.isinf(v).any():
                 raise RuntimeError(f'Invalid loss detected: {k}, {v}')
 
-        # losses = {}
-        # for k in losses_tf:
-        #    losses[k] = (losses_tf[k] + losses_wu[k] + losses_one[k]) / 3
         losses['total'].backward()
         torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
         optimizer.step()
@@ -666,10 +672,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
            * ground_level()
            * train_model()
         """
-        #for i in range(10):
-        #    d = concat_dists(pred_tf[0]['z_prior'], dim=1)
-        #    d2 = concat_dists(pred_tf[0]['z_post'], dim=1)
-
         losses_lo = {}
         for l in range(self.levels):
             offset = n_lo[l]
@@ -698,10 +700,10 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             z_post = concat_dists(z_post_windows, dim=1)
             z_prior = stack_dists(pred_lo_lvl['z_prior'])
             mask = unsqueeze_right(mask, z_prior.loc)
-            kl_0 = torch.mean(torch.distributions.kl_divergence(detach_dist(z_post), z_prior) * (1 - mask))
-            kl_1 = torch.mean(torch.distributions.kl_divergence(z_post, detach_dist(z_prior)) * (1 - mask))
-            kl = (0.8 * kl_0 + 0.2 * kl_1) / offset
-            #kl = torch.mean(torch.distributions.kl_divergence(z_post, z_prior))
+            #kl_0 = torch.mean(torch.distributions.kl_divergence(detach_dist(z_post), z_prior) * (1 - mask))
+            #kl_1 = torch.mean(torch.distributions.kl_divergence(z_post, detach_dist(z_prior)) * (1 - mask))
+            #kl = (0.8 * kl_0 + 0.2 * kl_1) / offset
+            kl = torch.mean(torch.distributions.kl_divergence(detach_dist(z_post), z_prior) * (1 - mask))
             losses_lo[f'kl_latent_overshooting_{l}'] = self.kl_betas[l] * kl
             #losses_tf[f'kl_latent_overshooting_{l}'] = self.kl_betas[l] * kl
             #losses_tf['total'] += kl
@@ -714,14 +716,16 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                      threshold: float | None = None):
         d_time = terminals.shape[0]
 
+        if mode == 'deterministic' and threshold is not None:
+            terminals_transformed = torch.where(terminals > threshold, 1.0, 0.0)
+        elif mode == 'stochastic':
+            terminals_transformed = torch.distributions.Bernoulli(probs=terminals).sample()
+        else:
+            terminals_transformed = terminals
+
         mask = torch.zeros_like(terminals)
         for t in range(1, d_time):
-            mask[t] = torch.maximum(mask[t - 1], terminals[t - 1])
-
-        if mode == 'deterministic' and threshold is not None:
-            mask = torch.where(mask > threshold, 1.0, 0.0)
-        elif mode == 'stochastic':
-            mask = torch.distributions.Bernoulli(probs=mask).sample()
+            mask[t] = torch.maximum(mask[t - 1], terminals_transformed[t - 1])
 
         return mask.detach()
 

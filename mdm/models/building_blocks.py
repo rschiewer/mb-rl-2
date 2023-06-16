@@ -6,6 +6,7 @@ from itertools import product
 from enum import Enum
 
 import torch
+import torch.masked as torchm
 import numpy as np
 from mdm.utils.torch_tools import (layers_with_activation as lwa, get_dist_params, RnnStateType,
                                    sample_from_categorical, ManagedStatefulTrainingModule, detach_dist, concat_dists)
@@ -489,19 +490,31 @@ class UpwardsFilter(torch.nn.Module):
 
     def _preproc(self,
                  x: torch.Tensor,
-                 pad_value: float = 0):
+                 mask: torch.Tensor | None = None,
+                 pad_value: float = 0) -> (torchm.MaskedTensor, int):
         n_timesteps = x.shape[0]
-        #n_pad = n_timesteps % self.window_size
         overhang = n_timesteps % self.window_size
         n_pad = 0 if overhang == 0 else self.window_size - overhang
+
+        if mask is None:
+            mask = torch.ones_like(x, dtype=torch.bool)
+        else:
+            assert mask.dtype == torch.bool, 'If a mask is provided, its dtype has to be bool'
+            mask = ~mask  # torch masks work inversely to my convention, so 1==True=="not masked"
+            mask = torch.broadcast_to(mask, x.shape)
+
         if n_pad > 0:
             x_pad = torch.full((n_pad, *x.shape[1:]), pad_value, device=x.device)
             x = torch.concat([x, x_pad], dim=0)
+            mask = torch.concat([mask, torch.zeros_like(x_pad, dtype=torch.bool)], dim=0)
+
+        x = torchm.MaskedTensor(x, mask=mask, requires_grad=False)
         x = x.reshape(x.shape[0] // self.window_size, self.window_size, *x.shape[1:])
         return x, n_pad
 
     def forward(self,
                 x: torch.Tensor,
+                mask: torch.Tensor | None = None,
                 context: Optional[torch.Tensor] = None) -> torch.Tensor:
         pass
 
@@ -510,9 +523,10 @@ class SumUpwardsFilter(UpwardsFilter):
 
     def forward(self,
                 x: torch.Tensor,
+                mask: torch.Tensor | None = None,
                 context: Optional[torch.Tensor] = None) -> torch.Tensor:
-        x, _ = self._preproc(x, 0.0)
-        x = torch.sum(x, dim=1)
+        x, _ = self._preproc(x, mask, 0.0)
+        x = torchm.sum(x, dim=1)
         return x
 
 
@@ -520,12 +534,13 @@ class AvgUpwardsFilter(UpwardsFilter):
 
     def forward(self,
                 x: torch.Tensor,
+                mask: torch.Tensor | None = None,
                 context: Optional[torch.Tensor] = None) -> torch.Tensor:
-        x, n_pad = self._preproc(x, 0.0)
-        x_filtered = torch.mean(x, dim=1)
-        if n_pad:
-            n_valid = self.window_size - n_pad
-            x_filtered[-1] = torch.mean(x[-1, :n_valid], dim=0)
+        x, n_pad = self._preproc(x, mask, 0.0)
+        x_filtered = torchm.mean(x, dim=1)
+        #if n_pad:
+        #    n_valid = self.window_size - n_pad
+        #    x_filtered[-1] = torch.mean(x[-1, :n_valid], dim=0)
         return x_filtered
 
 
@@ -533,12 +548,14 @@ class MaxUpwardsFilter(UpwardsFilter):
 
     def forward(self,
                 x: torch.Tensor,
+                mask: torch.Tensor | None = None,
                 context: Optional[torch.Tensor] = None) -> torch.Tensor:
-        x, n_pad = self._preproc(x, 0.0)
-        x_filtered = torch.max(x, dim=1).values
-        if n_pad:
-            n_valid = self.window_size - n_pad
-            x_filtered[-1] = torch.max(x[-1, :n_valid], dim=0).values
+        x_mt, n_pad = self._preproc(x, mask, 0.0)
+        x_mt = x_mt.to_tensor(value=x.min())  # fill masked values with min value from x to make sure they're not used
+        x_filtered = torch.max(x_mt, dim=1).values
+        #if n_pad:
+        #    n_valid = self.window_size - n_pad
+        #    x_filtered[-1] = torch.max(x[-1, :n_valid], dim=0).values
         return x_filtered
 
 
@@ -546,12 +563,14 @@ class MinUpwardsFilter(UpwardsFilter):
 
     def forward(self,
                 x: torch.Tensor,
+                mask: torch.Tensor | None = None,
                 context: Optional[torch.Tensor] = None) -> torch.Tensor:
-        x, n_pad = self._preproc(x, 0.0)
-        x_filtered = torch.min(x, dim=1).values
-        if n_pad:
-            n_valid = self.window_size - n_pad
-            x_filtered[-1] = torch.min(x[-1, :n_valid], dim=0).values
+        x_mt, n_pad = self._preproc(x, mask, 0.0)
+        x_mt = x_mt.to_tensor(value=x.max())  # fill masked values with max value from x to make sure they're not used
+        x_filtered = torch.min(x_mt, dim=1).values
+        #if n_pad:
+        #    n_valid = self.window_size - n_pad
+        #    x_filtered[-1] = torch.min(x[-1, :n_valid], dim=0).values
         return x_filtered
 
 
@@ -565,12 +584,25 @@ class PickOneUpwardsFilter(UpwardsFilter):
 
     def forward(self,
                 x: torch.Tensor,
+                mask: torch.Tensor | None = None,
                 context: Optional[torch.Tensor] = None) -> torch.Tensor:
-        x, n_pad = self._preproc(x, 0.0)
-        x_filtered = x[:, self.offset]
-        if n_pad:
-            n_valid = self.window_size - n_pad
-            x_filtered[-1] = x[-1, n_valid - 1]
+        x_mt, n_pad = self._preproc(x, mask, 0.0)
+        i_first = tuple(range(x_mt.shape[0]))
+        i_second = []
+        for i in i_first:
+            mask_chunk = x_mt[i].get_mask()
+            if mask_chunk[self.offset].sum():  # the time step we're looking for is valid, just pick it
+                i_second.append(self.offset)
+            else:  # we need to choose another time step since the one we actually want isn't available
+                i_second.append(0)  # arbitrarily choose first time step in chunk
+                for j in reversed(range(0, len(mask_chunk))):  # last to first chunk element, check for valid time step
+                    if mask_chunk[j].sum():
+                        i_second[-1] = j
+        i_second = tuple(i_second)
+        x_filtered = x_mt[i_first, i_second].to_tensor(value=0.0)
+        #if n_pad:
+        #    n_valid = self.window_size - n_pad
+        #    x_filtered[-1] = x[-1, n_valid - 1]
         return x_filtered
 
 
@@ -673,6 +705,7 @@ class IdentityUpwardsFilter(UpwardsFilter):
 
     def forward(self,
                 x: torch.Tensor,
+                mask: torch.Tensor | None = None,
                 context: Optional[torch.Tensor] = None) -> torch.Tensor:
         return x
 
@@ -685,6 +718,7 @@ class ConstUpwardsFilter(UpwardsFilter):
 
     def forward(self,
                 x: torch.Tensor,
+                mask: torch.Tensor | None = None,
                 context: Optional[torch.Tensor] = None) -> torch.Tensor:
         x, n_pad = self._preproc(x, 0.0)
         x = x[:, 0]
