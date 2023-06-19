@@ -29,7 +29,7 @@ def vis_rssm():
                             epsilon=0.1)
     term_dec = BinomialDecoder(s_x_orig=(d_o,), d_x_encoded=d_state, lws=[7, 7], activation='relu', layer_norm=False)
 
-    rssm_cell = RSSMCell(d_z=d_stoch, d_h=d_det, d_a=2, o_encoder=o_enc, o_decoder=o_dec, r_decoder=r_dec,
+    rssm_cell = RSSMCell(d_z=d_stoch, d_h=d_det, d_a=d_a, o_encoder=o_enc, o_decoder=o_dec, r_decoder=r_dec,
                          term_decoder=term_dec, z_prior_lws=[9, 9], z_post_lws=[11, 11], layer_norm=True,
                          rnn_type='gru')
 
