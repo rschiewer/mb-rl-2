@@ -50,7 +50,7 @@ def expert_collect_policy(env: CacheLastStepEnv):
 
 
 if __name__ == '__main__':
-    map_version = 'VeryEasy'
+    map_version = 'Easy'
     env = gym.make(f'gym_nav2d:nav2d{map_version}-v0')
     env = CacheLastStepEnv(env)
     n_episodes_train = 5000
@@ -68,10 +68,12 @@ if __name__ == '__main__':
     collect_driver = GymEpisodeDriver(env, collect_policy)
     collect_driver.interact(round(n_episodes_train * expert_trajectories), train_mem)
 
-    #visualize_trajectory(train_mem[0])
-
     rand_driver = GymEpisodeDriver(env, lambda *args: env.action_space.sample())
     rand_driver.interact(n_episodes_train - len(train_mem), train_mem)
+
+    #fig, ani = visualize_trajectory(train_mem[0])
+    #plt.show()
+    #quit()
 
     n_episodes_test = round(len(train_mem) * perc_test)
     random.shuffle(train_mem)
