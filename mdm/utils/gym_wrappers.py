@@ -7,6 +7,15 @@ from gym.core import ObsType, ActType
 from mdm.utils.utils import unsqueeze_right
 
 
+def check_action(action: np.ndarray, env: gym.Env):
+    if np.isnan(action).any():
+        raise ValueError('NAN actions found!')
+    if np.isinf(action).any():
+        raise ValueError('inf actions found!')
+    if not env.action_space.contains(action):
+        raise ValueError(f'Invalid action {action} for action space {env.action_space}')
+
+
 class StepCountEnv(gym.Wrapper):
 
     def __init__(self,
@@ -99,6 +108,8 @@ class CacheLastStepVecEnv(gym.Wrapper):
              actions):
         if self.envs_done.all():
             raise RuntimeError('All envs are already done, call reset()')
+        check_action(actions, self.env)  # invalid actions in vectorized envs cause hard to understand errors
+
         o, r, term, trunc, infos = self.env.step(actions)
         self.last_o = np.where(unsqueeze_right(self.envs_done, o), np.zeros_like(o), o)
         self.last_a = np.where(unsqueeze_right(self.envs_done, actions), np.zeros_like(actions), actions)

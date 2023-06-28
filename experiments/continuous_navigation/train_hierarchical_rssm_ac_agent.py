@@ -1,14 +1,15 @@
 import os.path
 import argparse
+from itertools import chain
 
 import gym.vector
 
-from mdm.training.train import train_model, agent_train_mode, agent_eval_mode
+from mdm.training.train import train_model, agent_eval_mode, build_rssms, build_agents
 from mdm.utils.utils import *
 from mdm.training.offline_rl_driver import OfflineRLDriver, SamplingType
 from mdm.logging.neptune_logger import NeptuneLogger
 from mdm.logging.not_logger import NotLogger
-from mdm.logging.logger import Scope
+from mdm.logging.logger import Scope, GlobalLogger
 from mdm.training.gym_driver import collect_data, GymEpisodeDriver
 from mdm.policies.agent_policy import *
 
@@ -16,6 +17,8 @@ from mdm.policies.agent_policy import *
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-log', default=False, action='store_true')
+    parser.add_argument('-d_batch', type=int)
+    parser.add_argument('-n_collect', type=int)
     args = parser.parse_args()
 
     cfg = load_yaml(here() / 'cfg_rssm_train.yaml')
@@ -25,6 +28,12 @@ def main():
         logger = NeptuneLogger(**neptune_cfg)
     else:
         logger = NotLogger()
+    GlobalLogger.bind(logger)  # used for debugging
+
+    if args.d_batch:
+        cfg['trainer']['d_batch'] = args.d_batch
+    if args.n_collect:
+        cfg['prefill_episodes'] = args.n_collect
 
     env = gym.make(cfg['env_name'])
     env = CacheLastStepEnv(env)
@@ -56,6 +65,16 @@ def main():
 
     opt_model = build_model_opt(model, cfg)
 
+    # temporary hack to only train parts of the model
+
+    #params = chain.from_iterable([model.rssm_modules[0].r_decoder.parameters(),
+    #                              model.rssm_modules[0].term_decoder.parameters(),
+    #                              model.rssm_modules[1].r_decoder.parameters(),
+    #                              model.rssm_modules[1].term_decoder.parameters()])
+    #opt_model = torch.optim.Adam(params, **cfg['optim'])
+
+    # temporary hack end
+
     collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['trainer']['collect_envs'])
     collect_env = CacheLastStepVecEnv(collect_env)
     eval_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['eval']['eval_envs'])
@@ -64,14 +83,14 @@ def main():
     train_mem = []
     match cfg['prefill_memory']:
         case 'offline-dataset':
-            print('loading offline data to prefill training memory...')
+            print('loading offline data to prefill training memory...', flush=True)
             train_mem = load_memory(here() / cfg['train_samples'])
         case 'random':
-            print('collecting initial random trajectories...')
+            print('collecting initial random trajectories...', flush=True)
             collect_driver = GymEpisodeDriver(collect_env, lambda *x: collect_env.action_space.sample())
             collect_driver.interact(cfg['prefill_episodes'], train_mem)
         case False:
-            print('starting with empty training memory...')
+            print('starting with empty training memory...', flush=True)
 
     # fig, ani = visualize_trajectory(train_mem[0])
     # gif = anim_to_gif(ani)

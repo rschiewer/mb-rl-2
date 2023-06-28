@@ -1,4 +1,4 @@
-from typing import Tuple, Union, List, Sequence, TypeVar, Dict
+from typing import Tuple, Union, List, Sequence, TypeVar, Dict, Any
 from collections import namedtuple, OrderedDict
 from functools import reduce, wraps
 from math import ceil
@@ -13,7 +13,7 @@ RnnStateType = TypeVar('RnnStateType', torch.Tensor, Tuple[torch.Tensor, torch.T
 _Placeholder = namedtuple('placeholder', 'device')
 
 # define torch.compile decorator depending on whether we're in debug mode or not
-if gettrace() or 'PYCHARM_HOSTED' in os.environ:
+if True or gettrace() or 'PYCHARM_HOSTED' in os.environ:
     print('Debugging or running in PyCharm IDE, disabling torch.compile')
 
 
@@ -369,6 +369,8 @@ def detach_dist(d: torch.distributions.Distribution):
     if isinstance(d, (torch.distributions.Normal, torch.distributions.Cauchy, torch.distributions.Gumbel,
                       torch.distributions.Laplace, torch.distributions.LogNormal)):
         return type(d)(loc=d.loc.detach(), scale=d.scale.detach())
+    elif isinstance(d, SquashedNormal):
+        return type(d)(loc=d.loc.detach(), scale=d.scale.detach())
     elif isinstance(d, torch.distributions.RelaxedOneHotCategorical):
         return type(d)(temperature=d.temperature.detach(), logits=d.logits.detach())
     elif isinstance(d, torch.distributions.ContinuousBernoulli):
@@ -400,6 +402,21 @@ def stack_dists(dists: List[torch.distributions.Distribution]):
     elif cls == torch.distributions.ContinuousBernoulli:
         probs = torch.stack([d.probs for d in dists])
         return torch.distributions.ContinuousBernoulli(probs=probs)
+    elif cls == torch.distributions.Bernoulli:
+        probs = torch.stack([d.probs for d in dists])
+        return torch.distributions.Bernoulli(probs=probs)
+    elif cls == SquashedNormal:
+        loc = torch.stack([d.loc for d in dists])
+        scale = torch.stack([d.scale for d in dists])
+        return SquashedNormal(loc=loc, scale=scale)
+    elif cls == torch.distributions.TransformedDistribution:
+        base_dists = [d.base_dist for d in dists]
+        transforms = [d.transforms for d in dists]
+        for t in transforms:
+            assert t == transforms[0], 'All transforms have to be equal'
+        stacked_base_dists = stack_dists(base_dists)
+        return torch.distributions.TransformedDistribution(transforms=transforms[0],
+                                                           base_distribution=stacked_base_dists)
     else:
         raise ValueError(f'Unsupported distribution class: {cls}')
 
@@ -419,6 +436,9 @@ def concat_dists(dists: List[torch.distributions.Distribution],
     elif cls == torch.distributions.ContinuousBernoulli:
         probs = torch.concat([d.probs for d in dists], dim=dim)
         return torch.distributions.ContinuousBernoulli(probs=probs)
+    elif cls == torch.distributions.Bernoulli:
+        probs = torch.concat([d.probs for d in dists], dim=dim)
+        return torch.distributions.Bernoulli(probs=probs)
     else:
         raise ValueError(f'Unsupported distribution class: {cls}')
 
@@ -569,3 +589,54 @@ def to_np(data_dict: Dict[str, Union[torch.Tensor, Dict]]):
         else:
             raise ValueError(f'Unsupported type: {type(k)}')
     return np_data_dict
+
+
+@compile_if_not_debug
+def compute_mask(terminals: torch.Tensor,
+                 mode: str = 'default',
+                 threshold: float | None = None,
+                 first_step_mask: torch.Tensor | None = None):
+    with torch.no_grad():
+        terminals = terminals.detach()
+        d_time = terminals.shape[0]
+
+        if mode == 'deterministic' and threshold is not None:
+            terminals_transformed = torch.where(terminals > threshold,
+                                                torch.tensor(1.0, device=terminals.device, dtype=terminals.dtype),
+                                                torch.tensor(0.0, device=terminals.device, dtype=terminals.dtype))
+        elif mode == 'stochastic':
+            terminals_transformed = torch.distributions.Bernoulli(probs=torch.nn.functional.sigmoid(terminals)).sample()
+        else:
+            terminals_transformed = terminals
+
+        mask = torch.zeros_like(terminals)
+        if first_step_mask is not None:
+            mask[0] = first_step_mask
+
+        for t in range(1, d_time):
+            mask[t] = torch.maximum(mask[t - 1], terminals_transformed[t - 1])
+
+        return mask.detach()
+
+
+# compiled from:
+# https://github.com/denisyarats/pytorch_sac/blob/master/agent/actor.py
+# https://garage.readthedocs.io/en/v2020.06.2/_modules/garage/torch/distributions/tanh_normal.html#TanhNormal.entropy
+class SquashedNormal(torch.distributions.transformed_distribution.TransformedDistribution):
+    def __init__(self, loc, scale):
+        self.loc = loc
+        self.scale = scale
+
+        self.base_dist = torch.distributions.Normal(loc, scale)
+        transforms = [torch.distributions.TanhTransform()]
+        super().__init__(self.base_dist, transforms)
+
+    @property
+    def mean(self):
+        mu = self.loc
+        for tr in self.transforms:
+            mu = tr(mu)
+        return mu
+
+    def entropy(self):
+        return self.base_dist.entropy()

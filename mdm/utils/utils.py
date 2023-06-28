@@ -28,8 +28,9 @@ from PIL import Image
 from mdm.gridworld.gridworld import Gridworld, CellType
 from mdm.memory.trajectory_memory import flatten_and_unsqueeze, TrajectoryMemory
 from mdm.models.building_blocks import *
-from mdm.policies.actor_critic_agent import ActorCriticAgent
+#from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.logging.logger import Logger, Scope
+from mdm.utils.torch_tools import compute_mask
 
 SliceType = TypeVar("SliceType", bound=Sequence)
 BasicDtype = TypeVar('BasicDtype', int, float, np.single, np.double, bool)
@@ -56,7 +57,7 @@ class InMemoryFile:
             self.extension = resource[ext_start:] if len(extension) == 0 else extension
             with open(resource, 'rb') as f:
                 self.buffer = io.BytesIO(f.read())
-        elif isinstance(resource (io.BytesIO, io.FileIO)):
+        elif isinstance(resource(io.BytesIO, io.FileIO)):
             assert extension is not None, f'File extension required for buffers'
             self.buffer = copy.copy(resource)
             self.name = name
@@ -165,17 +166,21 @@ def cfg_infer_missing_values(cfg: dict,
 
 def build_model_opt(model: torch.nn.Module, cfg: dict):
     optim_type = cfg['optim'].pop('type')
+    params = model.parameters()
+
     if optim_type == 'adam':
-        opt_model = torch.optim.Adam(model.parameters(), **cfg['optim'])
+        opt_model = torch.optim.Adam(params, **cfg['optim'])
     elif optim_type == 'adamW':
-        opt_model = torch.optim.AdamW(model.parameters(), **cfg['optim'])
+        opt_model = torch.optim.AdamW(params, **cfg['optim'])
     elif optim_type == 'sgd':
-        opt_model = torch.optim.SGD(model.parameters(), **cfg['optim'])
+        opt_model = torch.optim.SGD(params, **cfg['optim'])
     else:
         raise ValueError(f'Unknown optimizer type: {optim_type}')
+
     return opt_model
 
 
+"""
 def build_rssms(cfg: dict):
     for i_module, module_args in enumerate(cfg['mdm']['rssm_modules']):
         for k, v in module_args.items():  # generate encoders and decoder objects for current RSSM
@@ -225,10 +230,10 @@ def build_agents(cfg: dict,
             cfg_goal_seeking['d_a'] = cfg['mdm']['rssm_modules'][agent_lvl].d_a
             cfg_goal_seeking['d_o'] = cfg['mdm']['rssm_modules'][agent_lvl].d_z
             goal_seeking_agents.append(gen_agent_fn(agent_lvl, True, cfg_goal_seeking))
-    #goal_seeking_agents.append(None)  # no homing agent needed on last level
+    # goal_seeking_agents.append(None)  # no homing agent needed on last level
 
     return r_max_agents, goal_seeking_agents
-
+"""
 
 hierarchy_sep = '|'
 cfg_placeholder = re.compile(r'.*?(<.+?>).*?')
@@ -638,8 +643,8 @@ def prepare_data_gridworld(s: Union[np.ndarray, torch.Tensor],
                            env: Gridworld,
                            subtrajectory_len: int = 0,
                            ) -> Tuple[Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
-                Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
-                Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray]]:
+Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray],
+Union[torch.tensor, np.ndarray], Union[torch.tensor, np.ndarray]]:
     s, a, r, terminal, truncated, mask = flatten_and_unsqueeze(s, a, r, terminal, truncated, mask)
     s = to_onehot(s, max(env.grid_w, env.grid_h))
     # s = normalize_obs(s, env)
@@ -997,25 +1002,22 @@ def rssm_states_seq_to_batch(mem: Dict[str, List[torch.Tensor]],
                              i_start: int = 0,
                              i_end: int = sys.maxsize):
     state_keys = rssm_instance.init_state(1, 'cpu')
-    #if 'time_step' in mem:
+    # if 'time_step' in mem:
     #    state_keys = [*state_keys, 'time_step']
     states = {k: v[i_start: i_end] for k, v in mem.items() if k in state_keys}
-    states = rssm_instance.state_seq_to_batch(**states)
     del state_keys
 
-    return states
+    #if None in states['z_post']:  # ugly hack
+    #    states['z_post'] = states['z_prior']
+    #    states = rssm_instance.state_seq_to_batch(**states)
+    #    states['z_post'] = [None for _ in range(states['z'].shape[0])]
+    #else:
+    states = rssm_instance.state_seq_to_batch(**states)
 
+    mask = compute_mask(torch.stack(mem['terminal'][i_start: i_end]))
+    mask = mask.reshape(mask.shape[0] * mask.shape[1], 1)
 
-def seq_to_batch(seq: Dict[str, List[torch.Tensor]],
-                 keys: Iterable[str],
-                 i_start: int = 0,
-                 i_end: int = sys.maxsize):
-    seq_filtered = {k: v[i_start: i_end] for k, v in seq.items() if k in keys}
-
-    for k, v in seq_filtered.items():
-        first_elem = v[0]
-        if isinstance(first_elem, torch.Tensor):
-            pass
+    return states, mask
 
 
 def log_params(model: torch.nn.Module,
@@ -1028,12 +1030,14 @@ def log_params(model: torch.nn.Module,
         for name, param in model.named_parameters():
             full_scope = scope / name
             param_np = param.detach().cpu().numpy()
-            logger.log({'mean': param_np.mean(), 'std': param_np.std(), 'min': param_np.min(), 'max': param_np.max()}, full_scope, time_step=time_step)
+            logger.log({'mean': param_np.mean(), 'std': param_np.std(), 'min': param_np.min(), 'max': param_np.max()},
+                       full_scope, time_step=time_step)
             if param_np.min() < min_param:
                 min_param = param_np.min()
             if param_np.max() > max_param:
                 max_param = param_np.max()
         logger.log({'largest_param': max_param, 'smallest_param': min_param}, scope, time_step=time_step)
+
     asyncio.run(_log_fn())
 
 

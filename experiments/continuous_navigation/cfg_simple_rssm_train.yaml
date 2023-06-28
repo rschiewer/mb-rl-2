@@ -1,18 +1,23 @@
 ---
 neptune_cfg: "../neptune_settings.yaml"
-train_samples: "nav2d_VeryEasy_train.samples"
-test_samples: "nav2d_VeryEasy_expert.samples"
+env_name: "gym_nav2d:nav2dEasy-v0" #"gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-v0"
+prefill_memory: "random" #"offline-dataset" # "random", False
+prefill_episodes: 1000
+train_samples: null #"nav2d_Easy_train.samples" #"nav2d_Easy_train.samples"
+test_samples: "nav2d_Easy_expert.samples" #"nav2d_Easy_expert.samples"
 checkpoint_path: "checkpoints"
 final_model_path: "trained_models/model"
+pretrained_model: null #"MBRL-2908"
 
 mdm:
    rssm_modules:
       # RSSM no. 1
       -  d_z: 10
          d_h: 64
-         n_hidden_layers: 3
+         d_a: null
+         n_hidden_layers: 1
          hidden_dropout: 0.1
-         epsilon: 0.0001
+         epsilon: 0.1
          z_prior_lws: [ 64, 64 ]
          z_post_lws: [ 64, 64 ]
          layer_norm: True
@@ -22,48 +27,94 @@ mdm:
          o_encoder:
             class: "MLPEncoder"
             d_x_encoded: 32
-            lws: [ 32 ]
+            lws: [ 64, 64 ]
             layer_norm: True
             activation: "relu"
          o_decoder:
             class: "GaussianDecoder"
-            lws: [ 32, 32 ]
+            lws: [ 64, 64 ]
             layer_norm: True
             activation: "relu"
-            epsilon: 0.00001
+            epsilon: 0.1
          r_decoder:
             class: "GaussianDecoder"
-            lws: [ 32, 32 ]
+            lws: [ 64, 64 ]
             layer_norm: True
             activation: "relu"
-            epsilon: 0.00001
+            epsilon: 0.1
          term_decoder:
             class: "BinomialDecoder"
-            lws: [ 32, 32 ]
+            lws: [ 64, 64 ]
             layer_norm: True
             activation: "relu"
-   links: [ ]
-   upwards_filters: [ ]
+   links: []  # Links for observation filters between RSSM levels
+   upwards_filters: []
    warmup_steps: [ 'rand' ]
-   kl_betas: [ 1.0 ]
-   kl_reg_betas: [ 0.001 ]
-   ema_regularization: 0.01
-   ema_coeff: 0.99
+   kl_betas: [ 0.1 ]
+   kl_reg_betas: [ 0.0 ]
+   ema_regularization: 0.0
+   ema_coeff: 0.95
+   ema_update_interval: 5
+   latent_overshooting: []
+   temporal_activation_regularization: 1
 
 optim:
    type: 'adam'  # 'adamW' 'adam'
-   lr: 0.001 #0.0002
+   lr: 0.0008 #0.0002
 
 trainer:
-   n_train_steps: 5000
-   eval_interval: 20
-   d_batch: 4096
-   subtrajectory_len: 15
+   n_train_steps: 6000
+   eval_interval: 50
+   d_batch: 400
+   subtrajectory_len: 20
    collect_envs: 50
-   collect_interval: 100
-   agent_train_interval: 5
-   agent_world_model_warmup: [ 2 ]
-   agent_sim_steps: [ 25 ]
+   collect_interval: 5
+   agent_train_interval: 1
+   model_train_steps: [-1 ]
+   agent_model_steps: [ 15 ]
+   checkpoint_interval: 100
+
+agents:
+   r_max:
+      # level 0
+      - eps_exploration_init: 0.5
+        eps_exploration_coeff: 0.999
+        act_entropy_exploration_coeff: 0.01
+        learn_act_entropy_exploration_coeff: False
+        novelty_exploration_coeff: 0.1
+        tr_policy_kl_coeff: 0.1
+        tr_policy_ema_update_coeff: 0.98
+        use_ema_world_model: False
+        lr_actor: 0.002
+        lr_critic: 0.008
+        min_a: null
+        max_a: null
+        actor_lws: [ 64, 64 ]
+        critic_lws: [ 64, 64 ]
+        actor_act_fn: "relu"
+        critic_act_fn: "relu"
+        actor_layer_norm: True
+        critic_layer_norm: True
+   goal_seeking:
+      # level 0
+      - eps_exploration_init: 0.3
+        eps_exploration_coeff: 0.999
+        act_entropy_exploration_coeff: 0.01
+        learn_act_entropy_exploration_coeff: False
+        novelty_exploration_coeff: 0.1
+        tr_policy_kl_coeff: 0.1
+        tr_policy_ema_update_coeff: 0.98
+        use_ema_world_model: False
+        lr_actor: 0.0005
+        lr_critic: 0.002
+        min_a: null
+        max_a: null
+        actor_lws: [ 64, 64 ]
+        critic_lws: [ 64, 64 ]
+        actor_act_fn: "relu"
+        critic_act_fn: "relu"
+        actor_layer_norm: True
+        critic_layer_norm: True
 
 eval:
    warmup_steps: [ 2 ]

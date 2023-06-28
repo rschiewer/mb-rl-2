@@ -439,12 +439,12 @@ class BinomialDecoder(OutputDecoder):
         params = params.reshape(*params.shape[:-1], *self.s_x_orig)
         probs = torch.nn.functional.sigmoid(params)
         d = torch.distributions.ContinuousBernoulli(probs=probs)
-        # d = torch.distributions.Bernoulli(logits=params)
+        #d = torch.distributions.Bernoulli(probs=probs)
         # d = torch.distributions.Independent(d, 1)
         # d = torch.distributions.RelaxedBernoulli(temperature=self._temperature, logits=params)
         if sample:
             s = d.rsample()
-            # s = d.sample()
+            #s = d.sample()
         else:
             s = d.mean
             # s = d.probs.round().to(torch.float32) + d.probs - d.probs.detach()
@@ -497,20 +497,19 @@ class UpwardsFilter(torch.nn.Module):
         n_pad = 0 if overhang == 0 else self.window_size - overhang
 
         if mask is None:
-            mask = torch.ones_like(x, dtype=torch.bool)
+            mask = torch.zeros(*x.shape[0:2], 1, dtype=torch.bool, device=x.device)
         else:
-            assert mask.dtype == torch.bool, 'If a mask is provided, its dtype has to be bool'
-            mask = ~mask  # torch masks work inversely to my convention, so 1==True=="not masked"
-            mask = torch.broadcast_to(mask, x.shape)
+            assert mask.dtype == torch.bool, 'Need binary mask with bool dtype'
 
         if n_pad > 0:
             x_pad = torch.full((n_pad, *x.shape[1:]), pad_value, device=x.device)
+            mask_pad = torch.ones(n_pad, x.shape[1], 1, dtype=torch.bool, device=x.device)
             x = torch.concat([x, x_pad], dim=0)
-            mask = torch.concat([mask, torch.zeros_like(x_pad, dtype=torch.bool)], dim=0)
+            mask = torch.concat([mask, mask_pad], dim=0)
 
-        x = torchm.MaskedTensor(x, mask=mask, requires_grad=False)
         x = x.reshape(x.shape[0] // self.window_size, self.window_size, *x.shape[1:])
-        return x, n_pad
+        mask = mask.reshape(mask.shape[0] // self.window_size, self.window_size, *mask.shape[1:])
+        return x, mask, n_pad
 
     def forward(self,
                 x: torch.Tensor,
@@ -525,8 +524,8 @@ class SumUpwardsFilter(UpwardsFilter):
                 x: torch.Tensor,
                 mask: torch.Tensor | None = None,
                 context: Optional[torch.Tensor] = None) -> torch.Tensor:
-        x, _ = self._preproc(x, mask, 0.0)
-        x = torchm.sum(x, dim=1)
+        x, mask, _ = self._preproc(x, mask, 0.0)
+        x = torch.sum(x * (1 - mask), dim=1)
         return x
 
 
@@ -536,12 +535,15 @@ class AvgUpwardsFilter(UpwardsFilter):
                 x: torch.Tensor,
                 mask: torch.Tensor | None = None,
                 context: Optional[torch.Tensor] = None) -> torch.Tensor:
-        x, n_pad = self._preproc(x, mask, 0.0)
-        x_filtered = torchm.mean(x, dim=1)
-        #if n_pad:
+        x, mask, n_pad = self._preproc(x, mask, 0.0)
+        nom = torch.sum(x * ~mask, dim=1)
+        denom = torch.sum(~mask, dim=1)
+        denom = torch.where(denom == 0, 1.0, denom)
+        x = nom / denom
+        # if n_pad:
         #    n_valid = self.window_size - n_pad
-        #    x_filtered[-1] = torch.mean(x[-1, :n_valid], dim=0)
-        return x_filtered
+        #    x[-1] = torch.mean(x[-1, :n_valid], dim=0)
+        return x
 
 
 class MaxUpwardsFilter(UpwardsFilter):
@@ -550,13 +552,14 @@ class MaxUpwardsFilter(UpwardsFilter):
                 x: torch.Tensor,
                 mask: torch.Tensor | None = None,
                 context: Optional[torch.Tensor] = None) -> torch.Tensor:
-        x_mt, n_pad = self._preproc(x, mask, 0.0)
-        x_mt = x_mt.to_tensor(value=x.min())  # fill masked values with min value from x to make sure they're not used
-        x_filtered = torch.max(x_mt, dim=1).values
-        #if n_pad:
+        x, mask, n_pad = self._preproc(x, mask, 0.0)
+        x = torch.where(mask, -torch.inf, x)
+        x = torch.max(x, dim=1).values
+        x = torch.where(x == -torch.inf, 0.0, x)
+        # if n_pad:
         #    n_valid = self.window_size - n_pad
-        #    x_filtered[-1] = torch.max(x[-1, :n_valid], dim=0).values
-        return x_filtered
+        #    x[-1] = torch.max(x[-1, :n_valid], dim=0).values
+        return x
 
 
 class MinUpwardsFilter(UpwardsFilter):
@@ -565,13 +568,14 @@ class MinUpwardsFilter(UpwardsFilter):
                 x: torch.Tensor,
                 mask: torch.Tensor | None = None,
                 context: Optional[torch.Tensor] = None) -> torch.Tensor:
-        x_mt, n_pad = self._preproc(x, mask, 0.0)
-        x_mt = x_mt.to_tensor(value=x.max())  # fill masked values with max value from x to make sure they're not used
-        x_filtered = torch.min(x_mt, dim=1).values
-        #if n_pad:
+        x, mask, n_pad = self._preproc(x, mask, 0.0)
+        x = torch.where(mask, torch.inf, x)
+        x = torch.min(x, dim=1).values
+        x = torch.where(x == torch.inf, 0.0, x)
+        # if n_pad:
         #    n_valid = self.window_size - n_pad
-        #    x_filtered[-1] = torch.min(x[-1, :n_valid], dim=0).values
-        return x_filtered
+        #    x[-1] = torch.min(x[-1, :n_valid], dim=0).values
+        return x
 
 
 class PickOneUpwardsFilter(UpwardsFilter):
@@ -582,27 +586,76 @@ class PickOneUpwardsFilter(UpwardsFilter):
         super(PickOneUpwardsFilter, self).__init__(window_size)
         self.offset = offset
 
+    @staticmethod
+    def _check_slow(x: torch.Tensor, mask: torch.Tensor):
+        """
+        Only for debugging purposes and to make sure more complex implementations behave as intended
+        :param x: tensor to be filtered up
+        :param mask: mask that is used to find the last valid time step inside a chunk
+        :return: the filtered x with valid entries for every chunk wherever possible or the first invalid one otherwise
+        """
+        n_chunks, d_chunk, d_batch = x.shape[:3]
+
+        x_filtered = torch.full([n_chunks, d_batch, *x.shape[3:]], fill_value=0, device=x.device, dtype=x.dtype)
+        for i_batch in range(d_batch):
+            for i_chunk in range(n_chunks):
+                for i_timestep in reversed(range(d_chunk)):
+                    if mask[i_chunk, i_timestep, i_batch] == 0:
+                        x_filtered[i_chunk, i_batch] = x[i_chunk, i_timestep, i_batch]
+                        break
+                    # if we went through the whole chunk and all time steps were invalid, the chunk is invalid and
+                    # masked out later anyway
+
+        return x_filtered
+
     def forward(self,
                 x: torch.Tensor,
                 mask: torch.Tensor | None = None,
                 context: Optional[torch.Tensor] = None) -> torch.Tensor:
-        x_mt, n_pad = self._preproc(x, mask, 0.0)
-        i_first = tuple(range(x_mt.shape[0]))
-        i_second = []
-        for i in i_first:
-            mask_chunk = x_mt[i].get_mask()
-            if mask_chunk[self.offset].sum():  # the time step we're looking for is valid, just pick it
-                i_second.append(self.offset)
-            else:  # we need to choose another time step since the one we actually want isn't available
-                i_second.append(0)  # arbitrarily choose first time step in chunk
-                for j in reversed(range(0, len(mask_chunk))):  # last to first chunk element, check for valid time step
-                    if mask_chunk[j].sum():
-                        i_second[-1] = j
-        i_second = tuple(i_second)
-        x_filtered = x_mt[i_first, i_second].to_tensor(value=0.0)
-        #if n_pad:
-        #    n_valid = self.window_size - n_pad
-        #    x_filtered[-1] = x[-1, n_valid - 1]
+        x, mask, n_pad = self._preproc(x, mask, 0.0)
+        n_chunks, d_chunk, d_batch = x.shape[:3]
+        #x_filtered_2 = self._check_slow(x, mask)
+
+        if self.offset < 0:
+            tmp_offset = d_chunk + self.offset
+        else:
+            tmp_offset = self.offset
+
+        x_filtered = x[:, tmp_offset]  # first just filter and later care about validity
+        invalid = mask[:, tmp_offset]
+
+        while invalid.any():  # worst case runtime O(d_chunk)
+            tmp_offset -= 1
+            if tmp_offset == -1:
+                break
+            x_filtered = torch.where(invalid, x[:, tmp_offset], x_filtered)
+            invalid = torch.where(invalid, mask[:, tmp_offset], invalid)
+        x_filtered = torch.where(invalid, torch.zeros_like(x_filtered), x_filtered)  # zero out remaining invalid chunks
+
+        #diff = torch.abs(x_filtered - x_filtered_2).sum()
+        #if not torch.isclose(diff, torch.tensor(0.0, device=x.device, dtype=x.dtype)):
+        #    raise RuntimeError('unexpected difference between two methods for picking last elem from subtraj')
+
+        #torch._assert(torch.isclose(diff, torch.tensor(0, device=x.device, dtype=x.dtype)), 'deviation from expected result')
+
+        # i_whole = torch.nonzero(mask.sum(dim=1, keepdim=True) == 0)
+        # i_partial = torch.nonzero(mask.sum(dim=1, keepdim=True) > 0)
+        # for i_chunk in range(n_chunks):
+        #    valid_steps = tuple(~mask[i_chunk].sum(dim=0).detach().cpu().numpy())
+        #    dummy_i_batch = tuple(range(d_batch))
+        #    #x_filtered[i_chunk][]
+
+        # chunk_valid = mask.sum(dim=1)
+        # if chunk_valid.sum() > 0:
+        #    n_chunks, d_chunk = x.shape[0:2]
+        #    for i_chunk in range(n_chunks):
+        #        if not chunk_valid[i_chunk].sum() == 0:
+        #            for t in reversed(range(d_chunk)):
+        #                # if all time steps in a chunk are masked (i.e. invalid), chunk is invalid and we use
+        #                # self.offset above, altough at this point it's irrelevant what we choose
+        #                if mask[i_chunk][t].sum() == 0:
+        #                    x_filtered[i_chunk] = x[i_chunk][t]
+
         return x_filtered
 
 
@@ -869,9 +922,9 @@ class RSSMCell(torch.nn.Module):
             last_state = {'z': self.zero_z(a.shape[0], a.device),
                           'rnn_state': self.zero_rnn_state(a.shape[0], a.device)}
 
-        #z_embed = self._z_embed_net(last_state['z'])
+        # z_embed = self._z_embed_net(last_state['z'])
 
-        #if torch.isnan(z_embed).any():
+        # if torch.isnan(z_embed).any():
         #    raise RuntimeError(f'Invalid NAN embedded z in imagine: {z_embed}')
 
         inp = torch.concat([last_state['z'], a, context], dim=-1)
@@ -901,7 +954,7 @@ class RSSMCell(torch.nn.Module):
                 sample: bool = True):
         h, next_state = self.imagine(a, last_state, context, sample)
         o_enc = self.o_encoder(o)
-        
+
         if torch.isnan(o_enc).any():
             raise RuntimeError(f'Invalid NAN encoded observation in observe: {o_enc}')
 
@@ -945,7 +998,7 @@ class RSSMCell(torch.nn.Module):
         reconstruction = {'o': o_smpl, 'o_dist': o_dist, 'a': a, 'r_dist': r_dist, 'r': r_smpl,
                           'terminal_dist': term_dist, 'terminal': term_smpl, 's': s, 'h': h}
 
-        #if last_state is not None and 'time_step' in last_state:
+        # if last_state is not None and 'time_step' in last_state:
         #    next_state['time_step'] = (last_state['time_step'] + 1).detach()
 
         return reconstruction, next_state
@@ -1011,7 +1064,7 @@ class RSSMCell(torch.nn.Module):
                           'z_post': detach_dist(state['z_post']) if state['z_post'] is not None else None,
                           'rnn_state': rnn_state_detached}
 
-        #if 'time_step' in state:
+        # if 'time_step' in state:
         #    detached_state['time_step'] = state['time_step'].detach()
 
         return detached_state
@@ -1036,7 +1089,7 @@ class RSSMCell(torch.nn.Module):
 
         state = {'z': z, 'z_dist': z_dist, 'z_prior': z_prior, 'z_post': z_post, 'rnn_state': rnn_state}
 
-        #if time_step:
+        # if time_step:
         #    state['time_step'] = torch.concat(time_step, dim=0)
 
         return state

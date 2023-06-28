@@ -89,7 +89,7 @@ class LatentAgentPolicy(Policy):
             raise RuntimeError(f'Invalid inf state in step {env.current_step}: {self._current_env_state["z"]}')
 
         agent_o = self.agent.preproc_o(self._current_env_state)
-        a_dist, a, v = self.agent(agent_o, sample=False)
+        a_dist, a, v = self.agent(agent_o, sample=True, disable_exploration=True)
 
         if torch.isnan(a).any():
             raise RuntimeError(f'Invalid NAN action: {a}')
@@ -205,23 +205,25 @@ class HierarchicalLatentAgentPolicy(Policy):
         # one r_max step on highest level
         state = self._grounded_env_states[i_highest]
         agent = self.model.r_max_agents[i_highest][0]
-        simulation = agent.act_in_sim(env_state=state, sim_env=self.model, n_steps=1, sample_actions=False,
-                                      sample_model=False, reconstruct=True)
+        simulation = agent.act_in_sim(env_state=state, sim_env=self.model, n_steps=1, sample_actions=True,
+                                      sample_model=False, disable_exploration=True, reconstruct=i_highest > 0)
         self._act_cache[i_highest] += simulation['agent']['a']
 
-        goals_from_above = simulation['model']['o']
-        for i_lvl in reversed(range(0, i_highest)):
-            state = self._grounded_env_states[i_lvl]
-            agent = self.model.goal_seeking_agents[i_lvl][0]
-            n_steps = self.model.strides[i_lvl + 1]
-            new_goals = []
-            for goal in goals_from_above:
-                simulation = agent.act_in_sim(env_state=state, sim_env=self.model, n_steps=n_steps, goal=goal,
-                                              sample_actions=False, sample_model=False, reconstruct=True)
-                state = simulation['model_state']
-                self._act_cache[i_lvl] += simulation['agent']['a']
-                new_goals += simulation['model']['o']  # TODO: this was 'z' before, check what's correct
-            goals_from_above = new_goals
+        if i_highest > 0:
+            goals_from_above = simulation['model']['o']
+            for i_lvl in reversed(range(0, i_highest)):
+                state = self._grounded_env_states[i_lvl]
+                agent = self.model.goal_seeking_agents[i_lvl][0]
+                n_steps = self.model.strides[i_lvl + 1]
+                new_goals = []
+                for goal in goals_from_above:
+                    simulation = agent.act_in_sim(env_state=state, sim_env=self.model, n_steps=n_steps, goal=goal,
+                                                  sample_actions=True, disable_exploration=True,
+                                                  sample_model=False, reconstruct=True)
+                    state = simulation['model_state']
+                    self._act_cache[i_lvl] += simulation['agent']['a']
+                    new_goals += simulation['model']['o']  # TODO: this was 'z' before, check what's correct
+                goals_from_above = new_goals
 
         self._action_queue += self._act_cache[0]
 

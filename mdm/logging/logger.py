@@ -112,3 +112,16 @@ class Logger(ABC):
                  scope: Scope,
                  time_step: int = None):
         pass
+
+
+class GlobalLogger:
+
+    logger: Logger = None
+
+    @classmethod
+    def bind(cls, logger: Logger):
+        cls.logger = logger
+
+    @property
+    def bound(self):
+        return self.logger is not None
