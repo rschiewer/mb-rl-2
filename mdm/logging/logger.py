@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import re
-from typing import Any, Dict, Union
+from typing import Any, Dict, Union, Sequence
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -117,11 +117,26 @@ class Logger(ABC):
 class GlobalLogger:
 
     logger: Logger = None
+    log_marks: Dict = {}
 
     @classmethod
-    def bind(cls, logger: Logger):
+    def bind(cls,
+             logger: Logger,
+             log_marks: Dict = None):
         cls.logger = logger
+        if log_marks is not None:
+            cls.log_marks.update(log_marks)
 
-    @property
-    def bound(self):
-        return self.logger is not None
+    @classmethod
+    def bound(cls):
+        return cls.logger is not None
+
+    @classmethod
+    def can_log(cls,
+                log_mark: str,
+                i_step: int = None):
+        if i_step is None:
+            return cls.bound() and log_mark in cls.log_marks.keys()
+        else:
+            return cls.bound() and log_mark in cls.log_marks.keys() and i_step % cls.log_marks[log_mark] == 0
+
