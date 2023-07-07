@@ -121,8 +121,9 @@ def main():
             model.eval()
             eval_losses, pred, _, _ = model.eval_step(batch, model_steps=[-1], sample_state=True,
                                                       sample_output=True, force_warmup=[-1])
-            eval_losses_deter, pred_deter, _, _ = model.eval_step(batch, model_steps=[-1], sample_state=True,
-                                                                  sample_output=False, force_warmup=[-1])
+            eval_losses_deter, pred_deter, targets_deter, _ = model.eval_step(batch, model_steps=[-1],
+                                                                              sample_state=True, sample_output=False,
+                                                                              force_warmup=[-1])
             logger.log(to_np(eval_losses), Scope.TEST(), i_step)
 
             trajs_orig_pad = trajectories_from_simulation(batch)  # do this to get padded versions of orig trajectories
@@ -139,6 +140,24 @@ def main():
 
             logger.log({'sampled': vid_sampled, 'deterministic': vid_deter},
                        Scope.TEST() / 'model_prediction_video/', i_step)
+
+            for l in range(model.levels):
+                valid = torch.where(compute_mask(targets_deter[l]['terminal']) < 0.5,
+                                    torch.tensor(1.0, dtype=torch.float32, device=model.device),
+                                    torch.tensor(0.0, dtype=torch.float32, device=model.device))
+                o_diff = (((torch.stack(pred_deter[l]['o']) - targets_deter[l]['o']) ** 2) * valid).mean(dim=(1, 2))
+                r_diff = (((torch.stack(pred_deter[l]['r']) - targets_deter[l]['r']) ** 2) * valid).mean(dim=(1, 2))
+                term_diff = (((torch.stack(pred_deter[l]['terminal']) - targets_deter[l]['terminal']) ** 2) * valid).mean(dim=(1, 2))
+
+                fig = plt.figure()
+                plt.suptitle(f'Trajectory deviation model level {l}')
+                plt.plot(o_diff.detach().cpu().numpy(), label='o')
+                plt.plot(r_diff.detach().cpu().numpy(), label='r')
+                plt.plot(term_diff.detach().cpu().numpy(), label='terminal')
+                plt.legend()
+                logger.log_plot(fig_to_img(fig), Scope.TEST() / f'model/trajectory_deviation_{l}')
+                plt.close(fig)
+                del fig
 
     # store model and output run id
     p = here() / cfg['final_model_path'][:cfg['final_model_path'].rindex('/')]

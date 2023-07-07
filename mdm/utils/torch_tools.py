@@ -380,6 +380,8 @@ def detach_dist(d: torch.distributions.Distribution):
     elif isinstance(d, torch.distributions.Independent):
         return torch.distributions.Independent(detach_dist(d.base_dist),
                                                reinterpreted_batch_ndims=d.reinterpreted_batch_ndims)
+    elif isinstance(d, torch.distributions.OneHotCategorical):
+        return type(d)(probs=d.probs.detach())
     # elif hasattr(d, 'logits'):
     #    return type(d)(logits=d.logits.detach())
     # elif hasattr(d, 'probs'):
@@ -417,6 +419,17 @@ def stack_dists(dists: List[torch.distributions.Distribution]):
         stacked_base_dists = stack_dists(base_dists)
         return torch.distributions.TransformedDistribution(transforms=transforms[0],
                                                            base_distribution=stacked_base_dists)
+    elif cls == torch.distributions.RelaxedBernoulli:
+        temperature = torch.stack([d.temperature for d in dists])
+        probs = torch.stack([d.probs for d in dists])
+        return torch.distributions.RelaxedBernoulli(temperature=temperature, probs=probs)
+    elif cls == torch.distributions.RelaxedOneHotCategorical:
+        temperature = torch.stack([d.temperature for d in dists])
+        probs = torch.stack([d.probs for d in dists])
+        return torch.distributions.RelaxedOneHotCategorical(temperature=temperature, probs=probs)
+    elif cls == torch.distributions.OneHotCategorical:
+        probs = torch.stack([d.probs for d in dists])
+        return torch.distributions.OneHotCategorical(probs=probs)
     else:
         raise ValueError(f'Unsupported distribution class: {cls}')
 
@@ -439,6 +452,13 @@ def concat_dists(dists: List[torch.distributions.Distribution],
     elif cls == torch.distributions.Bernoulli:
         probs = torch.concat([d.probs for d in dists], dim=dim)
         return torch.distributions.Bernoulli(probs=probs)
+    elif cls == torch.distributions.RelaxedOneHotCategorical:
+        temperature = torch.concat([d.temperature for d in dists], dim=dim)
+        probs = torch.concat([d.probs for d in dists], dim=dim)
+        return torch.distributions.RelaxedOneHotCategorical(temperature=temperature, probs=probs)
+    elif cls == torch.distributions.OneHotCategorical:
+        probs = torch.concat([d.probs for d in dists], dim=dim)
+        return torch.distributions.OneHotCategorical(probs=probs)
     else:
         raise ValueError(f'Unsupported distribution class: {cls}')
 
@@ -514,14 +534,19 @@ def pack_rnn_state(rnn_state: RnnStateType):
 def to_tensors(mem: List[Dict[str, int | float | np.single | np.double | bool | np.ndarray]],
                device: torch.device,
                dtypes: Union[List, Tuple] = None,
-               padding: Union[List, Tuple] = None):
+               padding: Union[List, Tuple, str] = None):
     if len(mem) > 1:
         fids = reduce(lambda a, b: set(a) | set(b), mem)
     else:
         fids = set(mem[0])
     assert 'mask' not in fids, 'found forbidden field id "mask" in mem'
     if dtypes is None: dtypes = [torch.float32 for _ in range(len(fids))]
-    if padding is None: padding = [0.0 for _ in range(len(fids))]
+    if padding is None:
+        padding = [0.0 for _ in range(len(fids))]
+        repeat_last = False
+    elif padding == 'repeat':
+        padding = [0.0 for _ in range(len(fids))]
+        repeat_last = True
     dtypes = {fid: dtype for fid, dtype in zip(fids, dtypes)}
     padding = {fid: pad for fid, pad in zip(fids, padding)}
     shapes = {fid: fval.shape[1:] for fid, fval in mem[0].items()}
@@ -546,6 +571,8 @@ def to_tensors(mem: List[Dict[str, int | float | np.single | np.double | bool | 
         flens = lengths[fid]
         for i in range(n_traj):
             cont[fid][0:flens[i], i] = data[fid][i]
+            if repeat_last and fid != 'a':
+                cont[fid][flens[i]:, i] = cont[fid][flens[i] - 1, i].unsqueeze(0)
 
     # mask for longest field per trajectory (valid for o, a, r, term, trunc but not for higher level a)
     cont['mask'] = torch.full((max(longest.values()), n_traj), fill_value=True, dtype=torch.float32, device=device)
@@ -595,7 +622,58 @@ def to_np(data_dict: Dict[str, Union[torch.Tensor, Dict]]):
 def compute_mask(terminals: torch.Tensor,
                  mode: str = 'default',
                  threshold: float | None = None,
-                 first_step_mask: torch.Tensor | None = None):
+                 first_step_mask: torch.Tensor | None = None,
+                 disable: bool = True):
+    with torch.no_grad():
+        terminals = terminals.detach()
+        d_time, d_batch = terminals.shape[:2]
+
+        # never mask first time step except first_step_mask tells us to
+        if first_step_mask is None:
+            first_step_mask = torch.zeros(1, d_batch, 1, dtype=terminals.dtype, device=terminals.device)
+        terminals = torch.concat([first_step_mask, terminals], dim=0)  # this shifts time one to the right
+        terminals = terminals[:-1]  # cut last time step since we don't need it
+        valid = 1.0 - terminals.to(dtype=torch.float32)  # invert to compute exponentially decreasing validity mask
+        valid = torch.cumprod(valid, dim=0)
+        mask = 1.0 - valid
+
+        if mode == 'deterministic' and threshold is not None:
+            mask = torch.where(mask > threshold,
+                               torch.tensor(1.0, device=terminals.device, dtype=terminals.dtype),
+                               torch.tensor(0.0, device=terminals.device, dtype=terminals.dtype))
+
+        return mask.detach()
+
+        if mode == 'deterministic' and threshold is not None:
+            terminals_transformed = torch.where(terminals > threshold,
+                                                torch.tensor(1.0, device=terminals.device, dtype=terminals.dtype),
+                                                torch.tensor(0.0, device=terminals.device, dtype=terminals.dtype))
+        elif mode == 'stochastic':
+            terminals_transformed = torch.distributions.Bernoulli(probs=torch.nn.functional.sigmoid(terminals)).sample()
+        elif mode == 'default':
+            terminals_transformed = terminals
+        else:
+            raise ValueError(f'Unknown mode: {mode}')
+
+        mask = torch.zeros_like(terminals)
+        if first_step_mask is not None:
+            mask[0] = first_step_mask
+
+        for t in range(1, d_time):
+            mask[t] = torch.maximum(mask[t - 1], terminals_transformed[t - 1])
+
+        # if disable:
+        #    mask = torch.zeros_like(mask)
+
+        return mask.detach()
+
+
+@compile_if_not_debug
+def compute_mask_old(terminals: torch.Tensor,
+                     mode: str = 'default',
+                     threshold: float | None = None,
+                     first_step_mask: torch.Tensor | None = None,
+                     disable: bool = True):
     with torch.no_grad():
         terminals = terminals.detach()
         d_time = terminals.shape[0]
@@ -606,8 +684,10 @@ def compute_mask(terminals: torch.Tensor,
                                                 torch.tensor(0.0, device=terminals.device, dtype=terminals.dtype))
         elif mode == 'stochastic':
             terminals_transformed = torch.distributions.Bernoulli(probs=torch.nn.functional.sigmoid(terminals)).sample()
-        else:
+        elif mode == 'default':
             terminals_transformed = terminals
+        else:
+            raise ValueError(f'Unknown mode: {mode}')
 
         mask = torch.zeros_like(terminals)
         if first_step_mask is not None:
@@ -615,6 +695,9 @@ def compute_mask(terminals: torch.Tensor,
 
         for t in range(1, d_time):
             mask[t] = torch.maximum(mask[t - 1], terminals_transformed[t - 1])
+
+        # if disable:
+        #    mask = torch.zeros_like(mask)
 
         return mask.detach()
 

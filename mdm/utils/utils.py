@@ -133,7 +133,10 @@ def cfg_infer_missing_values(cfg: dict,
                              env: gym.Env):
     # infer missing config values for RSSMs
     for i_module, module_args in enumerate(cfg['mdm']['rssm_modules']):
-        d_state = module_args['d_z'] + module_args['d_h']
+        if module_args['latent_dist'] == 'normal':
+            d_state = module_args['d_z'] + module_args['d_h']
+        elif module_args['latent_dist'] == 'categorical':
+            d_state = module_args['d_z'] * module_args['n_latent_categories'] + module_args['d_h']
         if i_module == 0:
             module_args['d_a'] = env.action_space.shape[0]
             s_o = env.observation_space.shape
@@ -1049,7 +1052,8 @@ def visualize_overlaid_trajectories(*trajectories: Dict[str, np.ndarray]):
     assert len(n_steps) == 1, f'All provided trajectories must have the same length, but found {n_steps}!'
     n_steps = n_steps.pop()
 
-    fig, ax = plt.subplots(2, 2, figsize=(10, 10))
+    fig, ax = plt.subplots(2, 2, figsize=(6, 6))
+    plt.tight_layout()
     color_cycle = iter(plt.rcParams['axes.prop_cycle'].by_key()['color'])
 
     ax[0, 0].set_title('Observation')

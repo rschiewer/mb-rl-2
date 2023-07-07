@@ -1,10 +1,10 @@
 ---
 neptune_cfg: "../neptune_settings.yaml"
-env_name: "gym_nav2d:nav2dEasy-v0" #"gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-v0"
+env_name: "gym_nav2d:nav2dEasySparse-v0" #"gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-v0"
 prefill_memory: "random" #"offline-dataset" # "random", False
 prefill_episodes: 1000
 train_samples: null #"nav2d_Easy_train.samples" #"nav2d_Easy_train.samples"
-test_samples: "nav2d_Easy_expert.samples" #"nav2d_Easy_expert.samples"
+test_samples: "nav2d_EasySparse_expert.samples" #"nav2d_Easy_expert.samples"
 checkpoint_path: "checkpoints"
 final_model_path: "trained_models/model"
 pretrained_model: null #"MBRL-2908"
@@ -50,13 +50,14 @@ mdm:
    links: []  # Links for observation filters between RSSM levels
    upwards_filters: []
    warmup_steps: [ 'rand' ]
-   kl_betas: [ 0.1 ]
+   kl_betas: [ 1.0 ]
    kl_reg_betas: [ 0.0 ]
    ema_regularization: 0.0
    ema_coeff: 0.95
    ema_update_interval: 5
-   latent_overshooting: []
-   temporal_activation_regularization: 1
+   latent_overshooting: [ 10 ]
+   temporal_activation_regularization: 0
+   kl_balance: 0.8
 
 optim:
    type: 'adam'  # 'adamW' 'adam'
@@ -64,6 +65,8 @@ optim:
 
 trainer:
    n_train_steps: 6000
+   freeze_model: False
+   stop_collect: False
    eval_interval: 50
    d_batch: 400
    subtrajectory_len: 20
@@ -79,7 +82,7 @@ agents:
       # level 0
       - eps_exploration_init: 0.5
         eps_exploration_coeff: 0.999
-        act_entropy_exploration_coeff: 0.01
+        act_entropy_exploration_coeff: 0.1
         learn_act_entropy_exploration_coeff: False
         novelty_exploration_coeff: 0.1
         tr_policy_kl_coeff: 0.1
@@ -99,11 +102,11 @@ agents:
       # level 0
       - eps_exploration_init: 0.3
         eps_exploration_coeff: 0.999
-        act_entropy_exploration_coeff: 0.01
+        act_entropy_exploration_coeff: 0.1
         learn_act_entropy_exploration_coeff: False
         novelty_exploration_coeff: 0.1
         tr_policy_kl_coeff: 0.1
-        tr_policy_ema_update_coeff: 0.98
+        tr_policy_ema_update_coeff: 0.95
         use_ema_world_model: False
         lr_actor: 0.0005
         lr_critic: 0.002

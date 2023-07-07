@@ -1,4 +1,5 @@
 import copy
+import random
 from itertools import chain
 from typing import Tuple, Sequence, Optional, Dict, List
 from collections import namedtuple, OrderedDict
@@ -163,10 +164,11 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                   **kwargs):
         # if a terminal transition occurs, the terminal flag is close to 1 and would block out the reward in that step
         # so shift terminals list one to the right and make first element zeros
-        mask = compute_mask(torch.stack(terminal), first_step_mask=first_step_mask)
+        terminal = torch.stack(terminal)
+        mask = compute_mask(terminal, first_step_mask=first_step_mask, disable=False)
 
-        if GlobalLogger.bound and self._current_train_step % 20 == 0:
-            fig = plt.figure(figsize=(8, 8))
+        if GlobalLogger.can_log('mask_agent', self._current_train_step):
+            fig = plt.figure(figsize=(5, 5))
             plt.matshow(mask.detach().cpu().numpy().squeeze(), fignum=fig, aspect='auto')
             plt.colorbar()
             agent_name = 'goal_seeking' if self.goal_seeking else 'r_max'
@@ -191,26 +193,30 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         # TODO: bootstrap ist value vom letzten state, sollte ich die Returns nur bis zum vorletzten step ausrechnen
         #       und mache es gerade falsch weil der value des letzten states doppeld gezählt wird?
 
-        # value function prediction for last time step is bootstrap for return and doesn't have a target itself
         valid = (1 - mask)  #
-        valid_r = (valid * r)[:-1]
+        valid_r = valid * r
+        valid_v = valid * v
         #valid_bootstrap = (valid * torch.minimum(v, ema_v))[-1]
-        valid_bootstrap = (valid * v)[-1]
-        v = v[:-1]
-        ema_v = ema_v[:-1]
-        a_dist = a_dist[:-1]
-        ema_a_dist = ema_a_dist[:-1]
-        model_novelty = model_novelty[:-1]
-        valid = valid[:-1]
-        returns = self._calc_returns_simple(valid_r, valid_bootstrap, gamma=0.99)
+        valid_bootstrap = ((1 - terminal) * valid_v + terminal * valid_r)[-1]
+        #v = v
+        #ema_v = ema_v
+        #a_dist = a_dist
+        #ema_a_dist = ema_a_dist
+        #model_novelty = model_novelty
+        #valid = valid
+        if self.goal_seeking:
+            gamma = 1.0
+        else:
+            gamma = 0.99
+        returns = self._calc_returns_simple(valid_r, valid_bootstrap, gamma=gamma)
 
-        act_entropy_reward_aug = self.alpha * stack_dists(a_dist).entropy().sum(dim=-1, keepdims=True)
         #advantage = returns - torch.minimum(v, ema_v).detach()
-        #advantage = returns - v.detach()
-        #policy_loss = valid * (-(advantage + act_entropy_reward_aug))  # validity mask multiplied directly
-        policy_loss = valid * (-(returns + act_entropy_reward_aug))  # validity mask multiplied directly
+        advantage = returns - v.detach()
+        policy_loss = valid * (-advantage)  # validity mask multiplied directly
+        #policy_loss = valid * (-returns)  # validity mask multiplied directly
         model_novelty_reward_aug = valid * self.mu * torch.stack(model_novelty).unsqueeze(-1).detach()
-        value_target = returns.detach() + model_novelty_reward_aug  # validity mask is multiplied with value_loss
+        act_entropy_reward_aug = self.alpha * stack_dists(a_dist).entropy().sum(dim=-1, keepdims=True)
+        value_target = returns.detach() + model_novelty_reward_aug + model_novelty_reward_aug  # validity mask is multiplied with value_loss
         value_loss = valid * torch.nn.functional.smooth_l1_loss(v, value_target, reduction='none')
         ppo_loss = valid * self.beta * torchd.kl_divergence(detach_dist(stack_dists(ema_a_dist)),
                                                             stack_dists(a_dist)).sum(dim=-1, keepdims=True)
@@ -297,7 +303,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         #    raise RuntimeError(f'Invalid loss in {self._agent_repr} detected: {invalid_losses}')
 
         losses['total'].backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), 100.0)
+        torch.nn.utils.clip_grad_norm_(self.parameters(), 10.0)
         actor_optimizer.step()
         critic_optimizer.step()
 
@@ -447,9 +453,10 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                                                                   level=self.level, n_steps=1, n_warmup=0,
                                                                   use_ema_modules=self.use_slow_world_model,
                                                                   memory=env_mem, memory_other=ema_env_mem,
-                                                                  sample_state=sample_model, sample_output=sample_model,
+                                                                  sample_state=sample_model, sample_output=False,
                                                                   reconstruct=reconstruct)
-            r = self.build_step_reward(mem[self.observation_key][-1], mem['r'][-1], goal)
+            #r = self.build_step_reward(mem['z_dist'][-1], mem['r'][-1], goal)
+            r = self.build_step_reward(mem['z'][-1], mem['r'][-1], goal)
             novelty = kl_divergence(mem_ema['z_dist'][-1], mem['z_dist'][-1]).sum(dim=-1)
             timestep = {'o': agent_o, 'a': a, 'r': r, 'terminal': mem['terminal'][-1], 'v': v, 'ema_v': ema_v,
                         'a_dist': a_dist, 'ema_a_dist': ema_a_dist, 'model_novelty': novelty}
@@ -481,9 +488,9 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
 
     @staticmethod
     def _calc_returns_simple(rewards, state_value_bootstrap, gamma):
-        returns = []
         R = state_value_bootstrap.detach()
-        for r in torch.flip(rewards, dims=(0,)):
+        returns = [R]
+        for r in torch.flip(rewards[:-1], dims=(0,)):
             R = r + gamma * R
             returns.insert(0, R)
         return torch.stack(returns)

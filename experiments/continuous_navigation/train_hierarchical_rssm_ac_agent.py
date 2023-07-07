@@ -6,6 +6,7 @@ import gym.vector
 
 from mdm.training.train import train_model, agent_eval_mode, build_rssms, build_agents
 from mdm.utils.utils import *
+from mdm.utils.analysis_tools import plot_trajectory_stats
 from mdm.training.offline_rl_driver import OfflineRLDriver, SamplingType
 from mdm.logging.neptune_logger import NeptuneLogger
 from mdm.logging.not_logger import NotLogger
@@ -28,7 +29,7 @@ def main():
         logger = NeptuneLogger(**neptune_cfg)
     else:
         logger = NotLogger()
-    GlobalLogger.bind(logger)  # used for debugging
+    GlobalLogger.bind(logger, {'mask_model': 25, 'mask_latent_overshooting': 25, 'mask_agent': 25})  # for debugging
 
     if args.d_batch:
         cfg['trainer']['d_batch'] = args.d_batch
@@ -92,11 +93,11 @@ def main():
         case False:
             print('starting with empty training memory...', flush=True)
 
-    # fig, ani = visualize_trajectory(train_mem[0])
-    # gif = anim_to_gif(ani)
-    # plt.show()
-    # fig = plot_trajectory_stats(train_mem, 20)
-    # plt.show()
+    #fig, ani = visualize_trajectory(train_mem[0])
+    #gif = anim_to_gif(ani)
+    #plt.show()
+    #fig = plot_trajectory_stats(train_mem, 20)
+    #plt.show()
 
     train_driver = OfflineRLDriver(train_mem, sampling_type=SamplingType.RANDOM)
     test_mem = load_memory(here() / cfg['test_samples'])

@@ -50,7 +50,7 @@ def expert_collect_policy(env: CacheLastStepEnv):
 
 
 if __name__ == '__main__':
-    map_version = 'Easy'
+    map_version = 'EasySparse'
     env = gym.make(f'gym_nav2d:nav2d{map_version}-v0')
     env = CacheLastStepEnv(env)
     n_episodes_train = 5000

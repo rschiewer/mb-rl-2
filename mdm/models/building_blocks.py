@@ -438,15 +438,18 @@ class BinomialDecoder(OutputDecoder):
         params = self._mdl(x_enc)
         params = params.reshape(*params.shape[:-1], *self.s_x_orig)
         probs = torch.nn.functional.sigmoid(params)
-        d = torch.distributions.ContinuousBernoulli(probs=probs)
-        #d = torch.distributions.Bernoulli(probs=probs)
+        #d = torch.distributions.ContinuousBernoulli(probs=probs)
+        d = torch.distributions.Bernoulli(probs=probs)
         # d = torch.distributions.Independent(d, 1)
-        # d = torch.distributions.RelaxedBernoulli(temperature=self._temperature, logits=params)
+        #temp = torch.tensor(0.1, dtype=x_enc.dtype, device=x_enc.device)
+        #d = torch.distributions.RelaxedBernoulli(temperature=temp, probs=probs)
         if sample:
-            s = d.rsample()
-            #s = d.sample()
+            #s = d.rsample()
+            s = d.sample()
+            #s = d.sample() + probs - probs.detach()
         else:
-            s = d.mean
+            #s = d.mean
+            s = d.probs
             # s = d.probs.round().to(torch.float32) + d.probs - d.probs.detach()
         return d, s
         # d = torch.distributions.Bernoulli(logits=params)
@@ -751,6 +754,22 @@ class LearnableUpwardsFilter(UpwardsFilter):
         return self._pipeline(x, sample)
 
 
+class ConcatUpwardsFilter(UpwardsFilter):
+    
+    def __init__(self,
+                 window_size: int,
+                 pad_value: float = 0.0):
+        super().__init__(window_size)
+        self.pad_value = pad_value
+
+    def forward(self,
+                x: torch.Tensor,
+                mask: torch.Tensor | None = None,
+                context: Optional[torch.Tensor] = None) -> torch.Tensor:
+        x, mask, n_pad = self._preproc(x, mask, self.pad_value)
+        x = torch.concat()
+
+
 class IdentityUpwardsFilter(UpwardsFilter):
 
     def __init__(self):
@@ -798,12 +817,18 @@ class RSSMCell(torch.nn.Module):
                  activation: str = 'relu',
                  rnn_type: str = 'lstm',
                  latent_dist: str = 'normal',
+                 n_latent_categories: int = 32,
                  name: str = 'rssm_cell'):
         super().__init__()
 
-        assert o_decoder.d_x_encoded == d_z + d_h
-        assert r_decoder.d_x_encoded == d_z + d_h
-        assert term_decoder.d_x_encoded == d_z + d_h
+        if latent_dist == 'normal':
+            assert o_decoder.d_x_encoded == d_z + d_h
+            assert r_decoder.d_x_encoded == d_z + d_h
+            assert term_decoder.d_x_encoded == d_z + d_h
+        elif latent_dist == 'categorical':
+            assert o_decoder.d_x_encoded == d_z * n_latent_categories + d_h
+            assert r_decoder.d_x_encoded == d_z * n_latent_categories + d_h
+            assert term_decoder.d_x_encoded == d_z * n_latent_categories + d_h
 
         self.d_z = d_z
         self.d_h = d_h
@@ -820,7 +845,7 @@ class RSSMCell(torch.nn.Module):
         self.rnn_type = rnn_type
         self.latent_dist = latent_dist
 
-        self.n_latent_categories = 16
+        self.n_latent_categories = n_latent_categories
         if latent_dist == 'normal':
             d_z_final = d_z * 2
             d_z_smpl = d_z
@@ -927,7 +952,8 @@ class RSSMCell(torch.nn.Module):
         # if torch.isnan(z_embed).any():
         #    raise RuntimeError(f'Invalid NAN embedded z in imagine: {z_embed}')
 
-        inp = torch.concat([last_state['z'], a, context], dim=-1)
+        z = torch.flatten(last_state['z'], start_dim=1)  # in case of categorical latents this is necessary
+        inp = torch.concat([z, a, context], dim=-1)
         inp = inp.unsqueeze(0)  # add time dim
         h, next_rnn_state = self._rnn(inp, last_state['rnn_state'])
         h = h.squeeze(0)  # remove time dim
@@ -976,7 +1002,7 @@ class RSSMCell(torch.nn.Module):
                 sample_state: bool = True,
                 sample_output: bool = True):
         if o is None and last_state is None:
-            raise ValueError('Need at least (o_current, r_current, term_current) or last_state')
+            raise ValueError('Need at least "o" or "last_state"')
         if o is None and use_posterior:
             raise ValueError('Can\'t use posterior if no ground truth data is provided')
 
@@ -987,7 +1013,8 @@ class RSSMCell(torch.nn.Module):
             h, next_state = self.imagine(a, last_state, context, sample_state)
 
         # predict outputs
-        s = torch.concat([h, next_state['z']], dim=-1)
+        z = torch.flatten(next_state['z'], start_dim=1)  # in case of categorical latents this is necessary
+        s = torch.concat([h, z], dim=-1)
         r_dist, r_smpl = self.r_decoder(s, sample_output)
         term_dist, term_smpl = self.term_decoder(s, sample_output)
         if reconstruct:

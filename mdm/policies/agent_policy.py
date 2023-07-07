@@ -81,7 +81,7 @@ class LatentAgentPolicy(Policy):
                                                                   start_state=self._current_env_state,
                                                                   level=self.agent.level,
                                                                   use_ema_modules=self._use_ema_modules,
-                                                                  sample_state=False, sample_output=False)
+                                                                  sample_state=True, sample_output=False)
 
         if torch.isnan(self._current_env_state['z']).any():
             raise RuntimeError(f'Invalid NAN state in step {env.current_step}: {self._current_env_state["z"]}')
@@ -166,7 +166,8 @@ class HierarchicalLatentAgentPolicy(Policy):
             #data_filtered['a'] = actions  # we don't want filtered actions from lower level, but original ones from this
 
             n_steps = self.model.strides[i_lvl]
-            data_filtered = self.model.filter_up(**self._env_data_below_cache[i_lvl], level=i_lvl, n_steps=n_steps)
+            data_filtered = self.model.filter_up(**self._env_data_below_cache[i_lvl], level=i_lvl, n_steps=n_steps,
+                                                 respect_terminal_flag=True)
             data_filtered['a'] = self._act_cache[i_lvl].pop(0).unsqueeze(0)  # take oldest action from cache
 
             # memorize the latest inputs the model has seen as they are needed for the agent during planning
@@ -174,7 +175,7 @@ class HierarchicalLatentAgentPolicy(Policy):
             mem, _, new_state = self.model.forward_static(data_filtered, start_state=state, level=i_lvl,
                                                           n_steps=-1, n_warmup=-1,
                                                           use_ema_modules=self._use_ema_modules,
-                                                          sample_state=False, sample_output=False)
+                                                          sample_state=True, sample_output=False)
             self._grounded_env_states[i_lvl] = new_state
 
             # store updated state in cache for upper level
@@ -205,8 +206,8 @@ class HierarchicalLatentAgentPolicy(Policy):
         # one r_max step on highest level
         state = self._grounded_env_states[i_highest]
         agent = self.model.r_max_agents[i_highest][0]
-        simulation = agent.act_in_sim(env_state=state, sim_env=self.model, n_steps=1, sample_actions=True,
-                                      sample_model=False, disable_exploration=True, reconstruct=i_highest > 0)
+        simulation = agent.act_in_sim(env_state=state, sim_env=self.model, n_steps=1, sample_actions=False,
+                                      sample_model=True, disable_exploration=True, reconstruct=i_highest > 0)
         self._act_cache[i_highest] += simulation['agent']['a']
 
         if i_highest > 0:
@@ -218,11 +219,11 @@ class HierarchicalLatentAgentPolicy(Policy):
                 new_goals = []
                 for goal in goals_from_above:
                     simulation = agent.act_in_sim(env_state=state, sim_env=self.model, n_steps=n_steps, goal=goal,
-                                                  sample_actions=True, disable_exploration=True,
-                                                  sample_model=False, reconstruct=True)
+                                                  sample_actions=False, disable_exploration=True,
+                                                  sample_model=True, reconstruct=True)
                     state = simulation['model_state']
                     self._act_cache[i_lvl] += simulation['agent']['a']
-                    new_goals += simulation['model']['o']  # TODO: this was 'z' before, check what's correct
+                    new_goals += simulation['model']['o']
                 goals_from_above = new_goals
 
         self._action_queue += self._act_cache[0]
