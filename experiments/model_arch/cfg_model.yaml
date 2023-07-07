@@ -1,0 +1,72 @@
+---
+neptune_cfg: "../neptune_settings.yaml"
+env_name: "gym_nav2d:nav2dEasySparse-v0" #"gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-v0"
+random_episodes: 10000
+expert_episodes: 10000
+checkpoint_path: "checkpoints"
+final_model_path: "trained_models/model"
+pretrained_model: null #"MBRL-2908"
+
+mdm:
+   rssm_modules:
+      # RSSM no. 1
+      -  d_z: 10
+         d_h: 64
+         d_a: null
+         n_hidden_layers: 1
+         hidden_dropout: 0.1
+         epsilon: 0.1
+         z_prior_lws: [ 64, 64 ]
+         z_post_lws: [ 64, 64 ]
+         layer_norm: True
+         activation: "relu"
+         rnn_type: "lstm"
+         latent_dist: "categorical"  #"normal" "categorical" "bernoulli"
+         n_latent_categories: 16
+         o_encoder:
+            class: "MLPEncoder"
+            d_x_encoded: 32
+            lws: [ 64, 64 ]
+            layer_norm: True
+            activation: "relu"
+         o_decoder:
+            class: "GaussianDecoder"
+            lws: [ 64, 64 ]
+            layer_norm: True
+            activation: "relu"
+            epsilon: 0.1
+         r_decoder:
+            class: "GaussianDecoder"
+            lws: [ 64, 64 ]
+            layer_norm: True
+            activation: "relu"
+            epsilon: 0.1
+         term_decoder:
+            class: "BinomialDecoder"
+            lws: [ 64, 64 ]
+            layer_norm: True
+            activation: "relu"
+   links: []  # Links for observation filters between RSSM levels
+   upwards_filters: []
+   warmup_steps: [ 'rand' ]
+   kl_betas: [ 0.1 ]
+   kl_reg_betas: [ 0.00 ]
+   ema_regularization: 0.0
+   ema_coeff: 0.95
+   ema_update_interval: 5
+   latent_overshooting: [ 10 ]
+   temporal_activation_regularization: 0
+   kl_balance: 0.8
+
+optim:
+   type: 'adam'  # 'adamW' 'adam'
+   lr: 0.001 #0.0002
+
+trainer:
+   n_train_steps: 6000
+   eval_interval: 50
+   d_batch: 200
+   subtrajectory_len: 20
+   model_train_steps: [ -1 ]
+   checkpoint_interval: 100
+   collect_envs: 50
