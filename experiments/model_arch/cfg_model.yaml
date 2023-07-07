@@ -1,8 +1,8 @@
 ---
 neptune_cfg: "../neptune_settings.yaml"
 env_name: "gym_nav2d:nav2dEasySparse-v0" #"gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-v0"
-random_episodes: 100
-expert_episodes: 100
+random_episodes: 10000
+expert_episodes: 10000
 checkpoint_path: "checkpoints"
 final_model_path: "trained_models/model"
 pretrained_model: null #"MBRL-2908"

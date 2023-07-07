@@ -15,25 +15,7 @@ from mdm.logging.not_logger import NotLogger
 from mdm.logging.logger import Scope, GlobalLogger
 from mdm.training.gym_driver import collect_data, GymEpisodeDriver
 from mdm.policies.agent_policy import *
-
-
-def expert_collect_policy(env: CacheLastStepVecEnv):
-    o = env.last_o
-    agent_pos = o[:, :2]
-    goal_pos = o[:, 2:4]
-    distance = o[:, 4]
-    adjacent = (goal_pos[:, 1] - agent_pos[:, 1])
-    disjacent = (goal_pos[:, 0] - agent_pos[:, 0])
-    angle = np.arctan2(adjacent, disjacent) + math.pi * 1.5
-
-    dist_a = np.where(distance > 0.05, 1.0, 0.1)
-    angle = np.where(angle > 2 * math.pi, angle - 2 * math.pi, angle)
-    angle_a = angle / (2 * math.pi) * 2 - 1
-    angle_a += (np.random.random() - 0.5) * 0.5
-    angle_a = np.clip(angle_a, -1.0, 1.0)
-    a = np.stack([angle_a, dist_a], axis=1).astype(np.float32)
-
-    return a
+from mdm.policies.expert_policies import nav2d_expert_policy
 
 
 def main():
@@ -86,7 +68,7 @@ def main():
     train_mem = []
     rand_driver = GymEpisodeDriver(collect_env, lambda *x: collect_env.action_space.sample())
     rand_driver.interact(cfg['random_episodes'], train_mem)
-    expert_driver = GymEpisodeDriver(collect_env, expert_collect_policy)
+    expert_driver = GymEpisodeDriver(collect_env, nav2d_expert_policy)
     expert_driver.interact(cfg['expert_episodes'], train_mem)
 
     # fig, ani = visualize_trajectory(train_mem[0])
