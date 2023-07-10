@@ -3,6 +3,7 @@ import math
 import pickle
 from multiprocessing import Pool
 
+from gym_nav2d.envs import Nav2dEnv
 from tqdm import tqdm
 import numpy as np
 import matplotlib.pyplot as plt
@@ -50,7 +51,6 @@ def nav2d_expert_policy_old(env: CacheLastStepEnv):
 
 
 def nav2d_expert_policy(env: CacheLastStepEnv | CacheLastStepVecEnv):
-
     if isinstance(env, CacheLastStepEnv):
         o = env.last_o
         agent_pos = o[:2]
@@ -79,8 +79,14 @@ def nav2d_expert_policy(env: CacheLastStepEnv | CacheLastStepVecEnv):
         distance = o[:, 4]
         d_batch = agent_pos.shape[0]
 
-        noise = (np.random.random((d_batch, 2)) - 0.5) * 0.5
-        direction_vec = np.clip((goal_pos - agent_pos) / np.linalg.norm(goal_pos - agent_pos) + noise, -1.0, 1.0)
+        #noise = (np.random.random((d_batch, 2)) - 0.5) * 0.5
+        #direction_vec = np.clip((goal_pos - agent_pos) / np.linalg.norm(goal_pos - agent_pos, axis=1, keepdims=True) + noise, -1.0, 1.0)
+        #a = direction_vec.astype(np.float32)
+
+        direction_vec_world_coords = (goal_pos - agent_pos) * 255  # max world size
+        direction_vec_world_coords_clip = np.clip(direction_vec_world_coords, -10, 10)  # max step size
+        #direction_vec_world_coords /= np.linalg.norm(direction_vec_world_coords, axis=1, keepdims=True)
+        direction_vec = direction_vec_world_coords_clip / 10
         a = direction_vec.astype(np.float32)
 
     return a
