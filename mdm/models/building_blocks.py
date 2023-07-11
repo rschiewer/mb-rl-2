@@ -449,8 +449,8 @@ class BinomialDecoder(OutputDecoder):
             #s = d.sample() + probs - probs.detach()
         else:
             #s = d.mean
-            s = d.probs
-            # s = d.probs.round().to(torch.float32) + d.probs - d.probs.detach()
+            #s = d.probs
+            s = d.probs.round().to(torch.float32) + d.probs - d.probs.detach()
         return d, s
         # d = torch.distributions.Bernoulli(logits=params)
         # if sample:
