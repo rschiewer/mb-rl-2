@@ -1,19 +1,18 @@
 import argparse
-from itertools import chain
-import math
 
 import gym.vector
+import neptune
 from tqdm import tqdm
 
-from mdm.training.train import train_model, agent_eval_mode, build_rssms, build_agents
+from mdm.training.train import build_rssms, build_model_opt
+from mdm.utils.gym_nav2d_tools import visualize_overlaid_trajectories
 from mdm.utils.utils import *
-from mdm.utils.torch_tools import to_np
-from mdm.utils.analysis_tools import plot_trajectory_stats
+from mdm.utils.torch_tools import to_np, to_tensors
 from mdm.training.offline_rl_driver import OfflineRLDriver, SamplingType
 from mdm.logging.neptune_logger import NeptuneLogger
 from mdm.logging.not_logger import NotLogger
 from mdm.logging.logger import Scope, GlobalLogger
-from mdm.training.gym_driver import collect_data, GymEpisodeDriver
+from mdm.training.gym_driver import GymEpisodeDriver
 from mdm.policies.agent_policy import *
 from mdm.policies.expert_policies import nav2d_expert_policy
 
