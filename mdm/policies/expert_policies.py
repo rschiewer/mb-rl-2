@@ -15,7 +15,7 @@ from mdm.memory.trajectory_memory import TrajectoryMemory
 from mdm.gridworld.gridworld import Gridworld, CellType, FullyObservableGridworld
 from mdm.utils.utils import here, to_np_arrays, store_memory
 from mdm.utils.gym_wrappers import CacheLastStepEnv, CacheLastStepVecEnv
-from mdm.utils.utils import visualize_trajectory
+from mdm.utils.gym_nav2d_tools import visualize_trajectory
 
 
 def nav2d_expert_policy_old(env: CacheLastStepEnv):

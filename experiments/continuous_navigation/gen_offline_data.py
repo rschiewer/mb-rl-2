@@ -15,7 +15,7 @@ from mdm.gridworld.gridworld import Gridworld, CellType, FullyObservableGridworl
 from mdm.utils.utils import here, to_np_arrays, store_memory
 from mdm.utils.gym_wrappers import CacheLastStepEnv
 from mdm.policies.expert_policies import nav2d_expert_policy
-from mdm.utils.utils import visualize_trajectory
+from mdm.utils.gym_nav2d_tools import visualize_trajectory
 
 if __name__ == '__main__':
     map_version = 'EasySparse'
