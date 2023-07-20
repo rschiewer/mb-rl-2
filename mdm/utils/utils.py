@@ -340,13 +340,22 @@ def to_onehot(x: Union[torch.Tensor, np.ndarray],
 
 
 def fig_to_img(fig: plt.Figure,
-               clear_fig: bool = True):
+               clear_fig: bool = True,
+               minimize_size: bool = True):
     buffer = io.BytesIO()
     fig.savefig(buffer, bbox_inches='tight')
+    #print(buffer.tell() / 1024)
     if clear_fig:
         plt.clf()
     buffer.seek(0)
-    return Image.open(buffer)
+    img = Image.open(buffer)
+    if minimize_size:
+        opt_buffer = io.BytesIO()
+        img.save(opt_buffer, format='GIF', optimize=True)
+        #print(opt_buffer.tell() / 1024)
+        opt_buffer.seek(0)
+        img = Image.open(opt_buffer)
+    return img
 
 
 def anim_to_gif(anim: animation.Animation,
@@ -365,11 +374,18 @@ def anim_to_gif(anim: animation.Animation,
 
 
 def anim_to_vid(anim: animation.Animation,
-                fps: int = 10):
+                fps: int = 10,
+                dpi: int = 50):
     timestamp = time.time_ns()
     pid = os.getpid()
     tmp_file_name = f'.{pid}_{timestamp}_video_anim.mp4'
-    anim.save(tmp_file_name, writer='ffmpeg', fps=fps)
+    extra_args = ['-vcodec', 'libx264', '-pix_fmt', 'yuv420p']
+    writer = animation.writers['ffmpeg'](fps=fps, extra_args=extra_args)
+    anim.save(tmp_file_name, writer=writer, dpi=dpi)
+    #print(os.path.getsize(tmp_file_name) / 1024 )
+
+    # old version
+    #anim.save(tmp_file_name, writer='ffmpeg', fps=fps, dpi=dpi)
 
     f = InMemoryFile.consume_file(tmp_file_name)
 
