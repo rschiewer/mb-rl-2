@@ -22,7 +22,8 @@ from mdm.logging.logger import GlobalLogger, Scope
 
 class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
 
-    def __init__(self, level: int,
+    def __init__(self,
+                 level: int,
                  observation_key: str,
                  d_o: int,
                  d_a: int,
@@ -43,6 +44,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                  novelty_exploration_coeff: float = 0.0,
                  use_ema_world_model: bool = False,
                  goal_seeking: bool = False,
+                 dynamics_loss: bool = True,
                  **kwargs):
         super().__init__()
 
@@ -56,16 +58,14 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         if min_a:
             if isinstance(min_a, float):
                 min_a = [min_a for _ in range(d_a)]
-            self.min_a = torch.nn.Parameter(torch.tensor(min_a, dtype=torch.float32))
-            self.min_a.requires_grad = False
+            self.min_a = torch.nn.Parameter(torch.tensor(min_a, dtype=torch.float32), requires_grad=False)
         else:
             self.min_a = None
 
         if max_a:
             if isinstance(max_a, float):
                 max_a = [max_a for _ in range(d_a)]
-            self.max_a = torch.nn.Parameter(torch.tensor(max_a, dtype=torch.float32))
-            self.max_a.requires_grad = False
+            self.max_a = torch.nn.Parameter(torch.tensor(max_a, dtype=torch.float32), requires_grad=False)
         else:
             self.max_a = None
         self.ema_coeff = tr_policy_ema_update_coeff
@@ -89,13 +89,10 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         for param in self._ema_actor_net.parameters(): param.detach_()
         for param in self._ema_critic_net.parameters(): param.detach_()
         self._current_train_step = 0
+        self.dynamics_loss = dynamics_loss
 
     # @torch.compile
     def scale_action(self, action):
-        #if self.min_a is not None and self.max_a is not None:
-        #    a_scaled = torch.tanh(action) * (self.max_a - self.min_a) / 2 + (self.min_a + self.max_a) / 2
-        #else:
-        #    a_scaled = action
         if self.min_a is not None and self.max_a is not None:
             action = action * (self.max_a - self.min_a) / 2 + (self.min_a + self.max_a) / 2
         action = torch.clamp(action, self.min_a + torch.finfo().eps, self.max_a - torch.finfo().eps)
@@ -108,11 +105,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         # TODO: test penalty for too large pre-scaled activations
         x = actor_net(x)
         mu, logvar = torch.tensor_split(x, 2, dim=-1)
-        #mu = torch.tanh(mu) * (self.max_a - self.min_a) / 2 + (self.min_a + self.max_a) / 2
         sigma = torch.nn.functional.softplus(logvar) + 0.01
-        #d = torch.distributions.Normal(loc=mu, scale=sigma)
-        #transforms = [torch.distributions.TanhTransform()]
-        #d = torch.distributions.TransformedDistribution(d, transforms)
         d = SquashedNormal(loc=mu, scale=sigma)
         return d
 
@@ -136,30 +129,93 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         if sample:
             a_smpl = a_dist.rsample()
         else:
-            a_smpl = a_dist.loc
+            a_smpl = a_dist.mean
 
+        # adding random variance directly to the SquashedNormal destabilizes training a lot, not sure why though
         if self.eps > 0 and self.training and not disable_exploration:
-            noise = torchd.Normal(loc=torch.zeros_like(a_smpl), scale=torch.full_like(a_smpl, self.eps)).sample()
-            a_smpl = a_smpl + noise
+            a_smpl = a_smpl + torch.normal(torch.zeros_like(a_smpl), torch.full_like(a_smpl, self.eps))
 
         a_smpl = self.scale_action(a_smpl)
 
         return a_dist, a_smpl, state_values
 
+    def act_in_sim(self,
+                   env_state: Dict[str, torch.Tensor],
+                   sim_env: 'HierarchicalRSSM',
+                   n_steps: int,
+                   goal: torch.Tensor = None,
+                   agent_memory: Dict[str, List[torch.Tensor]] | None = None,
+                   disable_exploration: bool = False,
+                   sample_actions: bool = True,
+                   sample_model: bool = True,
+                   reconstruct: bool = True):
+        """
+        This function can
+        * train agent
+        * train model
+        * let agent follow a goal
+        * let agent maximize rewards
+        """
+        agent_memory = {} if agent_memory is None else agent_memory
+        env_mem, ema_env_mem = {}, {}
+        for t in range(n_steps):
+            agent_o = self.preproc_o(env_state, goal)
+
+            a_dist, a, v = self(agent_o, sample=sample_actions, disable_exploration=disable_exploration)
+
+            if torch.isnan(env_state['z']).any() or torch.isinf(env_state['z']).any():
+                raise RuntimeError(f'Invalid env state in act_in_sim: {env_state["z"]}')
+            if torch.isnan(agent_o).any() or torch.isinf(agent_o).any():
+                raise RuntimeError(f'Invalid agent observation in act_in_sim: {agent_o}')
+            if torch.isnan(a).any() or torch.isinf(a).any():
+                raise RuntimeError(f'Invalid agent action in act_in_sim: {a}')
+
+            ema_a_dist, _, ema_v = self(agent_o, use_ema_modules=True, sample=sample_actions,
+                                        disable_exploration=disable_exploration)
+            trajectory = {'o': None, 'a': a.unsqueeze(0), 'r': None, 'terminal': None}
+            mem, mem_ema, next_env_state = sim_env.forward_static(trajectory=trajectory, start_state=env_state,
+                                                                  level=self.level, n_steps=1, n_warmup=0,
+                                                                  use_ema_modules=self.use_slow_world_model,
+                                                                  memory=env_mem, memory_other=ema_env_mem,
+                                                                  sample_state=sample_model, sample_output=False,
+                                                                  reconstruct=reconstruct)
+
+            # TODO: check if the correct time step's z is used for computing rewards and if the correct time step's z is stored
+            # r = self.build_step_reward(mem['z_dist'][-1], mem['r'][-1], goal)
+            r = self.build_step_reward(mem['z'][-1], mem['r'][-1], goal, self.goal_seeking)
+            novelty = kl_divergence(mem_ema['z_dist'][-1], mem['z_dist'][-1]).sum(dim=-1)
+            timestep = {'o_env': env_state['z'], 'o_env_next': mem['z'][-1], 'goal': goal, 'o': agent_o, 'a': a, 'r': r,
+                        'r_raw': mem['r'][-1], 'terminal': mem['terminal'][-1], 'v': v, 'ema_v': ema_v,
+                        'a_dist': a_dist, 'ema_a_dist': ema_a_dist, 'model_novelty': novelty}
+
+            # store agent data
+            for k, v in timestep.items():
+                data = agent_memory.get(k, [])
+                data.append(v)
+                agent_memory[k] = data
+
+            # prepare next step
+            env_state = next_env_state
+
+        return {'agent': agent_memory, 'model': env_mem, 'model_state': env_state, 'ema_model': ema_env_mem}
+
     # @torch.compile
     def update_exploration(self):
         self.eps *= self.eps_mul
-        self.eps = torch.max(self.eps, torch.tensor(0.1, dtype=torch.float32, device=self.eps.device))
+        self.eps = torch.max(self.eps, torch.tensor(0.05, dtype=torch.float32, device=self.eps.device))
 
     def eval_step(self,
-                  a_dist: list[torch.Tensor],
-                  ema_a_dist: list[torch.Tensor],
+                  a_dist: list[torchd.Distribution],
+                  ema_a_dist: list[torchd.Distribution],
                   model_novelty: list[torch.Tensor],
                   a: list[torch.Tensor],
                   r: list[torch.Tensor],
                   terminal: list[torch.Tensor],
                   v: list[torch.Tensor],
                   ema_v: list[torch.Tensor],
+                  o_env: list[torch.Tensor],
+                  o_env_next: list[torch.Tensor],
+                  goal: list[torch.Tensor | None],
                   first_step_mask: torch.Tensor | None = None,
                   **kwargs):
         # if a terminal transition occurs, the terminal flag is close to 1 and would block out the reward in that step
@@ -186,40 +242,44 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         v = torch.stack(v)
         ema_v = torch.stack(ema_v)
         r = torch.stack(r)
+        a = torch.stack(a[:-1])
+        a_dist = stack_dists(a_dist[:-1])
+        ema_a_dist = stack_dists(ema_a_dist[:-1])
 
         # if self.ema_reg:
         # v = torch.stack([torch.min(v, ema_v) for v, ema_v in zip(v, ema_v)])  # use this for policy targets
 
-        # TODO: bootstrap ist value vom letzten state, sollte ich die Returns nur bis zum vorletzten step ausrechnen
-        #       und mache es gerade falsch weil der value des letzten states doppeld gezählt wird?
-
-        valid = (1 - mask)  #
+        valid = (1 - mask)
         valid_r = valid * r
         valid_v = valid * v
-        #valid_bootstrap = (valid * torch.minimum(v, ema_v))[-1]
-        valid_bootstrap = ((1 - terminal) * valid_v + terminal * valid_r)[-1]
-        #v = v
-        #ema_v = ema_v
-        #a_dist = a_dist
-        #ema_a_dist = ema_a_dist
-        #model_novelty = model_novelty
-        #valid = valid
+        # valid_bootstrap = (valid * torch.minimum(v, ema_v))[-1]
         if self.goal_seeking:
-            gamma = 1.0
+            # we only train a single chunk, no bootstrapping needed beyond that
+            # CAUTION: we don't train the last step and should get one step more than chunk size
+            # valid_bootstrap = torch.zeros_like((valid_r[-1]))
+            gamma = 1.00
         else:
+            # valid_bootstrap = ((1 - terminal) * valid_v + terminal * valid_r)[-1]
             gamma = 0.99
-        returns = self._calc_returns_simple(valid_r, valid_bootstrap, gamma=gamma)
+        valid_bootstrap = ((1 - terminal) * valid_v + terminal * valid_r)[-1]
+        returns = self._calc_returns_simple(valid_r[:-1], valid_bootstrap, gamma=gamma)
 
-        #advantage = returns - torch.minimum(v, ema_v).detach()
-        advantage = returns - v.detach()
-        policy_loss = valid * (-advantage)  # validity mask multiplied directly
-        #policy_loss = valid * (-returns)  # validity mask multiplied directly
-        model_novelty_reward_aug = valid * self.mu * torch.stack(model_novelty).unsqueeze(-1).detach()
-        act_entropy_reward_aug = self.alpha * stack_dists(a_dist).entropy().sum(dim=-1, keepdims=True)
-        value_target = returns.detach() + model_novelty_reward_aug + model_novelty_reward_aug  # validity mask is multiplied with value_loss
-        value_loss = valid * torch.nn.functional.smooth_l1_loss(v, value_target, reduction='none')
-        ppo_loss = valid * self.beta * torchd.kl_divergence(detach_dist(stack_dists(ema_a_dist)),
-                                                            stack_dists(a_dist)).sum(dim=-1, keepdims=True)
+        # advantage = returns - torch.minimum(v, ema_v).detach()
+        advantage = returns - valid_v[:-1].detach()
+        if self.dynamics_loss:
+            policy_loss = valid[:-1] * (-advantage)  # validity mask multiplied directly
+            # policy_loss = valid[:-1] * (-returns)  # validity mask multiplied directly
+        else:
+            a_log_prob = a_dist.log_prob(a.detach())
+            policy_loss = valid[:-1] * -a_log_prob * advantage.detach()
+
+        model_novelty_reward_aug = valid[:-1] * self.mu * torch.stack(model_novelty[:-1]).unsqueeze(-1)
+        act_entropy_reward_aug = valid[:-1] * self.alpha * a_dist.entropy().sum(dim=-1, keepdims=True)
+        policy_loss -= act_entropy_reward_aug
+        value_target = returns + model_novelty_reward_aug  # validity mask is multiplied with value_loss
+        value_loss = valid[:-1] * torch.nn.functional.smooth_l1_loss(v[:-1], value_target.detach(), reduction='none')
+        ppo_loss = valid[:-1] * self.beta * torchd.kl_divergence(detach_dist(ema_a_dist), a_dist).sum(dim=-1,
+                                                                                                      keepdims=True)
 
         policy_loss = torch.mean(policy_loss)
         value_loss = torch.mean(value_loss)
@@ -282,8 +342,8 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
 
         return {'total': loss, 'policy': policy_loss, 'value': value_loss, 'policy_trust_region_loss': ppo_loss,
                 'model_novelty_reward_aug': model_novelty_reward_aug, 'action_entropy_reward_aug': entropy_reward_aug,
-                'eps_exploration': self.eps, 'monitoring_a_dist_mean': torch.stack([d.loc for d in a_dist]).mean(),
-                'monitoring_a_dist_std': torch.stack([d.scale for d in a_dist]).mean()}
+                'eps_exploration': self.eps, 'monitoring_a_dist_mean': a_dist.mean.mean(),
+                'monitoring_a_dist_std': a_dist.scale.mean()}
 
     def train_step(self,
                    simulation_data: Dict[str, torch.Tensor],
@@ -325,153 +385,6 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             for param, ema_param in zip(params, ema_params):
                 ema_param[:] = self.ema_coeff * ema_param + (1 - self.ema_coeff) * param
 
-    """
-    def sim_train_step(self,
-                       a_dist: list[torch.Tensor],
-                       ema_a_dist: list[torch.Tensor],
-                       model_novelty: list[torch.Tensor],
-                       a: list[torch.Tensor],
-                       r: list[torch.Tensor],
-                       terminal: list[torch.Tensor],
-                       v: list[torch.Tensor],
-                       actor_optimizer: torch.optim.Optimizer,
-                       critic_optimizer: torch.optim.Optimizer,
-                       **kwargs):
-        # if a terminal transition occurs, the terminal flag is close to 1 and would block out the reward in that step
-        # so shift terminals list one to the right and make first element zeros
-        del terminal[-1]
-        terminal.insert(0, torch.zeros_like(terminal[0]))
-
-        # if self.ema_reg:
-        #    vs = [torch.min(v, ema_v) for v, ema_v in zip(vs, ema_vs)]
-
-        # calculate losses
-        # from https://github.com/pytorch/examples/blob/main/reinforcement_learning/actor_critic.py
-        returns, discount = self._calc_returns(r, v, terminal, gamma=0.99)
-        gae_advantages, _ = self._calc_gae(r, v, terminal, gamma=0.99, lambda_=0.99)
-        # returns = torch.stack(returns)
-        # returns = (returns - returns.mean()) / (returns.std() + 0.0001)
-
-        policy_losses = []
-        value_losses = []
-        ppo_losses = []
-        act_entropy_reward_augs = []
-        model_novelty_reward_augs = []
-        for a_dist_, ema_a_dist_, v_, R, gae_advantage_, model_uncertainty_, discount_ in zip(a_dist, ema_a_dist, v,
-                                                                                              returns, gae_advantages,
-                                                                                              model_novelty, discount):
-            # ACTOR
-            # advantage = R - v_.detach()
-            # policy_losses.append(-advantage)
-            policy_losses.append(-gae_advantage_)
-            # policy_losses.append(-R)
-            # ppo_r = a_dist.log_prob(a.detach()) / detach_dist(ema_a_dist).log_prob(a.detach())
-            # ppo_actor_loss = -((R.detach() - v.detach()) * torch.clip(ppo_r, torch.tensor(0.8, device=sim_env.device),
-            #                                                          torch.tensor(1.2, device=sim_env.device)))
-            # policy_losses.append(ppo_actor_loss)
-            # regular_actor_loss = -((R.detach() - v.detach()) * a_dist.log_prob(a.detach()))
-            # policy_losses.append(-((R.detach() - v.detach()) * a_dist.log_prob(a.detach())))
-            # CRITIC
-            act_entropy_reward_aug = self.alpha * discount_ * a_dist_.entropy().sum(dim=-1, keepdims=True)
-            model_novelty_reward_aug = self.mu * discount_ * model_uncertainty_.unsqueeze(-1)
-            value_target = R.detach() + act_entropy_reward_aug + model_novelty_reward_aug
-            value_losses.append(torch.nn.functional.smooth_l1_loss(v_, value_target, reduction='none'))
-
-            # TRUST REGION POLICY UPDATE REGULARIZATION
-            ppo_losses.append(torchd.kl_divergence(detach_dist(ema_a_dist_), a_dist_).sum(-1, keepdim=True))
-
-            # BOOKKEEPING
-            act_entropy_reward_augs.append(act_entropy_reward_aug)
-            model_novelty_reward_augs.append(model_novelty_reward_aug)
-
-        policy_loss = torch.mean(torch.stack(policy_losses))
-        value_loss = torch.mean(torch.stack(value_losses))
-        ppo_loss = self.beta * torch.mean(torch.stack(ppo_losses))
-        entropy_reward_aug = torch.mean(torch.stack(act_entropy_reward_augs))
-        model_novelty_reward_aug = torch.mean(torch.stack(model_novelty))
-
-        # before = [p.detach().cpu().numpy() for p in self._ema_actor_net.parameters()]
-        # update model
-        actor_optimizer.zero_grad(set_to_none=True)
-        critic_optimizer.zero_grad(set_to_none=True)
-        loss = policy_loss + value_loss + ppo_loss
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
-        actor_optimizer.step()
-        critic_optimizer.step()
-        # after = [p.detach().cpu().numpy() for p in self._ema_actor_net.parameters()]
-
-        # diff = np.sum([np.abs(x - y).sum() for x, y in zip(before, after)])
-        # print(diff)
-
-        agent_params = [OrderedDict(m.named_parameters()) for m in (self.actor_net, self.critic_net)]
-        ema_params = [OrderedDict(m.named_parameters()) for m in (self._ema_actor_net, self._ema_critic_net)]
-        # ema_before = [p.detach().cpu().numpy() for p in self._ema_net_body.parameters()]
-        update_ema_modules(agent_params, ema_params, self.ema_coeff)
-        # ema_after = [p.detach().cpu().numpy() for p in self._ema_net_body.parameters()]
-        # ema_diff = np.sum([np.abs(x - y).sum() for x, y in zip(ema_before, ema_after)])
-
-        return {'total': loss, 'policy': policy_loss, 'value': value_loss, 'policy_trust_region_loss': ppo_loss,
-                'model_novelty_reward_aug': model_novelty_reward_aug, 'action_entropy_reward_aug': entropy_reward_aug}
-
-    """
-
-    def act_in_sim(self,
-                   env_state: Dict[str, torch.Tensor],
-                   sim_env: 'HierarchicalRSSM',
-                   n_steps: int,
-                   goal: torch.Tensor = None,
-                   agent_memory: Dict[str, List[torch.Tensor]] | None = None,
-                   disable_exploration: bool = False,
-                   sample_actions: bool = True,
-                   sample_model: bool = True,
-                   reconstruct: bool = True):
-        """
-        This function can
-        * train agent
-        * train model
-        * let agent follow a goal
-        * let agent maximize rewards
-        """
-        agent_memory = {} if agent_memory is None else agent_memory
-        env_mem, ema_env_mem = {}, {}
-        for t in range(n_steps):
-            agent_o = self.preproc_o(env_state, goal)
-
-            a_dist, a, v = self(agent_o, sample=sample_actions, disable_exploration=disable_exploration)
-
-            if torch.isnan(env_state['z']).any() or torch.isinf(env_state['z']).any():
-                raise RuntimeError(f'Invalid env state in act_in_sim: {env_state["z"]}')
-            if torch.isnan(agent_o).any() or torch.isinf(agent_o).any():
-                raise RuntimeError(f'Invalid agent observation in act_in_sim: {agent_o}')
-            if torch.isnan(a).any() or torch.isinf(a).any():
-                raise RuntimeError(f'Invalid agent action in act_in_sim: {a}')
-
-            ema_a_dist, _, ema_v = self(agent_o, use_ema_modules=True)
-            trajectory = {'o': None, 'a': a.unsqueeze(0), 'r': None, 'terminal': None}
-            mem, mem_ema, next_env_state = sim_env.forward_static(trajectory=trajectory, start_state=env_state,
-                                                                  level=self.level, n_steps=1, n_warmup=0,
-                                                                  use_ema_modules=self.use_slow_world_model,
-                                                                  memory=env_mem, memory_other=ema_env_mem,
-                                                                  sample_state=sample_model, sample_output=False,
-                                                                  reconstruct=reconstruct)
-            #r = self.build_step_reward(mem['z_dist'][-1], mem['r'][-1], goal)
-            r = self.build_step_reward(mem['z'][-1], mem['r'][-1], goal)
-            novelty = kl_divergence(mem_ema['z_dist'][-1], mem['z_dist'][-1]).sum(dim=-1)
-            timestep = {'o': agent_o, 'a': a, 'r': r, 'terminal': mem['terminal'][-1], 'v': v, 'ema_v': ema_v,
-                        'a_dist': a_dist, 'ema_a_dist': ema_a_dist, 'model_novelty': novelty}
-
-            # store agent data
-            for k, v in timestep.items():
-                data = agent_memory.get(k, [])
-                data.append(v)
-                agent_memory[k] = data
-
-            # prepare next step
-            env_state = next_env_state
-
-        return {'agent': agent_memory, 'model': env_mem, 'model_state': env_state, 'ema_model': ema_env_mem}
-
     @staticmethod
     @compile_if_not_debug
     def _calc_returns(rewards, state_values, timestep_mask, gamma):
@@ -489,8 +402,8 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
     @staticmethod
     def _calc_returns_simple(rewards, state_value_bootstrap, gamma):
         R = state_value_bootstrap.detach()
-        returns = [R]
-        for r in torch.flip(rewards[:-1], dims=(0,)):
+        returns = []
+        for r in torch.flip(rewards, dims=(0,)):
             R = r + gamma * R
             returns.insert(0, R)
         return torch.stack(returns)
@@ -514,7 +427,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
     @staticmethod
     def goal_similarity(o: torch.Tensor | torchd.Distribution, goal: torch.Tensor | torchd.Distribution):
         if isinstance(o, torch.Tensor) and isinstance(goal, torch.Tensor):
-            return - torch.mean((o - goal) ** 2, dim=-1, keepdim=True)
+            return - torch.mean(torch.abs(o - goal) ** 2, dim=-1, keepdim=True)
         elif isinstance(o, torch.Tensor) and isinstance(goal, Distribution):
             return torch.mean(goal.log_prob(o), dim=-1, keepdim=True)
         elif isinstance(o, Distribution) and isinstance(goal, torch.Tensor):
@@ -544,14 +457,15 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
     def build_step_reward(self,
                           o: torch.Tensor | torchd.Distribution,
                           r: torch.Tensor | torchd.Distribution,
-                          goal: torch.Tensor | torchd.Distribution | None = None):
-        if self.goal_seeking:
+                          goal: torch.Tensor | torchd.Distribution | None = None,
+                          use_goal_reward: bool = False):
+        if use_goal_reward:
             # detach goal to avoid propagating gradients to upper level model into other agents
             if isinstance(goal, torchd.Distribution):
                 goal = detach_dist(goal)
             else:
                 goal = goal.detach()
-            return self.goal_similarity(o, goal)
+            return self.goal_similarity(o, goal)  # + 0.5 * r
         else:
             return r
 
