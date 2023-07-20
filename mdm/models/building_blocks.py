@@ -543,7 +543,7 @@ class AvgUpwardsFilter(UpwardsFilter):
                 mask: torch.Tensor | None = None,
                 context: torch.Tensor | None = None,
                 window_size: int | None = None) -> torch.Tensor:
-        x, mask, n_pad = self._preproc(x, mask, 0.0)
+        x, mask, n_pad = self._preproc(x, mask, 0.0, window_size)
         nom = torch.sum(x * ~mask, dim=1)
         denom = torch.sum(~mask, dim=1)
         denom = torch.where(denom == 0, 1.0, denom)
