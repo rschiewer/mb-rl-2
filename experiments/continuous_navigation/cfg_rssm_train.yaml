@@ -123,7 +123,7 @@ trainer:
    freeze_model: False
    stop_collect: False
    eval_interval: 50
-   d_batch: 600
+   d_batch: 1024
    subtrajectory_len: 15
    collect_envs: 50
    collect_interval: 5
@@ -196,5 +196,4 @@ agents:
         critic_layer_norm: True
         dynamics_loss: True
 eval:
-   warmup_steps: [ 2, 1 ]
    eval_envs: 1

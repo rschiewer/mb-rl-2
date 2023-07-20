@@ -468,7 +468,8 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                 goal = detach_dist(goal)
             else:
                 goal = goal.detach()
-            return self.goal_similarity(o, goal)  # + 0.5 * r
+            #return 0.5 * self.goal_similarity(o, goal) + 0.5 * r
+            return self.goal_similarity(o, goal)
         else:
             return r
 

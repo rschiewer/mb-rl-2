@@ -13,9 +13,9 @@ repeat_terminal_state: False
 mdm:
    rssm_modules:
       # RSSM no. 1
-      -  d_z: 10
+      -  d_z: 8
          d_h: 64
-         d_a: null
+         d_a: <infer>
          n_hidden_layers: 1
          hidden_dropout: 0.1
          epsilon: 0.1
@@ -54,7 +54,7 @@ mdm:
    kl_betas: [ 0.1 ]
    kl_reg_betas: [ 0.0 ]
    ema_regularization: 0.0
-   ema_coeff: 0.95
+   ema_coeff: 0.98
    ema_update_interval: 5
    latent_overshooting: [ 10 ]
    temporal_activation_regularization: 0.0
@@ -69,7 +69,7 @@ trainer:
    freeze_model: False
    stop_collect: False
    eval_interval: 50
-   d_batch: 600
+   d_batch: 1024
    subtrajectory_len: 15
    collect_envs: 50
    collect_interval: 5
@@ -91,28 +91,8 @@ agents:
         use_ema_world_model: False
         lr_actor: 0.001
         lr_critic: 0.004
-        min_a: null
-        max_a: null
-        actor_lws: [ 64, 64 ]
-        critic_lws: [ 64, 64 ]
-        actor_act_fn: "elu"
-        critic_act_fn: "elu"
-        actor_layer_norm: True
-        critic_layer_norm: True
-   goal_seeking:
-      # level 0
-      - eps_exploration_init: 0.9
-        eps_exploration_coeff: 0.999
-        act_entropy_exploration_coeff: 0.001
-        learn_act_entropy_exploration_coeff: False
-        novelty_exploration_coeff: 0.1
-        tr_policy_kl_coeff: 0.1
-        tr_policy_ema_update_coeff: 0.95
-        use_ema_world_model: False
-        lr_actor: 0.002
-        lr_critic: 0.008
-        min_a: null
-        max_a: null
+        min_a: <infer>
+        max_a: <infer>
         actor_lws: [ 64, 64 ]
         critic_lws: [ 64, 64 ]
         actor_act_fn: "elu"
@@ -121,5 +101,4 @@ agents:
         critic_layer_norm: True
 
 eval:
-   warmup_steps: [ 2 ]
    eval_envs: 20
