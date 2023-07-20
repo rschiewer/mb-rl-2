@@ -168,10 +168,27 @@ def cfg_infer_missing_values(cfg: dict,
     # just for logging
     cfg['hierarchy_levels'] = len(cfg['mdm']['rssm_modules'])
 
+    # agents
+    for agent_lvl in range(len(cfg['mdm']['rssm_modules'])):
+        cfg_r_max = cfg['agents']['r_max'][agent_lvl]
+        if agent_lvl == 0:
+            cfg_r_max['min_a'] = tuple(env.action_space.low)
+            cfg_r_max['max_a'] = tuple(env.action_space.high)
+        cfg_r_max['d_a'] = cfg['mdm']['rssm_modules'][agent_lvl]['d_a']
+        cfg_r_max['d_o'] = cfg['mdm']['rssm_modules'][agent_lvl]['d_z']
+
+        if agent_lvl < len(cfg['mdm']['rssm_modules']) - 1:
+            cfg_goal_seeking = cfg['agents']['goal_seeking'][agent_lvl]
+            if agent_lvl == 0:
+                cfg_goal_seeking['min_a'] = tuple(env.action_space.low)
+                cfg_goal_seeking['max_a'] = tuple(env.action_space.high)
+            cfg_goal_seeking['d_a'] = cfg['mdm']['rssm_modules'][agent_lvl]['d_a']
+            cfg_goal_seeking['d_o'] = cfg['mdm']['rssm_modules'][agent_lvl]['d_z']
+
     def _check_complete(name, entry):
         if isinstance(entry, dict):
-            for k, v in entry.items():
-                _check_complete(k, v)
+            for _k, _v in entry.items():
+                _check_complete(_k, _v)
         elif isinstance(entry, (list, tuple)):
             for x in entry:
                 _check_complete(name, x)
