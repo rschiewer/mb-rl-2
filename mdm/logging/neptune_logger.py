@@ -15,7 +15,7 @@ import numpy as np
 from PIL import Image
 
 from mdm.logging.logger import Logger, Scope
-from mdm.utils.utils import InMemoryFile, TempFile
+from mdm.utils.utils import InMemoryFile
 
 
 class NeptuneLogger(Logger):
@@ -88,7 +88,7 @@ class NeptuneLogger(Logger):
                     self.log({name: v}, scope, time_step=time_step)
             elif isinstance(value, Figure):
                 self.log_plot(value, full_scope, time_step=time_step)
-            elif isinstance(value, (Path, InMemoryFile, TempFile)):
+            elif isinstance(value, (Path, InMemoryFile)):
                 self.log_file(value, full_scope, time_step=time_step)
             #elif isinstance(value, str) and Path(value).exists():
             #    self.log_file(value, full_scope, time_step=time_step)
