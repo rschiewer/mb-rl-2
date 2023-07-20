@@ -30,7 +30,13 @@ def main():
         logger = NeptuneLogger(**neptune_cfg)
     else:
         logger = NotLogger()
-    GlobalLogger.bind(logger, {'mask_model': 25, 'mask_latent_overshooting': 25, 'mask_agent': 25})  # for debugging
+
+    # for debugging
+    GlobalLogger.bind(logger, {'_mask_model': 50,
+                               '_mask_latent_overshooting': 50,
+                               '_mask_agent': 50,
+                               'simulated_ground_truth_goal_distance': 50,
+                               '_sanity_check_goal_computation': 50})
 
     if args.d_batch:
         cfg['trainer']['d_batch'] = args.d_batch
