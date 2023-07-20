@@ -95,7 +95,6 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
     def scale_action(self, action):
         if self.min_a is not None and self.max_a is not None:
             action = action * (self.max_a - self.min_a) / 2 + (self.min_a + self.max_a) / 2
-        action = torch.clamp(action, self.min_a + torch.finfo().eps, self.max_a - torch.finfo().eps)
         return action
 
     @compile_if_not_debug
@@ -131,11 +130,15 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         else:
             a_smpl = a_dist.mean
 
-        # adding random variance directly to the SquashedNormal destabilizes training a lot, not sure why though
+        # scale a_smpl to allowed action interval
+        if self.min_a is not None and self.max_a is not None:
+            a_smpl = a_smpl * (self.max_a - self.min_a) / 2 + (self.min_a + self.max_a) / 2
+
+        # adding random variance directly to the SquashedNormal destabilizes training a lot (not sure why),
+        # so we add noise after sampling from it and clamp the result to prevent invalid actions
         if self.eps > 0 and self.training and not disable_exploration:
             a_smpl = a_smpl + torch.normal(torch.zeros_like(a_smpl), torch.full_like(a_smpl, self.eps))
-
-        a_smpl = self.scale_action(a_smpl)
+            a_smpl = torch.clamp(a_smpl, self.min_a + torch.finfo().eps, self.max_a - torch.finfo().eps)
 
         return a_dist, a_smpl, state_values
 
