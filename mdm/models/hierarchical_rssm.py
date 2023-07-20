@@ -148,10 +148,18 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                                                     window_size=lower_level_steps)
             simulated_ground_truth = {k: v.squeeze(0) for k, v in simulated_ground_truth.items()}  # remove time dim
 
+            reachability_reward = 0.1 * simulation['agent']['r'][-1].detach()
+            distance_reward = torch.mean((state_below['z'] - simulation['model']['z'][-1]) ** 2, dim=-1,
+                                         keepdim=True).detach()
             # augment reward with how reachable the goal was for lower level
-            simulated_ground_truth['r'] += 0.01 * simulation['agent']['r'][-1].detach()
+            # simulated_ground_truth['r'] += reachability_reward
             # augment reward with how different the final state of the agent is from the start state
-            simulated_ground_truth['r'] += 0.01 * torch.mean((state_below['z'] - simulation['model']['z'][-1]) ** 2, dim=-1, keepdim=True).detach()
+            # simulated_ground_truth['r'] += distance_reward
+
+            goal_rewards.append(simulation['agent']['r'][-1])
+            reachability_rewards.append(reachability_reward)
+            distance_rewards.append(distance_reward)
+            terminals.append(simulated_ground_truth['terminal'])
 
             if t < n_warmup:  # if still in warmup, re-do last step with simulated ground truth and use posterior
                 pred, next_state = mdl(a=a_t, o=simulated_ground_truth['o'], last_state=state,
@@ -192,6 +200,26 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             # important: update model states
             state = next_state
             state_below = simulation['model_state']
+
+        if GlobalLogger.can_log('simulated_ground_truth_goal_distance', self._current_train_step):
+            sim_ground_truth_r = torch.stack(memory_targets['r'][1:]).mean(dim=1).detach().cpu().numpy()
+            goal_rewards = torch.stack(goal_rewards).mean(dim=1).detach().cpu().numpy().squeeze()
+            reachability_rewards = torch.stack(reachability_rewards).mean(dim=1).detach().cpu().numpy().squeeze()
+            distance_rewards = torch.stack(distance_rewards).mean(dim=1).detach().cpu().numpy().squeeze()
+            terminals = torch.stack(terminals).mean(dim=1).detach().cpu().numpy().squeeze()
+            fig = plt.figure(dpi=60)
+            plt.plot(sim_ground_truth_r, label='state reward', marker='o')
+            plt.plot(goal_rewards, label='goal reward', marker='o')
+            plt.plot(reachability_rewards, label='reachability reward', marker='o')
+            plt.plot(distance_rewards, label='distance reward', marker='o')
+            plt.plot(terminals, label='terminal flags', marker='o')
+            plt.suptitle(f'L{level} Model + Goal Seeking Agent')
+            plt.legend()
+            plt.tight_layout()
+            GlobalLogger.logger.log_plot(fig_to_img(fig), Scope.TRAIN() / f'model/{level}/goal_reward',
+                                         self._current_train_step)
+            plt.close(fig)
+            del fig
 
         memory_targets = {k: torch.stack(v) for k, v in memory_targets.items()}  # to fit loss calculation scheme
 
