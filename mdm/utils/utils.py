@@ -168,9 +168,19 @@ def cfg_infer_missing_values(cfg: dict,
     # just for logging
     cfg['hierarchy_levels'] = len(cfg['mdm']['rssm_modules'])
 
-    # for i_filter, filter_args in enumerate(cfg['mdm']['upwards_filters']):
-    #    rssm = cfg['mdm']['rssm_modules'][i_filter]
-    #    next_rssm = cfg['mdm']['rssm_modules'][i_filter + 1]
+    def _check_complete(name, entry):
+        if isinstance(entry, dict):
+            for k, v in entry.items():
+                _check_complete(k, v)
+        elif isinstance(entry, (list, tuple)):
+            for x in entry:
+                _check_complete(name, x)
+        elif entry == '<infer>':
+            raise ValueError(f'Found config value that should\'ve been inferred from other values but hasn\'t: {name}')
+
+    for k, v in cfg.items():
+        _check_complete(k, v)
+
     return cfg
 
 
