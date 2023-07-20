@@ -6,8 +6,7 @@ import numpy as np
 from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.policies.policy import Policy
 from mdm.models.hierarchical_rssm import HierarchicalRSSM
-from mdm.utils.torch_tools import to_tensors
-from mdm.utils.utils import prepare_data
+from mdm.utils.utils import prepare_data, unsqueeze_right
 from mdm.utils.gym_wrappers import CacheLastStepEnv, CacheLastStepVecEnv
 
 
@@ -160,10 +159,10 @@ class HierarchicalLatentAgentPolicy(Policy):
                 continue  # no need to update level yet
 
             # prepare data from level below for this level's model to digest
-            #env_data_below = {k: torch.stack(v) for k, v in self._env_data_below_cache[i_lvl].items()}
-            #actions = self._act_cache[i_lvl].pop(0).unsqueeze(0)  # take oldest action from cache
-            #data_filtered = {k: self.model.upwards_filters[i_lvl][k](env_data_below[k]) for k in ('o', 'r', 'terminal')}
-            #data_filtered['a'] = actions  # we don't want filtered actions from lower level, but original ones from this
+            # env_data_below = {k: torch.stack(v) for k, v in self._env_data_below_cache[i_lvl].items()}
+            # actions = self._act_cache[i_lvl].pop(0).unsqueeze(0)  # take oldest action from cache
+            # data_filtered = {k: self.model.upwards_filters[i_lvl][k](env_data_below[k]) for k in ('o', 'r', 'terminal')}
+            # data_filtered['a'] = actions  # we don't want filtered actions from lower level, but original ones from this
 
             n_steps = self.model.strides[i_lvl]
             data_filtered = self.model.filter_up(**self._env_data_below_cache[i_lvl], level=i_lvl, n_steps=n_steps,
@@ -196,18 +195,18 @@ class HierarchicalLatentAgentPolicy(Policy):
         # 2: use all agents below to go to intermediate goals
 
         # find out if we're in warmup phase and need to plan more than one step ahead
-        #if i_highest < self.model.i_top:
+        # if i_highest < self.model.i_top:
         #    n_plan_steps = self.model.strides[i_highest + 1] - 1  # first initial zero action
-        #elif i_highest < self.model.i_top:
+        # elif i_highest < self.model.i_top:
         #    n_plan_steps = self.model.strides[i_highest + 1]
-        #else:
+        # else:
         #    n_plan_steps = 1  # we're not in warmup phase anymore, only plan a single step ahead on highest level
 
         # one r_max step on highest level
         state = self._grounded_env_states[i_highest]
         agent = self.model.r_max_agents[i_highest][0]
-        simulation = agent.act_in_sim(env_state=state, sim_env=self.model, n_steps=1, sample_actions=False,
-                                      sample_model=True, disable_exploration=True, reconstruct=i_highest > 0)
+        simulation = agent.act_in_sim(env_state=state, sim_env=self.model, n_steps=1, sample_actions=True,
+                                      sample_model=False, disable_exploration=True, reconstruct=i_highest > 0)
         self._act_cache[i_highest] += simulation['agent']['a']
 
         if i_highest > 0:
@@ -219,14 +218,56 @@ class HierarchicalLatentAgentPolicy(Policy):
                 new_goals = []
                 for goal in goals_from_above:
                     simulation = agent.act_in_sim(env_state=state, sim_env=self.model, n_steps=n_steps, goal=goal,
-                                                  sample_actions=False, disable_exploration=True,
-                                                  sample_model=True, reconstruct=True)
+                                                  sample_actions=True, disable_exploration=True,
+                                                  sample_model=True, reconstruct=i_lvl > 0)
                     state = simulation['model_state']
                     self._act_cache[i_lvl] += simulation['agent']['a']
-                    new_goals += simulation['model']['o']
+                    if i_lvl > 0:
+                        new_goals += simulation['model']['o']
                 goals_from_above = new_goals
 
         self._action_queue += self._act_cache[0]
+
+        """
+        simulation = agent.act_in_sim(env_state=state, sim_env=self.model, n_steps=1, sample_actions=True,
+                                      sample_model=True, disable_exploration=True, reconstruct=i_highest > 0)
+        self._act_cache[i_highest] += simulation['agent']['a']
+
+        if i_highest > 0:
+            goals_from_above = simulation['model']['o']
+            is_terminal_chunk = simulation['model']['terminal']
+            for i_lvl in reversed(range(0, i_highest)):
+                state = self._grounded_env_states[i_lvl]
+                g_agent = self.model.goal_seeking_agents[i_lvl][0]
+                r_agent = self.model.r_max_agents[i_lvl][0]
+                n_steps = self.model.strides[i_lvl + 1]
+                new_goals = []
+                for term_chunk, goal in zip(is_terminal_chunk, goals_from_above):
+                    g_sim = g_agent.act_in_sim(env_state=state, sim_env=self.model, n_steps=n_steps, goal=goal,
+                                               sample_actions=True, disable_exploration=True,
+                                               sample_model=True, reconstruct=i_lvl > 0)
+                    r_sim = r_agent.act_in_sim(env_state=state, sim_env=self.model, n_steps=n_steps,
+                                               sample_actions=True, disable_exploration=True,
+                                               sample_model=True, reconstruct=i_lvl > 0)
+
+                    term_chunk = term_chunk.to(torch.bool)
+                    state['z'] = torch.where(term_chunk, r_sim['model_state']['z'], g_sim['model_state']['z'])
+                    r_sim_rnn_states = pack_rnn_state(r_sim['model_state']['rnn_state'])
+                    g_sim_rnn_states = pack_rnn_state(g_sim['model_state']['rnn_state'])
+                    term_chunk_expanded = unsqueeze_right(term_chunk, r_sim_rnn_states)
+                    state['rnn_state'] = unpack_rnn_state(torch.where(term_chunk_expanded,
+                                                                      r_sim_rnn_states, g_sim_rnn_states))
+                    a_tmp = [torch.where(term_chunk, a_r_sim, a_g_sim) for
+                             a_r_sim, a_g_sim in zip(r_sim['agent']['a'], g_sim['agent']['a'])]
+                    self._act_cache[i_lvl] += a_tmp
+                    if i_lvl > 0:
+                        goals_tmp = [torch.where(term_chunk, g_r_sim, g_g_sim) for
+                                     g_r_sim, g_g_sim in zip(r_sim['model']['o'], g_sim['model']['o'])]
+                        new_goals += goals_tmp
+                goals_from_above = new_goals
+
+        self._action_queue += self._act_cache[0]
+        """
 
     def __call__(self,
                  env: Union[CacheLastStepEnv, CacheLastStepVecEnv]):
