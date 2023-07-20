@@ -7,21 +7,15 @@ import re
 import sys
 import random
 import time
-from enum import Enum, auto
+from enum import auto
 from inspect import stack
-from itertools import product
 from pathlib import Path
-from typing import Any, Iterable
-from threading import Thread
 
 import gym
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
-import neptune.types
-import numpy as np
 import numpy.ma as ma
 import pandas as pd
-import torch
 import yaml
 from PIL import Image
 
@@ -82,21 +76,6 @@ class InMemoryFile:
         in_memory_file = InMemoryFile(path, new_name, new_extension)
         os.remove(path)
         return in_memory_file
-
-
-class TempFile:
-
-    def __init__(self,
-                 path: str | Path):
-        self.path = path
-        self.extension = str(path)[str(path).rindex('.') + 1:]
-
-    def __del__(self):
-        try:
-            os.remove(self.path)
-        except FileNotFoundError as err:
-            print(f'Tried to delete temporary file {self.path}, but file was not found. Please make sure temporary ',
-                  ' files have been properly deleted')
 
 
 class TempFigure:
@@ -200,77 +179,6 @@ def cfg_infer_missing_values(cfg: dict,
 
     return cfg
 
-
-def build_model_opt(model: torch.nn.Module, cfg: dict):
-    optim_type = cfg['optim'].pop('type')
-    params = model.parameters()
-
-    if optim_type == 'adam':
-        opt_model = torch.optim.Adam(params, **cfg['optim'])
-    elif optim_type == 'adamW':
-        opt_model = torch.optim.AdamW(params, **cfg['optim'])
-    elif optim_type == 'sgd':
-        opt_model = torch.optim.SGD(params, **cfg['optim'])
-    else:
-        raise ValueError(f'Unknown optimizer type: {optim_type}')
-
-    return opt_model
-
-
-"""
-def build_rssms(cfg: dict):
-    for i_module, module_args in enumerate(cfg['mdm']['rssm_modules']):
-        for k, v in module_args.items():  # generate encoders and decoder objects for current RSSM
-            if isinstance(v, dict) and 'class' in v:
-                cls_name = v.pop('class')
-                instance = globals()[cls_name](**v)
-                module_args[k] = instance
-        cfg['mdm']['rssm_modules'][i_module] = RSSMCell(**module_args)  # generate RSSM
-    for i_filter, filter_args in enumerate(cfg['mdm']['upwards_filters']):  # generate filter objects
-        for k, v in filter_args.items():
-            cls_name = v.pop('class')
-            instance = globals()[cls_name](**v)
-            filter_args[k] = instance
-    return cfg
-
-
-def build_agents(cfg: dict,
-                 env: gym.Env,
-                 device: torch.device):
-    if not isinstance(env.action_space, gym.spaces.Box):
-        raise ValueError('Only enviornments with continuous action space are supported')
-
-    def gen_agent_fn(level: int, goal_seeking: bool, cfg) -> (
-            ActorCriticAgent, torch.optim.Optimizer, torch.optim.Optimizer):
-        agent = ActorCriticAgent(level=level, observation_key='z', goal_seeking=goal_seeking, **cfg)
-        agent = agent.to(device)
-        actor_optimizer = torch.optim.Adam(agent.actor_net.parameters(), lr=cfg['lr_actor'])
-        critic_optimizer = torch.optim.Adam(agent.critic_net.parameters(), lr=cfg['lr_critic'])
-        return agent, actor_optimizer, critic_optimizer
-
-    r_max_agents = []
-    goal_seeking_agents = []
-    for agent_lvl in range(len(cfg['mdm']['rssm_modules'])):
-        cfg_r_max = cfg['agents']['r_max'][agent_lvl]
-        if agent_lvl == 0:
-            cfg_r_max['min_a'] = tuple(env.action_space.low)
-            cfg_r_max['max_a'] = tuple(env.action_space.high)
-        cfg_r_max['d_a'] = cfg['mdm']['rssm_modules'][agent_lvl].d_a
-        cfg_r_max['d_o'] = cfg['mdm']['rssm_modules'][agent_lvl].d_z
-        r_max_agents.append(gen_agent_fn(agent_lvl, False, cfg_r_max))
-
-        if agent_lvl < len(cfg['mdm']['rssm_modules']) - 1:
-            cfg_goal_seeking = cfg['agents']['goal_seeking'][agent_lvl]
-            if agent_lvl == 0:
-                cfg_goal_seeking['min_a'] = tuple(env.action_space.low)
-                cfg_goal_seeking['max_a'] = tuple(env.action_space.high)
-            cfg_goal_seeking['d_a'] = cfg['mdm']['rssm_modules'][agent_lvl].d_a
-            cfg_goal_seeking['d_o'] = cfg['mdm']['rssm_modules'][agent_lvl].d_z
-            goal_seeking_agents.append(gen_agent_fn(agent_lvl, True, cfg_goal_seeking))
-    # goal_seeking_agents.append(None)  # no homing agent needed on last level
-
-    return r_max_agents, goal_seeking_agents
-"""
 
 hierarchy_sep = '|'
 cfg_placeholder = re.compile(r'.*?(<.+?>).*?')
@@ -991,49 +899,6 @@ def random_walk_success_rate(env: gym.Env,
     return success, ep_returns, ep_lens
 
 
-def visualize_trajectory(trajectory: Dict[str, np.ndarray]):
-    n_steps = trajectory['o'].shape[0]
-
-    fig, ax = plt.subplots(2, 2, figsize=(10, 10))
-    color_cycle = iter(plt.rcParams['axes.prop_cycle'].by_key()['color'])
-
-    # headings and preparations
-    ax[0, 0].set_title('Observation')
-    ax[1, 0].set_title('Reward')
-    ax[1, 1].set_title('Terminal Flag')
-    ax[0, 0].set_xlim(-1, 1)
-    ax[0, 0].set_ylim(-1, 1)
-
-    # plotting
-    c = next(color_cycle)
-    pos = ax[0, 0].scatter(x=trajectory['o'][0, 0], y=trajectory['o'][0, 1], marker='o', c=c)  # init pos agent
-    goal = ax[0, 0].scatter(x=trajectory['o'][0, 2], y=trajectory['o'][0, 3], marker='x', c=c)  # init pos goal
-    # angle, stepwidth = trajectory['a'][0]
-    # dx, dy = np.arccos(angle) * stepwidth, np.arcsin(angle) * stepwidth
-    # act = ax[0, 0].arrow(x=trajectory['o'][0, 0], y=trajectory['o'][0, 1], dx=dx, dy=dy)  # init action
-    ax[1, 0].plot(trajectory['r'])
-    ax[1, 1].plot(trajectory['terminal'])
-
-    time_marker_r = ax[1, 0].axvline(x=0, color='gray', linestyle='dotted')
-    time_marker_terminal = ax[1, 1].axvline(x=0, color='gray', linestyle='dotted')
-
-    def animate_r(i):
-        pos.set_offsets([trajectory['o'][i, 0:2]])
-        goal.set_offsets([trajectory['o'][i, 2:4]])
-        # draw action
-        # angle, stepwidth = trajectory['a'][i]
-        # dx, dy = np.arccos(angle) * stepwidth, np.arcsin(angle) * stepwidth
-        # ax[0, 0].arrow(x=trajectory['o'][i, 0], y=trajectory['o'][i, 1], dx=dx, dy=dy)
-        # draw time markers
-        # act.set_offsets([dx, dy])
-        time_marker_r.set_xdata(i)
-        time_marker_terminal.set_xdata(i)
-        return pos, goal, time_marker_r, time_marker_terminal
-
-    ani = animation.FuncAnimation(fig, animate_r, frames=n_steps, interval=100, blit=True)
-    return fig, ani
-
-
 def rssm_states_seq_to_batch(mem: Dict[str, List[torch.Tensor]],
                              rssm_instance: RSSMCell,
                              i_start: int = 0,
@@ -1076,53 +941,6 @@ def log_params(model: torch.nn.Module,
         logger.log({'largest_param': max_param, 'smallest_param': min_param}, scope, time_step=time_step)
 
     asyncio.run(_log_fn())
-
-
-def visualize_overlaid_trajectories(*trajectories: Dict[str, np.ndarray]):
-    n_steps = set([t['o'].shape[0] for t in trajectories])
-    assert len(n_steps) == 1, f'All provided trajectories must have the same length, but found {n_steps}!'
-    n_steps = n_steps.pop()
-
-    fig, ax = plt.subplots(2, 2, figsize=(6, 6))
-    plt.tight_layout()
-    color_cycle = iter(plt.rcParams['axes.prop_cycle'].by_key()['color'])
-
-    ax[0, 0].set_title('Observation')
-    ax[1, 0].set_title('Reward')
-    ax[1, 1].set_title('Terminal Flag')
-    ax[0, 0].set_xlim(-1, 1)
-    ax[0, 0].set_ylim(-1, 1)
-
-    positions = []
-    goals = []
-    for trajectory in trajectories:
-        c = next(color_cycle)
-        pos = ax[0, 0].scatter(x=trajectory['o'][0, 0], y=trajectory['o'][0, 1], marker='o', c=c)  # init pos agent
-        goal = ax[0, 0].scatter(x=trajectory['o'][0, 2], y=trajectory['o'][0, 3], marker='x', c=c)  # init pos goal
-        ax[1, 0].plot(trajectory['r'])
-        ax[1, 1].plot(trajectory['terminal'])
-        positions.append(pos)
-        goals.append(goal)
-
-    time_marker_r = ax[1, 0].axvline(x=0, color='gray', linestyle='dotted')
-    time_marker_terminal = ax[1, 1].axvline(x=0, color='gray', linestyle='dotted')
-
-    def animate_r(i):
-        for i_traj, trajectory in enumerate(trajectories):
-            positions[i_traj].set_offsets([trajectory['o'][i, 0:2]])
-            goals[i_traj].set_offsets([trajectory['o'][i, 2:4]])
-        # draw action
-        # angle, stepwidth = trajectory['a'][i]
-        # dx, dy = np.arccos(angle) * stepwidth, np.arcsin(angle) * stepwidth
-        # ax[0, 0].arrow(x=trajectory['o'][i, 0], y=trajectory['o'][i, 1], dx=dx, dy=dy)
-        # draw time markers
-        # act.set_offsets([dx, dy])
-        time_marker_r.set_xdata(i)
-        time_marker_terminal.set_xdata(i)
-        return *positions, *goals, time_marker_r, time_marker_terminal
-
-    ani = animation.FuncAnimation(fig, animate_r, frames=n_steps, interval=100, blit=True)
-    return fig, ani
 
 
 def copy_params(src: 'HierarchicalRSSM',

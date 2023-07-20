@@ -1,12 +1,12 @@
 import os.path
 import argparse
-from itertools import chain
+from warnings import simplefilter
 
 import gym.vector
+import neptune
 
-from mdm.training.train import train_model, agent_eval_mode, build_rssms, build_agents
+from mdm.training.train import train_model, agent_eval_mode, build_rssms, build_agents, build_model_opt
 from mdm.utils.utils import *
-from mdm.utils.analysis_tools import plot_trajectory_stats
 from mdm.training.offline_rl_driver import OfflineRLDriver, SamplingType
 from mdm.logging.neptune_logger import NeptuneLogger
 from mdm.logging.not_logger import NotLogger
@@ -16,6 +16,7 @@ from mdm.policies.agent_policy import *
 
 
 def main():
+    simplefilter(action='ignore', category=DeprecationWarning)  # numpy deprecation warning from outdated gym lib
     parser = argparse.ArgumentParser()
     parser.add_argument('-log', default=False, action='store_true')
     parser.add_argument('-d_batch', type=int)
