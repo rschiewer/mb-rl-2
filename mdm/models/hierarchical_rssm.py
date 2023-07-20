@@ -125,7 +125,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         agent = self.r_max_agents[level][0]
         assert agent.observation_key == 'z', 'only latent agent supported'
         lvl_below = level - 1
-        chunk_size = self.strides[level]
+        lower_level_steps = self.strides[level] + 1  # give goal seeking agent some slack to achieve goals
 
         state = start_state
         state_below = start_state_below
@@ -137,12 +137,13 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             # get simulated ground truth for this step from level below
             # if a chunk starts in an invalid trajectory part (beyond terminal state), this is filtered out later
             simulation = self.goal_seeking_agents[lvl_below][0].act_in_sim(env_state=state_below, sim_env=self,
-                                                                           n_steps=chunk_size, goal=pred['o'],
-                                                                           sample_actions=False, sample_model=True,
+                                                                           n_steps=lower_level_steps, goal=pred['o'],
+                                                                           sample_actions=True, sample_model=True,
                                                                            disable_exploration=True, reconstruct=True)
             simulated_ground_truth = self.filter_up(o=simulation['model']['z'], r=simulation['model']['r'],
                                                     terminal=simulation['model']['terminal'], level=level,
-                                                    n_steps=chunk_size, respect_terminal_flag=True)
+                                                    n_steps=lower_level_steps, respect_terminal_flag=True,
+                                                    window_size=lower_level_steps)
             simulated_ground_truth = {k: v.squeeze(0) for k, v in simulated_ground_truth.items()}  # remove time dim
 
             # augment reward with how reachable the goal was for lower level
@@ -266,24 +267,25 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                   n_steps: int = -1,
                   respect_terminal_flag: bool = True,
                   time_step: List[torch.Tensor] | None = None,
+                  window_size: int | None = None,
                   **kwargs):
         if n_steps == -1:
             n_steps = len(o)
         flt = self.upwards_filters[level]
-        trajectory_below = {'o': torch.stack(o[:n_steps]),
-                            'r': torch.stack(r[:n_steps]),
-                            'terminal': torch.stack(terminal[:n_steps])}
+        tr_below = {'o': torch.stack(o[:n_steps]),
+                    'r': torch.stack(r[:n_steps]),
+                    'terminal': torch.stack(terminal[:n_steps])}
 
         if respect_terminal_flag:
-            chunk_mask = compute_mask(trajectory_below['terminal'], mode='deterministic', threshold=0.8).to(dtype=torch.bool)
+            chunk_mask = compute_mask(tr_below['terminal'], mode='deterministic', threshold=0.8).to(dtype=torch.bool)
         else:
             chunk_mask = None
 
         # simulated_ground_truth = {k: flt[k](v, mask=chunk_mask).detach() for k, v in trajectory_below.items()}
-        simulated_ground_truth = {'o': flt['o'](trajectory_below['o'], mask=chunk_mask).detach(),
-                                  'r': flt['r'](trajectory_below['r'], mask=chunk_mask).detach(),
-                                  'terminal': flt['terminal'](trajectory_below['terminal'], mask=chunk_mask).detach()}
-                                  #'o_in': trajectory_below['o']}
+        simulated_ground_truth = {'o': flt['o'](tr_below['o'], mask=chunk_mask, window_size=window_size).detach(),
+                                  'r': flt['r'](tr_below['r'], mask=chunk_mask, window_size=window_size).detach(),
+                                  'terminal': flt['terminal'](tr_below['terminal'], mask=chunk_mask,
+                                                              window_size=window_size).detach()}
 
         #if chunk_mask is not None:
         #    simulated_ground_truth['o_in'] *= chunk_mask
