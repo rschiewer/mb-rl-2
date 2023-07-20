@@ -642,8 +642,14 @@ def compute_mask(terminals: torch.Tensor,
                                torch.tensor(1.0, device=terminals.device, dtype=terminals.dtype),
                                torch.tensor(0.0, device=terminals.device, dtype=terminals.dtype))
 
+        #mask = torch.zeros_like(mask)
+        #mask = torch.where(mask > 0.95,
+        #                   torch.tensor(1.0, device=terminals.device, dtype=terminals.dtype),
+        #                   torch.tensor(0.0, device=terminals.device, dtype=terminals.dtype))
+
         return mask.detach()
 
+        """
         if mode == 'deterministic' and threshold is not None:
             terminals_transformed = torch.where(terminals > threshold,
                                                 torch.tensor(1.0, device=terminals.device, dtype=terminals.dtype),
@@ -666,6 +672,7 @@ def compute_mask(terminals: torch.Tensor,
         #    mask = torch.zeros_like(mask)
 
         return mask.detach()
+        """
 
 
 @compile_if_not_debug
