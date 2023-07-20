@@ -102,11 +102,15 @@ class TempFile:
 class TempFigure:
 
     def __init__(self,
-                 fig: plt.Figure):
-        self.fig = fig
+                 **kwargs):
+        self.fig = plt.figure(**kwargs)
 
-    def __del__(self):
+    def __enter__(self):
+        return self.fig
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
         plt.close(self.fig)
+        del self.fig
 
 
 def here() -> Path:
