@@ -7,7 +7,7 @@ from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.policies.policy import Policy
 from mdm.models.hierarchical_rssm import HierarchicalRSSM
 from mdm.utils.utils import prepare_data, unsqueeze_right
-from mdm.utils.gym_wrappers import CacheLastStepEnv, CacheLastStepVecEnv
+from mdm.utils.gym_wrappers import CacheLastStepEnv, CacheLastStepVecEnv, CacheLastStepVecEnvPool
 
 
 class AgentPolicy(Policy):
@@ -51,7 +51,7 @@ class LatentAgentPolicy(Policy):
         device = self.agent.device
 
         if env.current_step == 0:
-            if isinstance(env, CacheLastStepVecEnv):
+            if isinstance(env, (CacheLastStepVecEnv, CacheLastStepVecEnvPool)):
                 d_batch = env.last_o.shape[0]
             else:
                 d_batch = 1
@@ -140,11 +140,11 @@ class HierarchicalLatentAgentPolicy(Policy):
                    env: Union[CacheLastStepEnv, CacheLastStepVecEnv]):
         device = self.model.device
         # get data and add time dim
-        o = torch.from_numpy(env.last_o).unsqueeze(0).to(device=device, dtype=torch.float32)
-        a = torch.from_numpy(env.last_a).unsqueeze(0).to(device=device, dtype=torch.float32)
-        r = torch.from_numpy(env.last_r).unsqueeze(0).to(device=device, dtype=torch.float32)
-        terminal = torch.from_numpy(env.last_term).unsqueeze(0).to(device=device, dtype=torch.float32)
-        truncated = torch.from_numpy(env.last_trunc).unsqueeze(0).to(device=device, dtype=torch.float32)
+        o = torch.from_numpy(np.array(env.last_o)).unsqueeze(0).to(device=device, dtype=torch.float32)
+        a = torch.from_numpy(np.array(env.last_a)).unsqueeze(0).to(device=device, dtype=torch.float32)
+        r = torch.from_numpy(np.array(env.last_r)).unsqueeze(0).to(device=device, dtype=torch.float32)
+        terminal = torch.from_numpy(np.array(env.last_term)).unsqueeze(0).to(device=device, dtype=torch.float32)
+        truncated = torch.from_numpy(np.array(env.last_trunc)).unsqueeze(0).to(device=device, dtype=torch.float32)
         if isinstance(env, CacheLastStepEnv):  # add batch dim if unbatched env
             o, a, r, terminal, truncated = [x.unsqueeze(1) for x in (o, a, r, terminal, truncated)]
         env_data = {'o': o, 'a': a, 'r': r, 'terminal': terminal, 'truncated': truncated, 'mask': torch.empty_like(r)}
@@ -271,9 +271,12 @@ class HierarchicalLatentAgentPolicy(Policy):
 
     def __call__(self,
                  env: Union[CacheLastStepEnv, CacheLastStepVecEnv]):
+        if isinstance(env, (CacheLastStepVecEnv, CacheLastStepVecEnvPool)):
+            d_batch = env.last_o.shape[0]
+        else:
+            d_batch = 1
         if env.current_step == 0:
             self._reset()
-            d_batch = env.last_a.shape[0]
             # store default zero actions as last performend action
             self._act_cache = [[torch.zeros((d_batch, rssm.d_a), device=self.model.device, dtype=torch.float32)] for
                                rssm in self.model.rssm_modules]
@@ -289,4 +292,6 @@ class HierarchicalLatentAgentPolicy(Policy):
             self._replan()
 
         action = self._action_queue.pop(0)
+        if d_batch == 1:
+            action = action[0]
         return action.detach().cpu().numpy()
