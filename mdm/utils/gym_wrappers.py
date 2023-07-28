@@ -2,7 +2,11 @@ from typing import Tuple, Optional, Union, List
 
 import gym
 import numpy as np
+from gym import spaces
 from gym.core import ObsType, ActType
+import envpool
+from envpool.python.gym_envpool import GymEnvPoolMeta
+from envpool.python.gymnasium_envpool import GymnasiumEnvPoolMeta
 
 from mdm.utils.utils import unsqueeze_right
 
@@ -126,6 +130,80 @@ class CacheLastStepVecEnv(gym.Wrapper):
             #mask = np.bitwise_and(infos['_final_observation'], self.envs_done)
             #mask = expand_shape_right(mask, o)
             #self.last_o = np.where(~mask, expand_shape_right(infos['final_observation'], o), o)  # TODO: check this
+        self.envs_done = np.bitwise_or(self.envs_done, done_now)
+
+        if self.envs_done.all():
+            self.current_step = 0
+        else:
+            self.current_step += 1
+
+        #return o, r, term, trunc, infos
+        return None, None, None, None, None
+
+
+class CacheLastStepVecEnvPool:
+
+    def __init__(self,
+                 env: GymEnvPoolMeta):
+        self.unwrapped = env
+        self.envs_done = np.full((len(env.all_env_ids), ), False)
+        self.last_o = None
+        self.last_a = None
+        self.last_r = None
+        self.last_term = None
+        self.last_trunc = None
+        self.last_info = None
+        self.current_step = 0
+
+        # calculate action space of batched envs
+        single_space = self.unwrapped.action_space
+        if not isinstance(single_space, gym.spaces.Box):
+            raise ValueError('Only box action spaces are currently supported')
+
+        shape = single_space.shape
+        ndim = len(shape)
+        lows = np.tile(single_space.low[None, ...], reps=(self.num_envs, *[1 for _ in range(ndim)]))
+        highs = np.tile(single_space.high[None, ...], reps=(self.num_envs, *[1 for _ in range(ndim)]))
+        space = gym.spaces.Box(low=lows, high=highs, dtype=single_space.dtype)
+        self.action_space = space
+
+    @property
+    def num_envs(self):
+        return len(self.unwrapped.all_env_ids)
+
+    @property
+    def all_envs_done(self):
+        return self.envs_done.all()
+
+    def reset(self,
+              *,
+              seed: Optional[Union[int, List[int]]] = None,
+              options: Optional[dict] = None):
+        self.envs_done[:] = False
+        o, infos = self.unwrapped.reset()
+        self.last_o = o
+        self.last_a = np.zeros_like(self.action_space.sample())
+        self.last_r = np.full((self.num_envs,), 0.0)
+        self.last_term = np.full((self.num_envs,), False)
+        self.last_trunc = np.full((self.num_envs,), False)
+        self.last_info = infos
+        self.current_step = 0
+        return o, infos
+
+    def step(self,
+             actions):
+        if self.envs_done.all():
+            raise RuntimeError('All envs are already done, call reset()')
+
+        o, r, term, trunc, infos = self.unwrapped.step(actions)
+        self.last_o = np.where(unsqueeze_right(self.envs_done, o), np.zeros_like(o), o)
+        self.last_a = np.where(unsqueeze_right(self.envs_done, actions), np.zeros_like(actions), actions)
+        self.last_r = np.where(self.envs_done, np.zeros_like(r), r)
+        self.last_term = np.where(self.envs_done, np.zeros_like(term), term)
+        self.last_trunc = np.where(self.envs_done, np.zeros_like(trunc), trunc)
+        self.last_info = infos
+
+        done_now = np.bitwise_or(term, trunc)
         self.envs_done = np.bitwise_or(self.envs_done, done_now)
 
         if self.envs_done.all():
