@@ -26,6 +26,10 @@ def main():
     cfg = load_yaml(here() / 'cfg_rssm_train.yaml')
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
+    if args.d_batch:
+        cfg['trainer']['d_batch'] = args.d_batch
+    if args.n_collect:
+        cfg['prefill_episodes'] = args.n_collect
     if args.log:
         logger = NeptuneLogger(**neptune_cfg)
     else:
@@ -37,11 +41,6 @@ def main():
                                '_mask_agent': 50,
                                'simulated_ground_truth_goal_distance': 50,
                                '_sanity_check_goal_computation': 50})
-
-    if args.d_batch:
-        cfg['trainer']['d_batch'] = args.d_batch
-    if args.n_collect:
-        cfg['prefill_episodes'] = args.n_collect
 
     env = gym.make(cfg['env_name'])
     env = CacheLastStepEnv(env)
@@ -99,16 +98,21 @@ def main():
             collect_driver.interact(cfg['prefill_episodes'], train_mem)
         case False:
             print('starting with empty training memory...', flush=True)
+    train_driver = OfflineRLDriver(train_mem, sampling_type=SamplingType.RANDOM)
+
+    test_mem = []
+    if cfg['test_samples']:
+        test_mem = load_memory(here() / cfg['test_samples'])
+    else:
+        collect_driver = GymEpisodeDriver(collect_env, lambda *x: collect_env.action_space.sample())
+        collect_driver.interact(cfg['prefill_episodes'] // 5, test_mem)
+    test_driver = OfflineRLDriver(test_mem, sampling_type=SamplingType.RANDOM)
 
     #fig, ani = visualize_trajectory(train_mem[0])
     #gif = anim_to_gif(ani)
     #plt.show()
     #fig = plot_trajectory_stats(train_mem, 20)
     #plt.show()
-
-    train_driver = OfflineRLDriver(train_mem, sampling_type=SamplingType.RANDOM)
-    test_mem = load_memory(here() / cfg['test_samples'])
-    test_driver = OfflineRLDriver(test_mem, sampling_type=SamplingType.RANDOM)
 
     def simple_collect_fn():
         agent = r_max_agents[0][0]
