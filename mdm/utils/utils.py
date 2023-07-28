@@ -22,7 +22,7 @@ from PIL import Image
 from mdm.gridworld.gridworld import Gridworld, CellType
 from mdm.memory.trajectory_memory import flatten_and_unsqueeze, TrajectoryMemory
 from mdm.models.building_blocks import *
-#from mdm.policies.actor_critic_agent import ActorCriticAgent
+# from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.logging.logger import Logger, Scope
 from mdm.utils.torch_tools import compute_mask
 
@@ -344,7 +344,7 @@ def fig_to_img(fig: plt.Figure,
                minimize_size: bool = True):
     buffer = io.BytesIO()
     fig.savefig(buffer, bbox_inches='tight')
-    #print(buffer.tell() / 1024)
+    # print(buffer.tell() / 1024)
     if clear_fig:
         plt.clf()
     buffer.seek(0)
@@ -352,7 +352,7 @@ def fig_to_img(fig: plt.Figure,
     if minimize_size:
         opt_buffer = io.BytesIO()
         img.save(opt_buffer, format='GIF', optimize=True)
-        #print(opt_buffer.tell() / 1024)
+        # print(opt_buffer.tell() / 1024)
         opt_buffer.seek(0)
         img = Image.open(opt_buffer)
     return img
@@ -382,10 +382,10 @@ def anim_to_vid(anim: animation.Animation,
     extra_args = ['-vcodec', 'libx264', '-pix_fmt', 'yuv420p']
     writer = animation.writers['ffmpeg'](fps=fps, extra_args=extra_args)
     anim.save(tmp_file_name, writer=writer, dpi=dpi)
-    #print(os.path.getsize(tmp_file_name) / 1024 )
+    # print(os.path.getsize(tmp_file_name) / 1024 )
 
     # old version
-    #anim.save(tmp_file_name, writer='ffmpeg', fps=fps, dpi=dpi)
+    # anim.save(tmp_file_name, writer='ffmpeg', fps=fps, dpi=dpi)
 
     f = InMemoryFile.consume_file(tmp_file_name)
 
@@ -536,6 +536,106 @@ def valid_subtrajectories(data: Dict[str, torch.Tensor],
         i_matr_exp = unsqueeze_right(i_matrix, v)
         i_matr_exp = i_matr_exp.repeat(1, 1, *v.shape[2:])
         v_new = torch.gather(v, dim=1, index=i_matr_exp)
+        ret_data[k] = v_new.swapaxes(0, 1)
+
+    return ret_data
+
+
+def valid_subtrajectories_unbiased_fast(data: Dict[str, torch.Tensor],
+                                   length: int):
+    assert length < data['o'].shape[0]
+
+    l_max, n_trajs = data['o'].shape[:2]
+    l_trajs = (1 - data['mask']).sum(dim=0).detach().cpu().numpy().squeeze()
+
+    i_start = np.random.randint(low=[-length + 1 for _ in range(n_trajs)], high=l_trajs)
+    i_end = i_start + length
+    # get indices that simply address their current position
+    i_row, i_col_raw = np.indices((n_trajs, l_max), sparse=True)
+    # these are the raw subsequence indices with potentially invalid start/endpoints before first or after last step
+    i_col = i_col_raw + i_start[:, None]
+    # mask negative start indices with special index -1
+    i_col_masked_start = np.where(i_col < 0, -1, i_col)
+    # from num of masked start indices, compute how many time steps to rotate each row to the left
+    shifts = l_max - (i_col_masked_start == -1).sum(axis=1)
+    # do the rotation, inspired by https://stackoverflow.com/questions/20360675/roll-rows-of-a-matrix-independently
+    shifts = i_col_raw - shifts[:, None]
+    i_col_shifted = i_col_masked_start[i_row, shifts]
+    # mask end indices that should not be available due to natural end of a trajectory
+    # redirect those indices to an artificial last element that is concatenated to the end of the buffers
+    i_col_corrected = np.where(i_col_shifted >= np.minimum(i_end, l_trajs)[..., None], l_max, i_col_shifted)
+    # cut off part of index matrix that can only contain invalid indices
+    i_col_corrected = i_col_corrected[:, :length]
+    # transform to torch tensor
+    i_matrix = torch.from_numpy(i_col_corrected).to(device=data['o'].device, dtype=torch.int64)
+
+    ret_data = {}
+    for k, v in data.items():
+        if k == 'mask':
+            pad = torch.ones(n_trajs, 1, *v.shape[2:], device=v.device, dtype=v.dtype)
+        else:
+            pad = torch.zeros(n_trajs, 1, *v.shape[2:], device=v.device, dtype=v.dtype)
+        v = v.swapaxes(0, 1)
+        v_padded = torch.concat([v, pad], dim=1)
+        # gather doesn't support broadcasting and if the data in v is multi-dimensional, we need to broadcast the
+        # indices over all data dimensions
+        i_matr_exp = unsqueeze_right(i_matrix, v)  # add necessary dimensions
+        i_matr_exp = i_matr_exp.repeat(1, 1, *v.shape[2:])  # broadcast over newly added dimensions
+        v_new = torch.gather(v_padded, dim=1, index=i_matr_exp)
+        ret_data[k] = v_new.swapaxes(0, 1)
+
+    #i_start = np.clip(i_start, 0, l_trajs)
+    #i_end = np.clip(i_end, 0, l_trajs)
+    #i_start = i_start.astype(int)
+    #i_end = i_end.astype(int)
+    #ret_data_2 = {}
+    #for k, v in data.items():
+    #    v = v.swapaxes(0, 1)
+    #    if k == 'mask':
+    #        v_new = torch.ones(n_trajs, length, *v.shape[2:], device=v.device, dtype=v.dtype)
+    #    else:
+    #        v_new = torch.zeros(n_trajs, length, *v.shape[2:], device=v.device, dtype=v.dtype)
+    #    for i_traj, (i_0, i_1) in enumerate(zip(i_start, i_end)):
+    #        v_new[i_traj, 0: i_1 - i_0] = v[i_traj, i_0: i_1]
+    #    ret_data_2[k] = v_new.swapaxes(0, 1)
+    #for k in ret_data:
+    #    lhs = ret_data[k]
+    #    rhs = ret_data_2[k]
+    #    close = torch.isclose(lhs, rhs).all()
+    #    print(f'{k}: {close}')
+
+    return ret_data
+
+
+def valid_subtrajectories_unbiased(data: Dict[str, torch.Tensor],
+                                   length: int):
+    assert length < data['o'].shape[0]
+
+    n_trajs = data['o'].shape[1]
+    l_trajs = (1 - data['mask']).sum(dim=0).detach().cpu().numpy().squeeze()
+
+    i_start = np.random.randint(low=[-length + 1 for _ in range(n_trajs)], high=l_trajs)
+    i_end = i_start + length
+    i_start = np.clip(i_start, 0, l_trajs)
+    i_end = np.clip(i_end, 0, l_trajs)
+    i_start = i_start.astype(int)
+    i_end = i_end.astype(int)
+    #i_start = torch.from_numpy(i_start).to(device=data['o'].device, dtype=torch.float64)
+    #i_end = torch.from_numpy(i_end).to(device=data['o'].device, dtype=torch.float64)
+    # redirect invalid indices to -1, which is a zero-element we'll append to the data further down
+    # NOTE: Doesn't work since we still can end up with -1 indices at the beginning of a trajectory
+    #i_start = np.where(i_start < 0, -1, i_start)
+    #i_end = np.where(i_end > l_trajs, -1, l_trajs)
+
+    ret_data = {}
+    for k, v in data.items():
+        v = v.swapaxes(0, 1)
+        if k == 'mask':
+            v_new = torch.ones(n_trajs, length, *v.shape[2:], device=v.device, dtype=v.dtype)
+        else:
+            v_new = torch.zeros(n_trajs, length, *v.shape[2:], device=v.device, dtype=v.dtype)
+        for i_traj, (i_0, i_1) in enumerate(zip(i_start, i_end)):
+            v_new[i_traj, 0: i_1 - i_0] = v[i_traj, i_0: i_1]
         ret_data[k] = v_new.swapaxes(0, 1)
 
     return ret_data
@@ -925,11 +1025,11 @@ def rssm_states_seq_to_batch(mem: Dict[str, List[torch.Tensor]],
     states = {k: v[i_start: i_end] for k, v in mem.items() if k in state_keys}
     del state_keys
 
-    #if None in states['z_post']:  # ugly hack
+    # if None in states['z_post']:  # ugly hack
     #    states['z_post'] = states['z_prior']
     #    states = rssm_instance.state_seq_to_batch(**states)
     #    states['z_post'] = [None for _ in range(states['z'].shape[0])]
-    #else:
+    # else:
     states = rssm_instance.state_seq_to_batch(**states)
 
     mask = compute_mask(torch.stack(mem['terminal'][i_start: i_end]))
