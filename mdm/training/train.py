@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import to_rgb
 from tqdm import tqdm
 import gym
+import moviepy.editor as mp
 
 from mdm.logging.logger import Scope, GlobalLogger
 from mdm.policies.agent_policy import HierarchicalLatentAgentPolicy, LatentAgentPolicy
@@ -19,12 +20,13 @@ from mdm.training.gym_driver import collect_data
 from mdm.utils.torch_tools import to_tensors, to_np
 from mdm.utils.utils import (prepare_data, TempFigure, trajectory_statistics, trajectories_from_simulation,
                              anim_to_vid, rssm_states_seq_to_batch, log_params, InMemoryFile,
-                             fig_to_img)
+                             fig_to_img, valid_subtrajectories, valid_subtrajectories_unbiased,
+                             valid_subtrajectories_unbiased_fast)
 from mdm.utils.gym_nav2d_tools import gen_regular_grid_trajectories, visualize_overlaid_trajectories
 
 
 def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collect_fn, eval_env, test_driver,
-                train_driver, logger):
+                train_driver, logger, log_videos: bool = True, video_env = None):
     model_train_steps = cfg['trainer']['model_train_steps']
     freeze_model = cfg['trainer']['freeze_model'] if cfg['trainer']['freeze_model'] > 0 else sys.maxsize
     stop_collect = cfg['trainer']['stop_collect'] if cfg['trainer']['stop_collect'] > 0 else sys.maxsize
@@ -32,9 +34,9 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
     model.prepare_for_training()
 
     # for evaluation of latent space
-    grid_trajs = gen_regular_grid_trajectories(eval_env.env_fns[0](), trajs_vert=10, trajs_horiz=10, step_size=1.0)
-    grid_trajs = to_tensors(grid_trajs, model.device, padding='repeat')
-    grid_trajs = prepare_data(grid_trajs)
+    #grid_trajs = gen_regular_grid_trajectories(eval_env.env_fns[0](), trajs_vert=10, trajs_horiz=10, step_size=1.0)
+    #grid_trajs = to_tensors(grid_trajs, model.device, padding='repeat')
+    #grid_trajs = prepare_data(grid_trajs)
 
     for i_step in tqdm(range(cfg['trainer']['n_train_steps']), desc='Training Progress'):
         batch = train_driver.interact(cfg['trainer']['d_batch'])
@@ -45,13 +47,13 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
         # train model normal
         model.train()
         agent_eval_mode(r_max_agents + goal_seeking_agents)
-        # model_batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
-        model_batch = batch
-        # model_batch_2 = valid_subtrajectories_2(batch, cfg['trainer']['subtrajectory_len'])
-        # for k, v in model_batch.items():
-        #    assert torch.all(model_batch_2[k] == v)
+        if cfg['trainer']['subtrajectory_len'] > 0:
+            # model_batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
+            # model_batch = valid_subtrajectories_unbiased(batch, 15)
+            model_batch = valid_subtrajectories_unbiased_fast(batch, cfg['trainer']['subtrajectory_len'])
+        else:
+            model_batch = batch
 
-        # model_batch = batch
         if i_step < freeze_model:
             train_losses, pred, targets, states_below = model.train_step(model_batch, opt_model,
                                                                          model_steps=model_train_steps)
@@ -174,18 +176,18 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 # We start at the same spot as the r_max agent, namely at start_state_lvl. We then use every
                 # k-th time step from the r_max agent's simulation as intermediate goal and train goal finding
                 if l < model.levels - 1:
-                    # noisy_actions = torch.stack(r_max_simulation['agent']['a'])
-                    # a_space_midpoint = (r_max_agent.max_a + r_max_agent.min_a) / 2
-                    # a_space_span = r_max_agent.max_a - r_max_agent.min_a
-                    # act_noise = (torch.rand_like(noisy_actions[:, ::2]) - 0.5 + a_space_midpoint) * a_space_span
-                    # noisy_actions[:, ::2] += act_noise
-                    # noisy_actions = torch.clamp(noisy_actions, r_max_agent.min_a, r_max_agent.max_a)
-                    # noisy_simulation, _, _ = model.forward_static({'o': None, 'a': noisy_actions}, level=l, n_warmup=0,
-                    #                                              start_state=start_state_lvl, sample_state=True,
-                    #                                              sample_output=False, reconstruct=False)
-                    # goals = model.filter_up(o=noisy_simulation['z'], r=noisy_simulation['r'],
-                    #                        terminal=noisy_simulation['terminal'], level=l + 1,
-                    #                        respect_terminal_flag=True)
+                    #noisy_actions = torch.stack(r_max_simulation['agent']['a'])
+                    #a_space_midpoint = (r_max_agent.max_a + r_max_agent.min_a) / 2
+                    #a_space_span = r_max_agent.max_a - r_max_agent.min_a
+                    #act_noise = (torch.rand_like(noisy_actions[:, ::2]) - 0.5 + a_space_midpoint) * a_space_span
+                    #noisy_actions[:, ::2] += act_noise  # every 2nd trajectory gets noisy actions
+                    #noisy_actions = torch.clamp(noisy_actions, r_max_agent.min_a, r_max_agent.max_a)
+                    #noisy_simulation, _, _ = model.forward_static({'o': None, 'a': noisy_actions}, level=l, n_warmup=0,
+                    #                                             start_state=start_state_lvl, sample_state=True,
+                    #                                             sample_output=False, reconstruct=False)
+                    #goals = model.filter_up(o=noisy_simulation['z'], r=noisy_simulation['r'],
+                    #                       terminal=noisy_simulation['terminal'], level=l + 1,
+                    #                       respect_terminal_flag=True)
                     goal_agent, goal_actor_opt, goal_critic_opt = model.goal_seeking_agents[l]
                     goals = model.filter_up(o=r_max_simulation['model']['z'], r=r_max_simulation['model']['r'],
                                             terminal=r_max_simulation['model']['terminal'], level=l + 1,
@@ -317,56 +319,80 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 o_predicted = torch.stack(pred_l['o']).detach().cpu().numpy()
                 r_predicted = torch.stack(pred_l['r']).detach().cpu().numpy()
                 term_predicted = torch.stack(pred_l['terminal']).detach().cpu().numpy()
-                with TempFigure() as fig:
-                    plt.plot(o_predicted[:, 0], marker='o', label='observation')
-                    plt.plot(r_predicted[:, 0], marker='+', label='reward')
-                    plt.plot(term_predicted[:, 0], marker='x', label='terminal')
-                    plt.legend()
-                    plt.suptitle(f'Observations and terminal flags level {l}')
-                    logger.log_plot(fig_to_img(fig), Scope.TEST() / f'model/predicted_o_{l}', i_step)
+                #with TempFigure() as fig:
+                #    plt.plot(o_predicted[:, 0], marker='o', label='observation')
+                #    plt.plot(r_predicted[:, 0], marker='+', label='reward')
+                #    plt.plot(term_predicted[:, 0], marker='x', label='terminal')
+                #    plt.legend()
+                #    plt.suptitle(f'Observations and terminal flags level {l}')
+                #    logger.log_plot(fig_to_img(fig), Scope.TEST() / f'model/predicted_o_{l}', i_step)
 
             # hierarchical agent
             eval_env.reset()
             policy = HierarchicalLatentAgentPolicy(model)
-            eval_mem_hierarchical = collect_data(eval_env, 50, policy)
+            eval_mem_hierarchical = collect_data(eval_env, cfg['eval']['eval_steps'], policy)
             logger.log(trajectory_statistics(eval_mem_hierarchical), Scope.TEST() / 'hierarchical_agent/', i_step)
+
+            if video_env:
+                # record an episode
+                video_env.reset()
+                video_env.start_video_recorder()
+                _ = collect_data(video_env, cfg['eval']['eval_steps'], policy)
+                video_env.close_video_recorder()
+
+                # make video smaller
+                video_name = f'{video_env.name_prefix}-episode-{video_env.episode_id}.mp4'
+                video_path = os.path.join(video_env.video_folder, video_name)
+
+                timestamp = time.time_ns()
+                pid = os.getpid()
+                tmp_file_name = f'.{pid}_{timestamp}_agent_video.mp4'
+
+                clip = mp.VideoFileClip(video_path)
+                clip = clip.resize(width=64)
+                clip.write_videofile(tmp_file_name, preset='veryslow', verbose=False, logger=None)
+
+                # upload
+                video = InMemoryFile.consume_file(tmp_file_name)
+                logger.log({'hierarchical_agent': video}, Scope.TEST() / 'agent_action_videos/', i_step)
 
             # flat agent
             eval_env.reset()
             policy = LatentAgentPolicy(r_max_agents[0][0], model)
-            eval_mem_flat = collect_data(eval_env, 50, policy)
+            eval_mem_flat = collect_data(eval_env, cfg['eval']['eval_steps'], policy)
             logger.log(trajectory_statistics(eval_mem_flat), Scope.TEST() / 'flat_agent/', i_step)
 
-            # print trajectories, works only for nav2d env
-            fig, anim = visualize_overlaid_trajectories(eval_mem_flat[0])
-            vid_flat = anim_to_vid(anim)
-            vid_flat.name = 'flat_agent_acting'
-            plt.close(fig)  # explicitly close to avoid memory leak
-            del fig
-            fig, anim = visualize_overlaid_trajectories(eval_mem_hierarchical[0])
-            vid_hierarchical = anim_to_vid(anim)
-            vid_hierarchical.name = 'hierarchical_agent_acting'
-            plt.close(fig)  # explicitly close to avoid memory leak
-            del fig
-            logger.log({'flat_agent': vid_flat, 'hierarchical_agent': vid_hierarchical},
-                       Scope.TEST() / 'agent_action_videos/', i_step)
+            if log_videos:
+                # print trajectories, works only for nav2d env
+                fig, anim = visualize_overlaid_trajectories(eval_mem_flat[0])
+                vid_flat = anim_to_vid(anim)
+                vid_flat.name = 'flat_agent_acting'
+                plt.close(fig)  # explicitly close to avoid memory leak
+                del fig
+                fig, anim = visualize_overlaid_trajectories(eval_mem_hierarchical[0])
+                vid_hierarchical = anim_to_vid(anim)
+                vid_hierarchical.name = 'hierarchical_agent_acting'
+                plt.close(fig)  # explicitly close to avoid memory leak
+                del fig
+                logger.log({'flat_agent': vid_flat, 'hierarchical_agent': vid_hierarchical},
+                           Scope.TEST() / 'agent_action_videos/', i_step)
 
-            # model l0 simulation plot, works only for nav2d env
-            warmup_steps = model.maybe_sample_warmup_steps(training_data=batch, model_steps=model_train_steps,
-                                                           warmup_steps=model.warmup_steps)
-            pred, pred_ema, _, _ = model.forward_all_levels(ground_truth_trajectory=batch,
-                                                            warmup_steps=warmup_steps,
-                                                            model_steps=model_train_steps,
-                                                            sample_state=True,
-                                                            sample_output=False)
-            trajs_orig_pad = trajectories_from_simulation(batch)  # do this to get padded versions of orig trajectories
-            trajs_sim = trajectories_from_simulation(pred[0])
-            fig, anim = visualize_overlaid_trajectories(trajs_sim[0], trajs_orig_pad[0])
-            vid = anim_to_vid(anim)
-            vid.name = 'model_sim'
-            logger.log({'live_model': vid}, Scope.TEST() / 'model_prediction_video/', i_step)
-            plt.close(fig)  # explicitly close to avoid memory leak
-            del fig
+                # model l0 simulation plot, works only for nav2d env
+                warmup_steps = model.maybe_sample_warmup_steps(training_data=batch, model_steps=model_train_steps,
+                                                               warmup_steps=model.warmup_steps)
+                pred, pred_ema, _, _ = model.forward_all_levels(ground_truth_trajectory=batch,
+                                                                warmup_steps=warmup_steps,
+                                                                model_steps=model_train_steps,
+                                                                sample_state=True,
+                                                                sample_output=False)
+                trajs_orig_pad = trajectories_from_simulation(batch)  # do this to get padded versions of orig trajectories
+                trajs_sim = trajectories_from_simulation(pred[0])
+                fig, anim = visualize_overlaid_trajectories(trajs_sim[0], trajs_orig_pad[0])
+                vid = anim_to_vid(anim)
+                vid.name = 'model_sim'
+                logger.log({'live_model': vid}, Scope.TEST() / 'model_prediction_video/', i_step)
+                plt.close(fig)  # explicitly close to avoid memory leak
+                del fig
 
             # log model and agent params
             log_params(model, logger, Scope.PARAMETERS() / 'model', time_step=i_step)
@@ -377,6 +403,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 if ag is None: continue
                 log_params(ag[0], logger, Scope.PARAMETERS() / f'agent/goal_seeking_agent_{i_ag}', time_step=i_step)
 
+            """
             _, pred_grid, _, _ = model.eval_step(grid_trajs, model_steps=eval_steps, sample_state=False,
                                                  sample_output=False,
                                                  force_warmup=[-1 for _ in range(model.levels)])
@@ -401,6 +428,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
             # sanity check to confirm that coloring based on xy positions makes sense
             # plt.scatter(xy_positions[:, 0], xy_positions[:, 1], c=colors)
             # plt.show()
+            """
 
         if i_step % cfg['trainer']['checkpoint_interval'] == 0:
             timestamp = time.time_ns()
