@@ -6,6 +6,7 @@ from sys import gettrace
 from functools import partial
 import os
 
+import numpy
 import torch
 import numpy as np
 
@@ -143,6 +144,63 @@ class ManagedStatefulTrainingModule(torch.nn.Module):
 
     def increase_train_step(self):
         self._current_train_step += 1
+
+
+# adapted from https://github.com/openai/baselines/blob/master/baselines/common/vec_env/vec_normalize.py
+class RunningMeanStd(torch.nn.Module):
+    """Tracks the mean, variance and count of values."""
+
+    # https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
+    def __init__(self,
+                 epsilon: float = 1e-4,
+                 shape: tuple = ()):
+        super().__init__()
+        """Tracks the mean, variance and count of values."""
+        self.mean = torch.nn.Parameter(torch.zeros(*shape, dtype=torch.float64), requires_grad=False)
+        self.var = torch.nn.Parameter(torch.ones(*shape, dtype=torch.float64), requires_grad=False)
+        self.count = torch.nn.Parameter(torch.tensor(epsilon, dtype=torch.float64), requires_grad=False)
+
+    def update(self,
+               x: torch.Tensor,
+               mask: None | torch.Tensor = None):
+        with torch.no_grad():
+            """Updates the mean, var and count from a batch of samples."""
+            x = torch.flatten(x, start_dim=0, end_dim=-(self.mean.ndim + 1))
+            #batch_mean = torch.mean(x, dim=0, dtype=torch.float64)
+            #batch_var = torch.var(x, dim=0).to(dtype=torch.float64)
+            if mask is None:
+                weights = torch.ones_like(x)
+            else:
+                weights = 1 - torch.flatten(mask, start_dim=0, end_dim=-(self.mean.ndim + 1))
+            weights = unsqueeze_right(weights, x)
+            weights = weights / weights.sum(dim=0)
+            batch_mean = torch.sum(x * weights, dim=0, dtype=torch.float64)
+            batch_var = torch.sum(((x - batch_mean[None, ...]) ** 2) * weights, dim=0, dtype=torch.float64)
+            batch_count = x.shape[0]
+            self.update_from_moments(batch_mean, batch_var, batch_count)
+
+    def update_from_moments(self, batch_mean, batch_var, batch_count):
+        """Updates from batch mean, variance and count moments."""
+        new_mean, new_var, new_count = update_mean_var_count_from_moments(self.mean, self.var, self.count,
+                                                                          batch_mean, batch_var, batch_count)
+        self.mean.copy_(new_mean)
+        self.var.copy_(new_var)
+        self.count.copy_(new_count)
+
+
+def update_mean_var_count_from_moments(mean, var, count, batch_mean, batch_var, batch_count):
+    """Updates the mean, var and count using the previous mean, var, count and batch values."""
+    delta = batch_mean - mean
+    tot_count = count + batch_count
+
+    new_mean = mean + delta * batch_count / tot_count
+    m_a = var * count
+    m_b = batch_var * batch_count
+    M2 = m_a + m_b + torch.square(delta) * count * batch_count / tot_count
+    new_var = M2 / tot_count
+    new_count = tot_count
+
+    return new_mean, new_var, new_count
 
 
 class RecurrentBlock(torch.nn.Module, DeviceMixin):
@@ -434,6 +492,23 @@ def stack_dists(dists: List[torch.distributions.Distribution]):
         raise ValueError(f'Unsupported distribution class: {cls}')
 
 
+def unstack_dist(dist: torch.distributions.Distribution,
+                 dim: int):
+    if isinstance(dist, torch.distributions.Normal):
+        locs = list(dist.loc.unbind(dim))
+        scales = list(dist.scale.unbind(dim))
+        return [torch.distributions.Normal(loc=loc, scale=scale) for loc, scale in zip(locs, scales)]
+    elif isinstance(dist, torch.distributions.RelaxedBernoulli):
+        probs = list(dist.probs.unbind(dim))
+        temps = list(dist.temperature.unbind(dim))
+        return [torch.distributions.RelaxedBernoulli(probs=prob, temperature=temp) for prob, temp in zip(probs, temps)]
+    elif isinstance(dist, torch.distributions.ContinuousBernoulli):
+        probs = list(dist.probs.unbind(dim))
+        return [torch.distributions.ContinuousBernoulli(probs=prob) for prob in probs]
+    else:
+        raise ValueError(f'Unsupported distribution class: {type(dist)}')
+
+
 @compile_if_not_debug
 def concat_dists(dists: List[torch.distributions.Distribution],
                  dim: int = 0):
@@ -642,8 +717,8 @@ def compute_mask(terminals: torch.Tensor,
                                torch.tensor(1.0, device=terminals.device, dtype=terminals.dtype),
                                torch.tensor(0.0, device=terminals.device, dtype=terminals.dtype))
 
-        #mask = torch.zeros_like(mask)
-        #mask = torch.where(mask > 0.95,
+        # mask = torch.zeros_like(mask)
+        # mask = torch.where(mask > 0.95,
         #                   torch.tensor(1.0, device=terminals.device, dtype=terminals.dtype),
         #                   torch.tensor(0.0, device=terminals.device, dtype=terminals.dtype))
 

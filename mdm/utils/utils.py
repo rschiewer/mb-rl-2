@@ -532,8 +532,8 @@ def valid_subtrajectories(data: Dict[str, torch.Tensor],
 
 
 def valid_subtrajectories_unbiased_fast(data: Dict[str, torch.Tensor],
-                                   length: int):
-    assert length < data['o'].shape[0]
+                                        length: int):
+    #assert length < data['o'].shape[0]
 
     l_max, n_trajs = data['o'].shape[:2]
     l_trajs = (1 - data['mask']).sum(dim=0).detach().cpu().numpy().squeeze()
@@ -574,12 +574,12 @@ def valid_subtrajectories_unbiased_fast(data: Dict[str, torch.Tensor],
         v_new = torch.gather(v_padded, dim=1, index=i_matr_exp)
         ret_data[k] = v_new.swapaxes(0, 1)
 
-    #i_start = np.clip(i_start, 0, l_trajs)
-    #i_end = np.clip(i_end, 0, l_trajs)
-    #i_start = i_start.astype(int)
-    #i_end = i_end.astype(int)
-    #ret_data_2 = {}
-    #for k, v in data.items():
+    # i_start = np.clip(i_start, 0, l_trajs)
+    # i_end = np.clip(i_end, 0, l_trajs)
+    # i_start = i_start.astype(int)
+    # i_end = i_end.astype(int)
+    # ret_data_2 = {}
+    # for k, v in data.items():
     #    v = v.swapaxes(0, 1)
     #    if k == 'mask':
     #        v_new = torch.ones(n_trajs, length, *v.shape[2:], device=v.device, dtype=v.dtype)
@@ -588,7 +588,7 @@ def valid_subtrajectories_unbiased_fast(data: Dict[str, torch.Tensor],
     #    for i_traj, (i_0, i_1) in enumerate(zip(i_start, i_end)):
     #        v_new[i_traj, 0: i_1 - i_0] = v[i_traj, i_0: i_1]
     #    ret_data_2[k] = v_new.swapaxes(0, 1)
-    #for k in ret_data:
+    # for k in ret_data:
     #    lhs = ret_data[k]
     #    rhs = ret_data_2[k]
     #    close = torch.isclose(lhs, rhs).all()
@@ -610,12 +610,12 @@ def valid_subtrajectories_unbiased(data: Dict[str, torch.Tensor],
     i_end = np.clip(i_end, 0, l_trajs)
     i_start = i_start.astype(int)
     i_end = i_end.astype(int)
-    #i_start = torch.from_numpy(i_start).to(device=data['o'].device, dtype=torch.float64)
-    #i_end = torch.from_numpy(i_end).to(device=data['o'].device, dtype=torch.float64)
+    # i_start = torch.from_numpy(i_start).to(device=data['o'].device, dtype=torch.float64)
+    # i_end = torch.from_numpy(i_end).to(device=data['o'].device, dtype=torch.float64)
     # redirect invalid indices to -1, which is a zero-element we'll append to the data further down
     # NOTE: Doesn't work since we still can end up with -1 indices at the beginning of a trajectory
-    #i_start = np.where(i_start < 0, -1, i_start)
-    #i_end = np.where(i_end > l_trajs, -1, l_trajs)
+    # i_start = np.where(i_start < 0, -1, i_start)
+    # i_end = np.where(i_end > l_trajs, -1, l_trajs)
 
     ret_data = {}
     for k, v in data.items():
