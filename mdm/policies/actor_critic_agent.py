@@ -13,7 +13,7 @@ from torch.distributions import kl_divergence
 import numpy as np
 import matplotlib.pyplot as plt
 
-from mdm.utils.torch_tools import layers_with_activation as lwa, SquashedNormal
+from mdm.utils.torch_tools import layers_with_activation as lwa, SquashedNormal, RunningMeanStd
 from mdm.utils.torch_tools import FuzzyDeviceMixin, compute_mask, detach_dist, compile_if_not_debug, stack_dists, \
     concat_dists
 from mdm.utils.utils import fig_to_img
@@ -45,6 +45,8 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                  use_ema_world_model: bool = False,
                  goal_seeking: bool = False,
                  dynamics_loss: bool = True,
+                 normalize_observations: str | bool = False,
+                 normalize_rewards: str | bool = False,
                  **kwargs):
         super().__init__()
 
@@ -90,6 +92,13 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         for param in self._ema_critic_net.parameters(): param.detach_()
         self._current_train_step = 0
         self.dynamics_loss = dynamics_loss
+        self.normalize_observations = normalize_observations
+        self.normalize_rewards = normalize_rewards
+
+        if normalize_observations == 'running_average':
+            self.o_running_average = RunningMeanStd(shape=(d_o,))
+        if normalize_rewards == 'running_average':
+            self.r_running_average = RunningMeanStd(shape=(1,))
 
     # @torch.compile
     def scale_action(self, action):
@@ -117,6 +126,10 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                 **kwargs):
         if o.shape == self.d_o:  # add batch dim if not there already
             o = o.unsqueeze(0)
+
+        if self.normalize_observations:
+            o = o - self.o_running_average.mean.to(torch.float32)[None, ...]
+            o = o / torch.sqrt(self.o_running_average.var.to(torch.float32) + 1e-6)[None, ...]
 
         if use_ema_modules:
             state_values = self._ema_critic_net(o)
@@ -252,9 +265,14 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         # if self.ema_reg:
         # v = torch.stack([torch.min(v, ema_v) for v, ema_v in zip(v, ema_v)])  # use this for policy targets
 
+        if self.normalize_rewards:
+            r = r - self.r_running_average.mean.to(torch.float32)[None, ...]
+            r = r / torch.sqrt(self.r_running_average.var.to(torch.float32) + 1e-6)[None, ...]
+
         valid = (1 - mask)
         valid_r = valid * r
         valid_v = valid * v
+
         # valid_bootstrap = (valid * torch.minimum(v, ema_v))[-1]
         if self.goal_seeking:
             # we only train a single chunk, no bootstrapping needed beyond that
@@ -281,8 +299,8 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         policy_loss -= act_entropy_reward_aug
         value_target = returns + model_novelty_reward_aug  # validity mask is multiplied with value_loss
         value_loss = valid[:-1] * torch.nn.functional.smooth_l1_loss(v[:-1], value_target.detach(), reduction='none')
-        ppo_loss = valid[:-1] * self.beta * torchd.kl_divergence(detach_dist(ema_a_dist), a_dist).sum(dim=-1,
-                                                                                                      keepdims=True)
+        ppo_loss = valid[:-1] * self.beta * torchd.kl_divergence(detach_dist(ema_a_dist),
+                                                                 a_dist).sum(dim=-1, keepdims=True)
 
         policy_loss = torch.mean(policy_loss)
         value_loss = torch.mean(value_loss)
@@ -291,72 +309,43 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         entropy_reward_aug = torch.mean(act_entropy_reward_aug)
         loss = policy_loss + value_loss + ppo_loss
 
-        """
-        calculate losses
-        from https://github.com/pytorch/examples/blob/main/reinforcement_learning/actor_critic.py
-        returns, discount = self._calc_returns(r, v, terminal, gamma=0.99)
-        gae_advantages, _ = self._calc_gae(r, v, terminal, gamma=0.99, lambda_=0.95)
-        # returns = torch.stack(returns)
-        # returns = (returns - returns.mean()) / (returns.std() + 0.0001)
+        if self.normalize_rewards:
+            running_r = self.r_running_average.mean.mean()
+        else:
+            running_r = torch.tensor(0.0, device=self.device)
 
-        policy_losses = []
-        value_losses = []
-        ppo_losses = []
-        act_entropy_reward_augs = []
-        model_novelty_reward_augs = []
-        for a_dist_, ema_a_dist_, v_, R, gae_advantage_, model_uncertainty_, discount_ in zip(a_dist,
-                                                                                              ema_a_dist,
-                                                                                              v,
-                                                                                              returns,
-                                                                                              gae_advantages,
-                                                                                              model_novelty,
-                                                                                              discount):
-            # ACTOR
-            act_entropy_reward_aug = self.alpha * discount_ * a_dist_.entropy().sum(dim=-1, keepdims=True)
-            advantage = R - v_.detach()
-            policy_losses.append(-(discount_ * (advantage + act_entropy_reward_aug)))
-            # policy_losses.append(-gae_advantage_)
-            # policy_losses.append(-R)
-            # ppo_r = a_dist.log_prob(a.detach()) / detach_dist(ema_a_dist).log_prob(a.detach())
-            # ppo_actor_loss = -((R.detach() - v.detach()) * torch.clip(ppo_r, torch.tensor(0.8, device=sim_env.device),
-            #                                                          torch.tensor(1.2, device=sim_env.device)))
-            # policy_losses.append(ppo_actor_loss)
-            # regular_actor_loss = -((R.detach() - v.detach()) * a_dist.log_prob(a.detach()))
-            # policy_losses.append(-((R.detach() - v.detach()) * a_dist.log_prob(a.detach())))
-            # CRITIC
-            model_novelty_reward_aug = self.mu * discount_ * model_uncertainty_.unsqueeze(-1)
-            value_target = R.detach() + model_novelty_reward_aug.detach()
-            value_losses.append(discount_ * torch.nn.functional.smooth_l1_loss(v_, value_target, reduction='none'))
+        if self.normalize_observations:
+            running_o = self.o_running_average.mean.mean()
+        else:
+            running_o = torch.tensor(0.0, device=self.device)
 
-            # TRUST REGION POLICY UPDATE REGULARIZATION
-            ppo_losses.append(discount_ * torchd.kl_divergence(detach_dist(ema_a_dist_), a_dist_).sum(-1, keepdim=True))
+        losses = {'total': loss, 'policy': policy_loss, 'value': value_loss, 'policy_trust_region_loss': ppo_loss,
+                  'model_novelty_reward_aug': model_novelty_reward_aug, 'action_entropy_reward_aug': entropy_reward_aug,
+                  'eps_exploration': self.eps, 'monitoring_a_dist_mean': a_dist.mean.mean(),
+                  'monitoring_a_dist_std': a_dist.scale.mean(), 'monitoring_r_running_average': running_r,
+                  'monitoring_o_running_average': running_o}
 
-            # BOOKKEEPING
-            act_entropy_reward_augs.append(act_entropy_reward_aug)
-            model_novelty_reward_augs.append(model_novelty_reward_aug)
+        if kwargs.get('for_train_step', False):  # ugly hack
+            losses['mask'] = mask
 
-        policy_loss = torch.mean(torch.stack(policy_losses))
-        value_loss = torch.mean(torch.stack(value_losses))
-        ppo_loss = self.beta * torch.mean(torch.stack(ppo_losses))
-        entropy_reward_aug = torch.mean(torch.stack(act_entropy_reward_augs))
-        model_novelty_reward_aug = torch.mean(torch.stack(model_novelty_reward_augs))
-        loss = policy_loss + value_loss + ppo_loss
-        """
-
-        return {'total': loss, 'policy': policy_loss, 'value': value_loss, 'policy_trust_region_loss': ppo_loss,
-                'model_novelty_reward_aug': model_novelty_reward_aug, 'action_entropy_reward_aug': entropy_reward_aug,
-                'eps_exploration': self.eps, 'monitoring_a_dist_mean': a_dist.mean.mean(),
-                'monitoring_a_dist_std': a_dist.scale.mean()}
+        return losses
 
     def train_step(self,
-                   simulation_data: Dict[str, torch.Tensor],
+                   simulation_data: Dict[str, List[torch.Tensor]],
                    actor_optimizer: torch.optim.Optimizer,
                    critic_optimizer: torch.optim.Optimizer,
                    **kwargs):
         actor_optimizer.zero_grad(set_to_none=True)
         critic_optimizer.zero_grad(set_to_none=True)
 
-        losses = self.eval_step(**simulation_data)
+        losses = self.eval_step(**simulation_data, for_train_step=True)
+
+        with torch.no_grad():
+            mask = losses.pop('mask')
+            if self.normalize_observations:
+                self.o_running_average.update(torch.stack(simulation_data['o']), mask=mask)
+            if self.normalize_rewards:
+                self.r_running_average.update(torch.stack(simulation_data['r']), mask=mask)
 
         # invalid_losses = ''
         # for k, v in losses.items():
@@ -445,7 +434,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         if isinstance(o, torchd.Distribution):
             o = o.mean  # use most probable o if a distribution is provided
 
-        o = o.detach()  # don't propagate trhough multiple time steps
+        o = o.detach()  # don't propagate through multiple time steps
 
         if self.goal_seeking:
             # detach goal to avoid propagating gradients to upper level model into other agents
@@ -468,7 +457,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                 goal = detach_dist(goal)
             else:
                 goal = goal.detach()
-            #return 0.5 * self.goal_similarity(o, goal) + 0.5 * r
+            # return 0.5 * self.goal_similarity(o, goal) + 0.5 * r
             return self.goal_similarity(o, goal)
         else:
             return r
