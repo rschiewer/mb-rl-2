@@ -17,7 +17,7 @@ from mdm.models.building_blocks import RSSMCell
 from mdm.models.dynamics_model import DynamicsModel
 from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.utils.torch_tools import (FuzzyDeviceMixin, compile_if_not_debug, detach_dist, compute_mask, stack_dists,
-                                    unsqueeze_right)
+                                   RunningMeanStd, unsqueeze_right)
 from mdm.utils.utils import rssm_states_seq_to_batch, fig_to_img
 from mdm.logging.logger import GlobalLogger, Scope
 
