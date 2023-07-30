@@ -293,6 +293,6 @@ class HierarchicalLatentAgentPolicy(Policy):
             self._replan()
 
         action = self._action_queue.pop(0)
-        if d_batch == 1:
+        if isinstance(env, CacheLastStepEnv):  # remove batch dimension if it's not a vector env
             action = action[0]
         return action.detach().cpu().numpy()
