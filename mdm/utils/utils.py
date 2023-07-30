@@ -24,7 +24,7 @@ from mdm.memory.trajectory_memory import flatten_and_unsqueeze, TrajectoryMemory
 from mdm.models.building_blocks import *
 # from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.logging.logger import Logger, Scope
-from mdm.utils.torch_tools import compute_mask
+from mdm.utils.torch_tools import compute_mask, unsqueeze_right
 
 SliceType = TypeVar("SliceType", bound=Sequence)
 BasicDtype = TypeVar('BasicDtype', int, float, np.single, np.double, bool)
@@ -409,16 +409,6 @@ def trajectories_from_simulation(model_mem: Dict[str, List[torch.Tensor]]):
 
     trajs = [{k: v[:, i] for k, v in trajs.items()} for i in range(n_trajs)]
     return trajs
-
-
-def unsqueeze_right(to_expand: Union[np.ndarray, torch.Tensor], target: Union[np.ndarray, torch.Tensor]):
-    if to_expand.ndim == target.ndim:
-        return to_expand
-    elif to_expand.ndim > target.ndim:
-        raise ValueError('Expansion can only be done if to_expand has fewer dimensions than target')
-
-    dim_diff = target.ndim - to_expand.ndim
-    return to_expand.reshape(*to_expand.shape, *[1 for _ in range(dim_diff)])
 
 
 def prepare_data_old(o: Union[np.ndarray, torch.Tensor],

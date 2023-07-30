@@ -6,7 +6,8 @@ import numpy as np
 from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.policies.policy import Policy
 from mdm.models.hierarchical_rssm import HierarchicalRSSM
-from mdm.utils.utils import prepare_data, unsqueeze_right
+from mdm.utils.utils import prepare_data
+from mdm.utils.torch_tools import unsqueeze_right
 from mdm.utils.gym_wrappers import CacheLastStepEnv, CacheLastStepVecEnv, CacheLastStepVecEnvPool
 
 

@@ -8,7 +8,7 @@ import envpool
 from envpool.python.gym_envpool import GymEnvPoolMeta
 from envpool.python.gymnasium_envpool import GymnasiumEnvPoolMeta
 
-from mdm.utils.utils import unsqueeze_right
+from mdm.utils.torch_tools import unsqueeze_right
 
 
 def check_action(action: np.ndarray, env: gym.Env):

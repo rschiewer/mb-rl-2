@@ -730,3 +730,13 @@ class SquashedNormal(torch.distributions.transformed_distribution.TransformedDis
 
     def entropy(self):
         return self.base_dist.entropy()
+
+
+def unsqueeze_right(to_expand: Union[np.ndarray, torch.Tensor], target: Union[np.ndarray, torch.Tensor]):
+    if to_expand.ndim == target.ndim:
+        return to_expand
+    elif to_expand.ndim > target.ndim:
+        raise ValueError('Expansion can only be done if to_expand has fewer dimensions than target')
+
+    dim_diff = target.ndim - to_expand.ndim
+    return to_expand.reshape(*to_expand.shape, *[1 for _ in range(dim_diff)])
