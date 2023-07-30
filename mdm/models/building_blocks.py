@@ -1034,7 +1034,7 @@ class RSSMCell(torch.nn.Module):
             o_dist, o_smpl = None, None
 
         reconstruction = {'o': o_smpl, 'o_dist': o_dist, 'a': a, 'r_dist': r_dist, 'r': r_smpl,
-                          'terminal_dist': term_dist, 'terminal': term_smpl, 's': s, 'h': h}
+                          'terminal_dist': term_dist, 'terminal': term_smpl}
 
         # if last_state is not None and 'time_step' in last_state:
         #    next_state['time_step'] = (last_state['time_step'] + 1).detach()
