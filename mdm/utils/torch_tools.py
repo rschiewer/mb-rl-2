@@ -173,7 +173,8 @@ class RunningMeanStd(torch.nn.Module):
             else:
                 weights = 1 - torch.flatten(mask, start_dim=0, end_dim=-(self.mean.ndim + 1))
             weights = unsqueeze_right(weights, x)
-            weights = weights / weights.sum(dim=0)
+            weight_denom = weights.sum(dim=0)
+            weights = torch.where(weight_denom > 0, weights / weight_denom, 0.0)
             batch_mean = torch.sum(x * weights, dim=0, dtype=torch.float64)
             batch_var = torch.sum(((x - batch_mean[None, ...]) ** 2) * weights, dim=0, dtype=torch.float64)
             batch_count = x.shape[0]
