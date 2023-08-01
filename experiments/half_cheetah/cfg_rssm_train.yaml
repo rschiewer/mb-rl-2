@@ -1,0 +1,205 @@
+---
+neptune_cfg: "../neptune_settings.yaml"
+env_name: "HalfCheetah-v4"
+prefill_memory: "random" #"offline-dataset" # "random", False
+prefill_episodes: 10000
+train_samples: null
+test_samples: null
+checkpoint_path: "checkpoints"
+final_model_path: "trained_models/model"
+pretrained_model: null
+repeat_terminal_state: False
+
+mdm:
+   rssm_modules:
+      # RSSM no. 1
+      -  d_z: 20
+         d_h: 128
+         d_a: <infer>
+         n_hidden_layers: 1
+         hidden_dropout: 0.1
+         epsilon: 0.1
+         z_prior_lws: [ 128, 128 ]
+         z_post_lws: [ 128, 128 ]
+         layer_norm: True
+         activation: "relu"
+         rnn_type: "lstm"
+         latent_dist: "normal"  #"normal" "categorical" "bernoulli"
+         o_encoder:
+            class: "MLPEncoder"
+            d_x_encoded: 32
+            lws: [ 128, 64 ]
+            layer_norm: True
+            activation: "relu"
+         o_decoder:
+            class: "GaussianDecoder"
+            lws: [ 128, 64 ]
+            layer_norm: True
+            activation: "relu"
+            epsilon: 0.1
+         r_decoder:
+            class: "GaussianDecoder"
+            lws: [ 128, 64 ]
+            layer_norm: True
+            activation: "relu"
+            epsilon: 0.1
+         term_decoder:
+            class: "BinomialDecoder"
+            lws: [ 128, 64 ]
+            layer_norm: True
+            activation: "relu"
+      # RSSM no. 2
+      -  d_z: 20
+         d_h: 128
+         d_a: 10
+         n_hidden_layers: 1
+         hidden_dropout: 0.1
+         epsilon: 0.1
+         z_prior_lws: [ 128, 128, 128]
+         z_post_lws: [ 128, 128, 128]
+         layer_norm: True
+         activation: "relu"
+         rnn_type: "lstm"
+         latent_dist: "normal"  #"normal" "categorical" "bernoulli"
+         o_encoder:
+            class: "MLPEncoder"
+            lws: [ 128, 64, 64 ]
+            layer_norm: True
+            activation: "relu"
+            d_x_encoded: 32
+         o_decoder:
+            class: "GaussianDecoder"
+            lws: [ 128, 64, 64 ]
+            layer_norm: True
+            activation: "relu"
+            epsilon: 0.1
+         r_decoder:
+            class: "GaussianDecoder"
+            lws: [ 128, 64, 64 ]
+            layer_norm: True
+            activation: "relu"
+            epsilon: 0.1
+         term_decoder:
+            class: "BinomialDecoder"
+            lws: [ 128, 64, 64 ]
+            layer_norm: True
+            activation: "relu"
+   links: [ 'z' ]  # Links for observation filters between RSSM levels
+   upwards_filters:
+      # Connection between RSSM1 and RSSM2
+      -  o:
+            class: "PickOneUpwardsFilter"
+            window_size: 4
+            offset: -1
+         #a:
+         #   class: "LearnableUpwardsFilter"
+         #   window_size: 2
+         #   lws: [ 32, 32 ]
+         #   layer_norm: True
+         #   activation: "relu"
+         #   model_type: "det_tanh"
+         r:
+            class: "AvgUpwardsFilter"
+            window_size: 4
+         terminal:
+            class: "MaxUpwardsFilter"
+            window_size: 4
+   warmup_steps: [ 'rand', 'rand' ]
+   kl_betas: [ 0.1, 0.1 ]
+   kl_reg_betas: [ 0.00, 0.00 ]
+   ema_regularization: 0.0
+   ema_coeff: 0.98
+   ema_update_interval: 5
+   latent_overshooting: []#[14, 9]
+   temporal_activation_regularization: 0.0
+   kl_balance: 0.8
+
+optim:
+   type: 'adam'  # 'adamW' 'adam'
+   lr: 0.001 #0.0002
+
+trainer:
+   n_train_steps: 50000
+   freeze_model: False
+   stop_collect: False
+   eval_interval: 50
+   d_batch: 128
+   subtrajectory_len: 50
+   collect_envs: 100
+   collect_interval: 5
+   agent_train_interval: 1
+   model_train_steps: [ -1, 10 ]
+   agent_model_steps: [ 15, 10 ]
+   checkpoint_interval: 100
+
+agents:
+   r_max:
+      # level 0
+      - eps_exploration_init: 0.9
+        eps_exploration_coeff: 0.999
+        act_entropy_exploration_coeff: 0.001
+        learn_act_entropy_exploration_coeff: False
+        novelty_exploration_coeff: 0.1
+        tr_policy_kl_coeff: 0.1
+        tr_policy_ema_update_coeff: 0.95
+        use_ema_world_model: False
+        lr_actor: 0.001
+        lr_critic: 0.004
+        min_a: <infer>
+        max_a: <infer>
+        actor_lws: [ 64, 64, 64 ]
+        critic_lws: [ 64, 64, 64 ]
+        actor_act_fn: "elu"
+        critic_act_fn: "elu"
+        actor_layer_norm: True
+        critic_layer_norm: True
+        dynamics_loss: True
+        normalize_observations: 'running_average'
+        normalize_rewards: 'running_average'
+      # level 1
+      - eps_exploration_init: 0.9
+        eps_exploration_coeff: 0.999
+        act_entropy_exploration_coeff: 0.001
+        learn_act_entropy_exploration_coeff: False
+        novelty_exploration_coeff: 0.1
+        tr_policy_kl_coeff: 0.1
+        tr_policy_ema_update_coeff: 0.95
+        use_ema_world_model: False
+        lr_actor: 0.001
+        lr_critic: 0.004
+        min_a: -1.0
+        max_a: 1.0
+        actor_lws: [ 64, 64, 64 ]
+        critic_lws: [ 64, 64, 64 ]
+        actor_act_fn: "elu"
+        critic_act_fn: "elu"
+        actor_layer_norm: True
+        critic_layer_norm: True
+        dynamics_loss: True
+        normalize_observations: 'running_average'
+        normalize_rewards: 'running_average'
+   goal_seeking:
+      # level 0
+      - eps_exploration_init: 0.9
+        eps_exploration_coeff: 0.999
+        act_entropy_exploration_coeff: 0.001
+        learn_act_entropy_exploration_coeff: False
+        novelty_exploration_coeff: 0.1
+        tr_policy_kl_coeff: 0.1
+        tr_policy_ema_update_coeff: 0.95
+        use_ema_world_model: False
+        lr_actor: 0.001
+        lr_critic: 0.004
+        min_a: <infer>
+        max_a: <infer>
+        actor_lws: [ 64, 64, 64 ]
+        critic_lws: [ 64, 64, 64 ]
+        actor_act_fn: "elu"
+        critic_act_fn: "elu"
+        actor_layer_norm: True
+        critic_layer_norm: True
+        dynamics_loss: True
+        normalize_observations: 'running_average'
+        normalize_rewards: 'running_average'
+eval:
+   eval_steps: 1000
