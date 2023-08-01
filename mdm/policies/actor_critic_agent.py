@@ -161,19 +161,14 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                    n_steps: int,
                    goal: torch.Tensor = None,
                    agent_memory: Dict[str, List[torch.Tensor]] | None = None,
+                   env_memory: Dict[str, List[torch.Tensor]] | None = None,
                    disable_exploration: bool = False,
                    sample_actions: bool = True,
                    sample_model: bool = True,
                    reconstruct: bool = True):
-        """
-        This function can
-        * train agent
-        * train model
-        * let agent follow a goal
-        * let agent maximize rewards
-        """
         agent_memory = {} if agent_memory is None else agent_memory
-        env_mem, ema_env_mem = {}, {}
+        env_mem = {} if env_memory is None else env_memory
+        ema_env_mem = {}
         for t in range(n_steps):
             agent_o = self.preproc_o(env_state, goal)
 
