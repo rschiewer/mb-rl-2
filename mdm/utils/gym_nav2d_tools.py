@@ -67,12 +67,12 @@ def gen_regular_grid_trajectories(env: gym.Env, trajs_vert: int, trajs_horiz: in
     return trajectories
 
 
-def visualize_overlaid_trajectories(*trajectories: Dict[str, np.ndarray]):
+def visualize_overlaid_trajectories(*trajectories: Dict[str, np.ndarray], figure: plt.Figure = None):
     n_steps = set([t['o'].shape[0] for t in trajectories])
     assert len(n_steps) == 1, f'All provided trajectories must have the same length, but found {n_steps}!'
     n_steps = n_steps.pop()
 
-    fig, ax = plt.subplots(2, 2, figsize=(6, 6))
+    fig, ax = plt.subplots(2, 2, figsize=(6, 6), num=figure)
     plt.tight_layout()
     color_cycle = iter(plt.rcParams['axes.prop_cycle'].by_key()['color'])
 
