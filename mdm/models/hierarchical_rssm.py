@@ -17,7 +17,7 @@ from mdm.models.building_blocks import RSSMCell
 from mdm.models.dynamics_model import DynamicsModel
 from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.utils.torch_tools import (FuzzyDeviceMixin, compile_if_not_debug, detach_dist, compute_mask, stack_dists,
-                                   RunningMeanStd, unsqueeze_right)
+                                   RunningMeanStd, unsqueeze_right, stack_if_list)
 from mdm.utils.utils import rssm_states_seq_to_batch, fig_to_img
 from mdm.logging.logger import GlobalLogger, Scope
 
@@ -291,10 +291,10 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         return memory, memory_other, state
 
     def filter_up(self,
-                  o: List[torch.Tensor],
-                  r: List[torch.Tensor],
-                  terminal: List[torch.Tensor],
-                  level: int,
+                  o: List[torch.Tensor] | None = None,
+                  r: List[torch.Tensor] | None = None,
+                  terminal: List[torch.Tensor] | None = None,
+                  level: int = 0,
                   n_steps: int = -1,
                   respect_terminal_flag: bool = True,
                   time_step: List[torch.Tensor] | None = None,
@@ -303,23 +303,23 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         if n_steps == -1:
             n_steps = len(o)
         flt = self.upwards_filters[level]
-        tr_below = {'o': torch.stack(o[:n_steps]),
-                    'r': torch.stack(r[:n_steps]),
-                    'terminal': torch.stack(terminal[:n_steps])}
 
         if respect_terminal_flag:
-            chunk_mask = compute_mask(tr_below['terminal'], mode='deterministic', threshold=0.8).to(dtype=torch.bool)
+            assert terminal is not None
+            mask = compute_mask(stack_if_list(terminal[:n_steps]), mode='deterministic', threshold=0.8)
         else:
-            chunk_mask = None
+            mask = None
 
-        # simulated_ground_truth = {k: flt[k](v, mask=chunk_mask).detach() for k, v in trajectory_below.items()}
-        simulated_ground_truth = {'o': flt['o'](tr_below['o'], mask=chunk_mask, window_size=window_size).detach(),
-                                  'r': flt['r'](tr_below['r'], mask=chunk_mask, window_size=window_size).detach(),
-                                  'terminal': flt['terminal'](tr_below['terminal'], mask=chunk_mask,
-                                                              window_size=window_size).detach()}
-
-        # if chunk_mask is not None:
-        #    simulated_ground_truth['o_in'] *= chunk_mask
+        simulated_ground_truth = {}
+        if o is not None:
+            simulated_ground_truth['o'] = flt['o'](stack_if_list(o[:n_steps]), mask=mask,
+                                                   window_size=window_size).detach()
+        if r is not None:
+            simulated_ground_truth['r'] = flt['r'](stack_if_list(r[:n_steps]), mask=mask,
+                                                   window_size=window_size).detach()
+        if terminal is not None:
+            simulated_ground_truth['terminal'] = flt['terminal'](stack_if_list(terminal[:n_steps]), mask=mask,
+                                                                 window_size=window_size).detach()
 
         return simulated_ground_truth
 
@@ -493,7 +493,9 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         losses_lo = {}
         for l in range(self.levels):
             offset = n_lo[l]
-            start_state, _ = rssm_states_seq_to_batch(pred_tf[l], self.rssm_modules[l], i_end=-offset)
+            # we don't use the terminal flags here
+            start_state, _ = rssm_states_seq_to_batch(pred_tf[l], targets[l]['terminal'], self.rssm_modules[l],
+                                                      i_end=-offset)
             start_state = self.rssm_modules[l].detach_state(start_state)
             actions = torch.stack(pred_tf[l]['a']).detach()  # make tensor (time x batch x d_a)
             mask = compute_mask(targets[l]['terminal'])  # compute mask from groundtruth sequences

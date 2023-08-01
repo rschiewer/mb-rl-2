@@ -695,13 +695,13 @@ def to_np(data_dict: Dict[str, Union[torch.Tensor, Dict]]):
 
 
 @compile_if_not_debug
-def compute_mask(terminals: torch.Tensor,
+def compute_mask(terminals: List[torch.Tensor] | torch.Tensor,
                  mode: str = 'default',
                  threshold: float | None = None,
                  first_step_mask: torch.Tensor | None = None,
                  disable: bool = True):
     with torch.no_grad():
-        terminals = terminals.detach()
+        terminals = stack_if_list(terminals).detach()
         d_time, d_batch = terminals.shape[:2]
 
         # never mask first time step except first_step_mask tells us to
@@ -717,6 +717,7 @@ def compute_mask(terminals: torch.Tensor,
             mask = torch.where(mask > threshold,
                                torch.tensor(1.0, device=terminals.device, dtype=terminals.dtype),
                                torch.tensor(0.0, device=terminals.device, dtype=terminals.dtype))
+            mask = mask.to(dtype=torch.bool)
 
         # mask = torch.zeros_like(mask)
         # mask = torch.where(mask > 0.95,
@@ -816,3 +817,10 @@ def unsqueeze_right(to_expand: Union[np.ndarray, torch.Tensor], target: Union[np
 
     dim_diff = target.ndim - to_expand.ndim
     return to_expand.reshape(*to_expand.shape, *[1 for _ in range(dim_diff)])
+
+
+def stack_if_list(x: torch.Tensor | List[torch.Tensor],
+                  dim: int = 0):
+    if isinstance(x, list):
+        x = torch.stack(x, dim=dim)
+    return x

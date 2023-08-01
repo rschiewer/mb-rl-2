@@ -24,7 +24,7 @@ from mdm.memory.trajectory_memory import flatten_and_unsqueeze, TrajectoryMemory
 from mdm.models.building_blocks import *
 # from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.logging.logger import Logger, Scope
-from mdm.utils.torch_tools import compute_mask, unsqueeze_right
+from mdm.utils.torch_tools import compute_mask, unsqueeze_right, stack_if_list
 
 SliceType = TypeVar("SliceType", bound=Sequence)
 BasicDtype = TypeVar('BasicDtype', int, float, np.single, np.double, bool)
@@ -1006,6 +1006,7 @@ def random_walk_success_rate(env: gym.Env,
 
 
 def rssm_states_seq_to_batch(mem: Dict[str, List[torch.Tensor]],
+                             terminal_flags: List[torch.Tensor] | torch.Tensor,
                              rssm_instance: RSSMCell,
                              i_start: int = 0,
                              i_end: int = sys.maxsize):
@@ -1022,7 +1023,9 @@ def rssm_states_seq_to_batch(mem: Dict[str, List[torch.Tensor]],
     # else:
     states = rssm_instance.state_seq_to_batch(**states)
 
-    mask = compute_mask(torch.stack(mem['terminal'][i_start: i_end]))
+    # we can inject terminal flags from target data which are already stacked, so we use this convenience wrapper
+    terminal = stack_if_list(terminal_flags)
+    mask = compute_mask(terminal[i_start: i_end])
     mask = mask.reshape(mask.shape[0] * mask.shape[1], 1)
 
     return states, mask
