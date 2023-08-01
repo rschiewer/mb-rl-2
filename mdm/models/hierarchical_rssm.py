@@ -80,7 +80,10 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         self.temporal_activation_regularization = temporal_activation_regularization
         self.kl_balance = kl_balance
         self.dbg_timestep = 0
-        self._avg_z_distance = torch.nn.parameter.Parameter(torch.tensor(1.0, dtype=torch.float32), requires_grad=False)
+        # self._avg_z_distance = torch.nn.parameter.Parameter(torch.tensor(1.0, dtype=torch.float32), requires_grad=False)
+        self.avg_chunk_dist_early = ModuleList([RunningMeanStd(shape=(mod.d_z,)) for mod in self.rssm_modules[:-1]])
+        self.avg_chunk_dist_mid = ModuleList([RunningMeanStd(shape=(mod.d_z,)) for mod in self.rssm_modules[:-1]])
+        self.avg_chunk_dist_late = ModuleList([RunningMeanStd(shape=(mod.d_z,)) for mod in self.rssm_modules[:-1]])
 
     @property
     def levels(self) -> int:
@@ -127,7 +130,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         agent = self.r_max_agents[level][0]
         assert agent.observation_key == 'z', 'only latent agent supported'
         lvl_below = level - 1
-        lower_level_steps = self.strides[level] + 1  # give goal seeking agent some slack to achieve goals
+        lower_level_steps = self.strides[level]  # + 1  # give goal seeking agent some slack to achieve goals
 
         state = start_state
         state_below = start_state_below
@@ -162,18 +165,19 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             distance_rewards.append(distance_reward)
             terminals.append(simulated_ground_truth['terminal'])
 
+            # TODO: sample_output changed to fixed false to reduce variance of training targets
             if t < n_warmup:  # if still in warmup, re-do last step with simulated ground truth and use posterior
                 pred, next_state = mdl(a=a_t, o=simulated_ground_truth['o'], last_state=state,
-                                       use_posterior=True, sample_state=sample_state, sample_output=sample_output,
+                                       use_posterior=True, sample_state=sample_state, sample_output=False,
                                        reconstruct=reconstruct)
                 pred_other, next_state_other = mdl_other(a=a_t, o=simulated_ground_truth['o'],
                                                          last_state=state, use_posterior=True,
                                                          sample_state=sample_state,
-                                                         sample_output=sample_output, reconstruct=reconstruct)
+                                                         sample_output=False, reconstruct=reconstruct)
             else:  # do ema model prediction in any case for model regularization
                 pred_other, next_state_other = mdl_other(a=a_t, last_state=state, use_posterior=False,
                                                          sample_state=sample_state,
-                                                         sample_output=sample_output, reconstruct=True)
+                                                         sample_output=False, reconstruct=True)
 
             # update memories
             for k, v in {**pred, **next_state}.items():
@@ -205,13 +209,13 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         if GlobalLogger.can_log('simulated_ground_truth_goal_distance', self._current_train_step):
             sim_ground_truth_r = torch.stack(memory_targets['r'][1:]).mean(dim=1).detach().cpu().numpy()
             goal_rewards = torch.stack(goal_rewards).mean(dim=1).detach().cpu().numpy().squeeze()
-            reachability_rewards = torch.stack(reachability_rewards).mean(dim=1).detach().cpu().numpy().squeeze()
+            # reachability_rewards = torch.stack(reachability_rewards).mean(dim=1).detach().cpu().numpy().squeeze()
             distance_rewards = torch.stack(distance_rewards).mean(dim=1).detach().cpu().numpy().squeeze()
             terminals = torch.stack(terminals).mean(dim=1).detach().cpu().numpy().squeeze()
             fig = plt.figure(dpi=60)
-            plt.plot(sim_ground_truth_r, label='state reward', marker='o')
-            plt.plot(goal_rewards, label='goal reward', marker='o')
-            plt.plot(reachability_rewards, label='reachability reward', marker='o')
+            plt.plot(sim_ground_truth_r, label='sim ground truth r', marker='o')
+            plt.plot(goal_rewards, label='agent goal reward', marker='o')
+            # plt.plot(reachability_rewards, label='reachability reward', marker='o')
             plt.plot(distance_rewards, label='distance reward', marker='o')
             plt.plot(terminals, label='terminal flags', marker='o')
             plt.suptitle(f'L{level} Model + Goal Seeking Agent')
@@ -476,20 +480,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
     @compile_if_not_debug
     def _latent_overshooting(self, pred_tf, targets, n_lo):
-        """
-        TODO:
-        * es wird in jedem Zeitschritt der state NACH anwendung der Aktion gespeichert
-        * d.h. der erste all-zero state wird nicht gespeichert und die richtige Aktionssequenz für einen start_state
-          fängt einen Zeitschritt später an
-        * (falsch) d.h. die Agenten werden niemals auf dem ersten state als start_state trainiert
-        * (falsch) d.h. latent overshooting wird niemals vom ersten state an trainiert, wobei 0 schritt l.o. immer
-          trainiert wrid
-        * sinnvolle Änderung: forward_static() und forward_dynamic() so verändern, dass immer der state des aktuellen
-          Zeitschritts gespeichert wird
-        * das zieht Änderungen an anderen Stellen im Code nach sich, dies muss geprüft werden
-           * ground_level()
-           * train_model()
-        """
         losses_lo = {}
         for l in range(self.levels):
             offset = n_lo[l]
@@ -501,7 +491,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             mask = compute_mask(targets[l]['terminal'])  # compute mask from groundtruth sequences
             action_windows, mask_windows, z_post_windows = [], [], []
             # select for every start state the next n_lo actions
-            # NOTE: since the rssm states are always recorded after an action was applied, correct actions and terminal
+            # since the rssm states are always recorded after an action was applied, correct actions and terminal
             # flags for a start state at time step t start from t+1
             for t in range(1, actions.shape[0] - offset + 1):
                 action_windows.append(actions[t: t + offset])
@@ -514,7 +504,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                                                     reconstruct=False, sample_state=True)
             z_post = concat_dists(z_post_windows, dim=1)
             z_prior = stack_dists(pred_lo_lvl['z_prior'])
-            # mask = unsqueeze_right(mask, z_prior.loc)
 
             if GlobalLogger.can_log('mask_latent_overshooting', self._current_train_step):
                 fig = plt.figure(figsize=(5, 5))
@@ -618,9 +607,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         rec_o = self._neg_log_prob(pred['o_dist'], targets['o'], valid)
         rec_r = self._neg_log_prob(pred['r_dist'], targets['r'], valid)
         rec_term = self._neg_log_prob(pred['terminal_dist'], targets['terminal'], valid)
-        # rec_o = self._mse(pred['o'], targets['o'], valid)
-        # rec_r = self._mse(pred['r'], targets['r'], valid)
-        # rec_term = self._mse(pred['terminal'], targets['terminal'], valid)
         if self.kl_balance is not None:
             kl_0 = self._kl_div(pred['z_post'], pred['z_prior'], valid, detach_ps=True)
             kl_1 = self._kl_div(pred['z_post'], pred['z_prior'], valid, detach_qs=True)
@@ -658,6 +644,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             loss['total'] += loss['temporal_act_reg']
 
         # if level > 0:
+        #    raise RuntimeError('_avg_z_distance is shared by all levels whereas there should be one per level!')
         #    with torch.no_grad():
         #        weights = torch.mean((torch.stack(pred['z'][:-1]) - torch.stack(pred['z'][1:])) ** 2, dim=-1, keepdim=True)
         #        self._avg_z_distance.copy_(0.95 * self._avg_z_distance + 0.05 * weights.mean())
@@ -682,18 +669,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         x_src = x[:-1]
         x_dst = x[1:]
         diff = (x_src - x_dst) ** 2
-        cont_loss = 2.0 * torch.mean(torch.maximum(torch.tensor(0.0, device=x.device), (1.0 - diff)) * valid)
-        return cont_loss
-
-        x = torch.stack(x)
-        terminal = torch.stack(terminal)
-        # We don't want to modify goals of terminal steps via contrastive loss as it may compromise the goal's accuracy
-        # For the same reason, we don't want to modify goals of initial steps?
-        terminal_dest = terminal[1:].detach()
-        x_src = torch.concat([x[0].unsqueeze(0).detach(), x[1:-1]], dim=0)
-        x_dest = (1 - terminal_dest) * x[1:] + terminal_dest * x[1:].detach()
-        valid = unsqueeze_right(valid, x)
-        diff = (x_src - x_dest) ** 2
         cont_loss = 2.0 * torch.mean(torch.maximum(torch.tensor(0.0, device=x.device), (1.0 - diff)) * valid)
         return cont_loss
 
@@ -722,17 +697,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 valid: torch.Tensor,
                 detach_ps: bool = False,
                 detach_qs: bool = False):
-        # if detach_ps:
-        #    ps = [detach_dist(p) if p is not None else None for p in ps]
-        # if detach_qs:
-        #    qs = [detach_dist(q) if q is not None else None for q in qs]
-        # kl = [kl_divergence(p, q) * m for p, q, m in zip(ps, qs, mask) if None not in (p, q)]
-        # kl = torch.stack(kl, dim=0).mean()
-        # if len(kl) > 1:
-        #    kl = kl[1:].mean()  # ignore first prior since it's totally uninformed
-        # else:
-        #    kl = torch.tensor(0, dtype=torch.float32)
-
         ps_valid, qs_valid = [], []
         for p, q in zip(ps, qs):
             # if p or q hold None entries, just use the other on for that time step, prevents gradients in those cases

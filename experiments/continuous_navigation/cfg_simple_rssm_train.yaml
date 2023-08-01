@@ -72,7 +72,7 @@ trainer:
    d_batch: 1024
    subtrajectory_len: 25
    collect_envs: 50
-   collect_interval: 5
+   collect_interval: 100
    agent_train_interval: 1
    model_train_steps: [-1 ]
    agent_model_steps: [ 15 ]
