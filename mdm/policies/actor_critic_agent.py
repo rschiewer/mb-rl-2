@@ -14,8 +14,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from mdm.utils.torch_tools import layers_with_activation as lwa, SquashedNormal, RunningMeanStd
-from mdm.utils.torch_tools import FuzzyDeviceMixin, compute_mask, detach_dist, compile_if_not_debug, stack_dists, \
-    concat_dists
+from mdm.utils.torch_tools import (FuzzyDeviceMixin, compute_mask, detach_dist, disable_torch_compile, stack_dists,
+                                   concat_dists)
 from mdm.utils.utils import fig_to_img
 from mdm.logging.logger import GlobalLogger, Scope
 
@@ -100,13 +100,11 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         if normalize_rewards == 'running_average':
             self.r_running_average = RunningMeanStd(shape=(1,))
 
-    # @torch.compile
     def scale_action(self, action):
         if self.min_a is not None and self.max_a is not None:
             action = action * (self.max_a - self.min_a) / 2 + (self.min_a + self.max_a) / 2
         return action
 
-    @compile_if_not_debug
     def _act_dist(self,
                   actor_net: torch.nn.Module,
                   x: torch.Tensor):
@@ -117,7 +115,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         d = SquashedNormal(loc=mu, scale=sigma)
         return d
 
-    @compile_if_not_debug
+    #@torch.compile(disable=disable_torch_compile)
     def forward(self,
                 o: torch.Tensor,
                 use_ema_modules: bool = False,
@@ -129,7 +127,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
 
         if self.normalize_observations:
             o = o - self.o_running_average.mean.to(torch.float32)[None, ...]
-            o = o / torch.sqrt(self.o_running_average.var.to(torch.float32) + 1e-6)[None, ...]
+            o = o / torch.sqrt(self.o_running_average.var.to(torch.float32) + 1e-5)[None, ...]
 
         if use_ema_modules:
             state_values = self._ema_critic_net(o)
@@ -150,7 +148,9 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         # adding random variance directly to the SquashedNormal destabilizes training a lot (not sure why),
         # so we add noise after sampling from it and clamp the result to prevent invalid actions
         if self.eps > 0 and self.training and not disable_exploration:
-            a_smpl = a_smpl + torch.normal(torch.zeros_like(a_smpl), torch.full_like(a_smpl, self.eps))
+            with torch.no_grad():
+                noise = torch.normal(torch.zeros_like(a_smpl), torch.full_like(a_smpl, self.eps))
+            a_smpl = a_smpl + noise
             a_smpl = torch.clamp(a_smpl, self.min_a + torch.finfo().eps, self.max_a - torch.finfo().eps)
 
         return a_dist, a_smpl, state_values
@@ -181,20 +181,25 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             if torch.isnan(a).any() or torch.isinf(a).any():
                 raise RuntimeError(f'Invalid agent action in act_in_sim: {a}')
 
-            ema_a_dist, _, ema_v = self(agent_o, use_ema_modules=True, sample=sample_actions,
-                                        disable_exploration=disable_exploration)
+            #ema_a_dist, _, ema_v = self(agent_o, use_ema_modules=True, sample=sample_actions,
+            #                            disable_exploration=disable_exploration)
+            ema_a_dist = a_dist
+            ema_v = v
             trajectory = {'o': None, 'a': a.unsqueeze(0), 'r': None, 'terminal': None}
             mem, mem_ema, next_env_state = sim_env.forward_static(trajectory=trajectory, start_state=env_state,
                                                                   level=self.level, n_steps=1, n_warmup=0,
-                                                                  use_ema_modules=self.use_slow_world_model,
                                                                   memory=env_mem, memory_other=ema_env_mem,
                                                                   sample_state=sample_model, sample_output=False,
-                                                                  reconstruct=reconstruct)
+                                                                  reconstruct=reconstruct,
+                                                                  use_ema_modules=self.use_slow_world_model)
 
             # TODO: check if the correct time step's z is used for computing rewards and if the correct time step's z is stored
             # r = self.build_step_reward(mem['z_dist'][-1], mem['r'][-1], goal)
             r = self.build_step_reward(mem['z'][-1], mem['r'][-1], goal, self.goal_seeking)
-            novelty = kl_divergence(mem_ema['z_dist'][-1], mem['z_dist'][-1]).sum(dim=-1)
+            # novelty = kl_divergence(mem_ema['z_dist'][-1], mem['z_dist'][-1]).sum(dim=-1)
+            z_dist = sim_env.rssm_modules[self.level].z_dist(mem['z_prior'][-1])
+            z_dist_ema = sim_env.rssm_modules[self.level].z_dist(mem_ema['z_prior'][-1])
+            novelty = kl_divergence(z_dist, z_dist_ema).sum(dim=-1)
             timestep = {'o_env': env_state['z'], 'o_env_next': mem['z'][-1], 'goal': goal, 'o': agent_o, 'a': a, 'r': r,
                         'r_raw': mem['r'][-1], 'terminal': mem['terminal'][-1], 'v': v, 'ema_v': ema_v,
                         'a_dist': a_dist, 'ema_a_dist': ema_a_dist, 'model_novelty': novelty}
@@ -294,12 +299,12 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         policy_loss -= act_entropy_reward_aug
         value_target = returns + model_novelty_reward_aug  # validity mask is multiplied with value_loss
         value_loss = valid[:-1] * torch.nn.functional.smooth_l1_loss(v[:-1], value_target.detach(), reduction='none')
-        ppo_loss = valid[:-1] * self.beta * torchd.kl_divergence(detach_dist(ema_a_dist),
-                                                                 a_dist).sum(dim=-1, keepdims=True)
+        #ppo_loss = valid[:-1] * self.beta * torchd.kl_divergence(detach_dist(ema_a_dist),
+        #                                                         a_dist).sum(dim=-1, keepdims=True)
 
         policy_loss = torch.mean(policy_loss)
         value_loss = torch.mean(value_loss)
-        ppo_loss = torch.mean(ppo_loss)
+        ppo_loss = torch.zeros_like(value_loss) #torch.mean(ppo_loss)
         model_novelty_reward_aug = torch.mean(model_novelty_reward_aug)
         entropy_reward_aug = torch.mean(act_entropy_reward_aug)
         loss = policy_loss + value_loss + ppo_loss
@@ -342,19 +347,19 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
             if self.normalize_rewards:
                 self.r_running_average.update(torch.stack(simulation_data['r']), mask=mask)
 
-        # invalid_losses = ''
-        # for k, v in losses.items():
-        #    if torch.isnan(v).any() or torch.isinf(v).any():
-        #        invalid_losses += f'{k}: {v}, '
-        # if len(invalid_losses) > 0:
-        #    raise RuntimeError(f'Invalid loss in {self._agent_repr} detected: {invalid_losses}')
+        invalid_losses = ''
+        for k, v in losses.items():
+            if torch.isnan(v).any() or torch.isinf(v).any():
+                invalid_losses += f'{k}: {v}, '
+        if len(invalid_losses) > 0:
+            raise RuntimeError(f'Invalid loss in {self._agent_repr} detected: {invalid_losses}')
 
         losses['total'].backward()
         torch.nn.utils.clip_grad_norm_(self.parameters(), 10.0)
         actor_optimizer.step()
         critic_optimizer.step()
 
-        self._update_ema_modules()
+        #self._update_ema_modules()
 
         # update exploration
         self.update_exploration()
@@ -362,7 +367,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
 
         return losses
 
-    @compile_if_not_debug
+    #@torch.compile(disable=disable_torch_compile)
     def _update_ema_modules(self):
         with torch.no_grad():
             params = chain.from_iterable([m.parameters() for m in self.actor_net] +
@@ -373,7 +378,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
                 ema_param[:] = self.ema_coeff * ema_param + (1 - self.ema_coeff) * param
 
     @staticmethod
-    @compile_if_not_debug
+    # @compile_if_not_debug
     def _calc_returns(rewards, state_values, timestep_mask, gamma):
         returns = []
         discounts = []
@@ -387,6 +392,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         return torch.stack(returns), torch.stack(discounts)
 
     @staticmethod
+    #@torch.compile(disable=disable_torch_compile)
     def _calc_returns_simple(rewards, state_value_bootstrap, gamma):
         R = state_value_bootstrap.detach()
         returns = []
@@ -396,7 +402,7 @@ class ActorCriticAgent(FuzzyDeviceMixin, torch.nn.Module):
         return torch.stack(returns)
 
     @staticmethod
-    @compile_if_not_debug
+    # @compile_if_not_debug
     def _calc_gae(rewards, state_values, timestep_mask, gamma, lambda_):
         advantages = []
         discounts = []

@@ -12,6 +12,7 @@ from inspect import stack
 from pathlib import Path
 from typing import Any
 
+import numba
 import gym
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
@@ -1013,16 +1014,9 @@ def rssm_states_seq_to_batch(mem: Dict[str, List[torch.Tensor]],
                              i_start: int = 0,
                              i_end: int = sys.maxsize):
     state_keys = rssm_instance.init_state(1, 'cpu')
-    # if 'time_step' in mem:
-    #    state_keys = [*state_keys, 'time_step']
     states = {k: v[i_start: i_end] for k, v in mem.items() if k in state_keys}
     del state_keys
 
-    # if None in states['z_post']:  # ugly hack
-    #    states['z_post'] = states['z_prior']
-    #    states = rssm_instance.state_seq_to_batch(**states)
-    #    states['z_post'] = [None for _ in range(states['z'].shape[0])]
-    # else:
     states = rssm_instance.state_seq_to_batch(**states)
 
     # we can inject terminal flags from target data which are already stacked, so we use this convenience wrapper

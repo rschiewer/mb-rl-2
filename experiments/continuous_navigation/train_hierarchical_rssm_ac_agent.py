@@ -4,6 +4,7 @@ from warnings import simplefilter
 
 import gym.vector
 import neptune
+from torch.profiler import profile, record_function, ProfilerActivity
 
 from mdm.training.train import train_model, agent_eval_mode, build_rssms, build_agents, build_model_opt
 from mdm.utils.utils import *
@@ -13,6 +14,7 @@ from mdm.logging.not_logger import NotLogger
 from mdm.logging.logger import Scope, GlobalLogger
 from mdm.training.gym_driver import collect_data, GymEpisodeDriver
 from mdm.policies.agent_policy import *
+from mdm.utils.torch_tools import disable_torch_compile
 
 
 def main():
@@ -54,6 +56,12 @@ def main():
 
     cfg = build_rssms(cfg)
     r_max_agents, goal_seeking_agents = build_agents(cfg, env, 'cuda')
+
+    #for i, agent in enumerate(r_max_agents):
+    #    r_max_agents[i] = torch.compile(agent[0], disable=disable_torch_compile), agent[1], agent[2]
+    #for i, agent in enumerate(goal_seeking_agents):
+    #    goal_seeking_agents[i] = torch.compile(agent[0], disable=disable_torch_compile), agent[1], agent[2]
+
     model = HierarchicalRSSM(**cfg['mdm'], r_max_agents=r_max_agents, goal_seeking_agents=goal_seeking_agents)
 
     # load model if necessary
@@ -72,14 +80,14 @@ def main():
 
     opt_model = build_model_opt(model, cfg)
 
-    # temporary hack to only train parts of the model
+    #model = torch.compile(model, disable=disable_torch_compile)
 
+    # temporary hack to only train parts of the model
     #params = chain.from_iterable([model.rssm_modules[0].r_decoder.parameters(),
     #                              model.rssm_modules[0].term_decoder.parameters(),
     #                              model.rssm_modules[1].r_decoder.parameters(),
     #                              model.rssm_modules[1].term_decoder.parameters()])
     #opt_model = torch.optim.Adam(params, **cfg['optim'])
-
     # temporary hack end
 
     collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['trainer']['collect_envs'])
@@ -131,15 +139,21 @@ def main():
         train_mem.extend(collected_data_trajectories)
 
     #with torch.autograd.detect_anomaly(check_nan=True):
+    profiling_run = True
     train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collect_fn, eval_env, test_driver,
-                train_driver, logger)
+                train_driver, logger, profile=profiling_run)
+    if profile:
+        with profile(activities=[ProfilerActivity.CPU], record_shapes=True) as prof:
+            train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collect_fn, eval_env, test_driver,
+                train_driver, logger, profile=profiling_run)
+        print(prof.key_averages(group_by_input_shape=True).table(sort_by="cpu_time_total", row_limit=10))
 
     # store model and output run id
     p = here() / cfg['final_model_path'][:cfg['final_model_path'].rindex('/')]
     if not os.path.exists(p):
         os.makedirs(p)
     model_path = here() / f'{cfg["final_model_path"]}_{logger.run_id}.ptmdl'
-    torch.save(model, model_path)
+    torch.save(model.state_dict(), model_path)
     model_weights = InMemoryFile(model_path, name='final_weights')
     logger.start_session()
     logger.log_file(model_weights, Scope.DATA() / 'weights')

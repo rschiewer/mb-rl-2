@@ -77,11 +77,11 @@ class LatentAgentPolicy(Policy):
                 raise RuntimeError(f'Invalid inf input for key {k} in step {env.current_step}: {v}')
 
         # digest new groundtruth data in level 0 model
-        _, _, self._current_env_state = self.model.forward_static(trajectory=env_data, n_steps=1, n_warmup=1,
+        _, _, self._current_env_state = self.model.forward_static(trajectory=env_data,
                                                                   start_state=self._current_env_state,
-                                                                  level=self.agent.level,
-                                                                  use_ema_modules=self._use_ema_modules,
-                                                                  sample_state=True, sample_output=False)
+                                                                  level=self.agent.level, n_steps=1, n_warmup=1,
+                                                                  sample_state=True, sample_output=False,
+                                                                  use_ema_modules=self._use_ema_modules)
 
         if torch.isnan(self._current_env_state['z']).any():
             raise RuntimeError(f'Invalid NAN state in step {env.current_step}: {self._current_env_state["z"]}')
@@ -131,8 +131,9 @@ class HierarchicalLatentAgentPolicy(Policy):
     def _empty_cache():
         return {'o': [], 'r': [], 'terminal': []}
 
-    def _reset(self):
-        self._grounded_env_states = [None for _ in range(self.model.levels)]
+    def _reset(self,
+               d_batch: int):
+        self._grounded_env_states = [rssm.init_state(d_batch, self.model.device) for rssm in self.model.rssm_modules]
         self._env_data_below_cache = [self._empty_cache() for _ in range(self.model.levels)]
         self._act_cache = [[] for _ in range(self.model.levels)]
         self._next_state_update = self.model.strides
@@ -172,10 +173,9 @@ class HierarchicalLatentAgentPolicy(Policy):
 
             # memorize the latest inputs the model has seen as they are needed for the agent during planning
             state = self._grounded_env_states[i_lvl]
-            mem, _, new_state = self.model.forward_static(data_filtered, start_state=state, level=i_lvl,
-                                                          n_steps=-1, n_warmup=-1,
-                                                          use_ema_modules=self._use_ema_modules,
-                                                          sample_state=True, sample_output=False)
+            mem, _, new_state = self.model.forward_static(data_filtered, start_state=state, level=i_lvl, n_steps=-1,
+                                                          n_warmup=-1, sample_state=True, sample_output=False,
+                                                          use_ema_modules=self._use_ema_modules)
             self._grounded_env_states[i_lvl] = new_state
 
             # store updated state in cache for upper level
@@ -277,7 +277,7 @@ class HierarchicalLatentAgentPolicy(Policy):
         else:
             d_batch = 1
         if env.current_step == 0:
-            self._reset()
+            self._reset(d_batch)
             # store default zero actions as last performend action
             self._act_cache = [[torch.zeros((d_batch, rssm.d_a), device=self.model.device, dtype=torch.float32)] for
                                rssm in self.model.rssm_modules]

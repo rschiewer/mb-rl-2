@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import time
 from itertools import chain
 import random
 import sys
@@ -11,14 +12,16 @@ import torch.distributions as torchd
 from torch.distributions import kl_divergence
 from torch.nn import ModuleList, ModuleDict
 import matplotlib.pyplot as plt
+from torch.profiler import record_function
 
 from mdm.models.building_blocks import *
 from mdm.models.building_blocks import RSSMCell
 from mdm.models.dynamics_model import DynamicsModel
 from mdm.policies.actor_critic_agent import ActorCriticAgent
-from mdm.utils.torch_tools import (FuzzyDeviceMixin, compile_if_not_debug, detach_dist, compute_mask, stack_dists,
-                                   RunningMeanStd, unsqueeze_right, stack_if_list)
-from mdm.utils.utils import rssm_states_seq_to_batch, fig_to_img
+from mdm.utils.torch_tools import (FuzzyDeviceMixin, disable_torch_compile, detach_dist, compute_mask, stack_dists,
+                                   RunningMeanStd, unsqueeze_right, stack_if_list, stack_tensor_dicts,
+                                   concat_tensor_dicts)
+from mdm.utils.utils import rssm_states_seq_to_batch, fig_to_img, update_memory
 from mdm.logging.logger import GlobalLogger, Scope
 
 
@@ -115,184 +118,187 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                         reconstruct: bool = True,
                         use_ema_modules: bool = False,
                         start_time_step: torch.Tensor | None = None):
-        assert level > 0, 'Not intended for level 0 model, use forward_static()'
+        with record_function('forward_dynamic'):
+            assert level > 0, 'Not intended for level 0 model, use forward_static()'
 
-        mdl = self._ema_rssm_modules[level] if use_ema_modules else self.rssm_modules[level]
-        mdl_other = self.rssm_modules[level] if use_ema_modules else self._ema_rssm_modules[level]
-        memory = {} if memory is None else memory
-        memory_other = {} if memory_other is None else memory_other
-        memory_targets = {} if memory_targets is None else memory_targets
-        memory_states_below = {} if memory_states_below is None else memory_states_below
+            mdl = self._ema_rssm_modules[level] if use_ema_modules else self.rssm_modules[level]
+            mdl_other = self.rssm_modules[level] if use_ema_modules else self._ema_rssm_modules[level]
+            memory = {} if memory is None else memory
+            memory_other = {} if memory_other is None else memory_other
+            memory_targets = {} if memory_targets is None else memory_targets
+            memory_states_below = {} if memory_states_below is None else memory_states_below
 
-        if n_warmup < 0:
-            n_warmup = n_steps
+            if n_warmup < 0:
+                n_warmup = n_steps
 
-        agent = self.r_max_agents[level][0]
-        assert agent.observation_key == 'z', 'only latent agent supported'
-        lvl_below = level - 1
-        lower_level_steps = self.strides[level]  # + 1  # give goal seeking agent some slack to achieve goals
+            agent = self.r_max_agents[level][0]
+            assert agent.observation_key == 'z', 'only latent agent supported'
+            lvl_below = level - 1
+            lower_level_steps = self.strides[level]  # + 1  # give goal seeking agent some slack to achieve goals
 
-        state = start_state
-        state_below = start_state_below
-        goal_rewards, distance_rewards, reachability_rewards, terminals = [], [], [], []
-        for t in range(n_steps):
-            _, a_t, _ = agent(state[agent.observation_key], sample=True, disable_exploration=True)
-            a_t = a_t.detach()  # prevent gradients from flowing through agent back into world model
-            pred, next_state = mdl(a=a_t, last_state=state, use_posterior=False, sample_state=sample_state,
-                                   sample_output=sample_output, reconstruct=reconstruct)
-            # get simulated ground truth for this step from level below
-            # if a chunk starts in an invalid trajectory part (beyond terminal state), this is filtered out later
-            simulation = self.goal_seeking_agents[lvl_below][0].act_in_sim(env_state=state_below, sim_env=self,
-                                                                           n_steps=lower_level_steps, goal=pred['o'],
-                                                                           sample_actions=True, sample_model=True,
-                                                                           disable_exploration=True, reconstruct=True)
-            simulated_ground_truth = self.filter_up(o=simulation['model']['z'], r=simulation['model']['r'],
-                                                    terminal=simulation['model']['terminal'], level=level,
-                                                    n_steps=lower_level_steps, respect_terminal_flag=True,
-                                                    window_size=lower_level_steps)
-            simulated_ground_truth = {k: v.squeeze(0) for k, v in simulated_ground_truth.items()}  # remove time dim
+            state = start_state
+            state_below = start_state_below
+            goal_rewards, distance_rewards, reachability_rewards, terminals = [], [], [], []
+            for t in range(n_steps):
+                _, a_t, _ = agent(state[agent.observation_key], sample=True, disable_exploration=True)
+                a_t = a_t.detach()  # prevent gradients from flowing through agent back into world model
+                pred, next_state = mdl(a=a_t, last_state=state, use_posterior=False, sample_state=sample_state,
+                                       sample_output=sample_output, reconstruct=reconstruct)
+                # get simulated ground truth for this step from level below
+                # if a chunk starts in an invalid trajectory part (beyond terminal state), this is filtered out later
+                simulation = self.goal_seeking_agents[lvl_below][0].act_in_sim(env_state=state_below, sim_env=self,
+                                                                               n_steps=lower_level_steps,
+                                                                               goal=pred['o'],
+                                                                               sample_actions=True, sample_model=True,
+                                                                               disable_exploration=True,
+                                                                               reconstruct=True)
+                simulated_ground_truth = self.filter_up(o=simulation['model']['z'], r=simulation['model']['r'],
+                                                        terminal=simulation['model']['terminal'], level=level,
+                                                        n_steps=lower_level_steps, respect_terminal_flag=True,
+                                                        window_size=lower_level_steps)
+                simulated_ground_truth = {k: v.squeeze(0) for k, v in simulated_ground_truth.items()}  # remove time dim
 
-            reachability_reward = 0.1 * simulation['agent']['r'][-1].detach()
-            distance_reward = torch.mean((state_below['z'] - simulation['model']['z'][-1]) ** 2, dim=-1,
-                                         keepdim=True).detach()
-            # augment reward with how reachable the goal was for lower level
-            # simulated_ground_truth['r'] += reachability_reward
-            # augment reward with how different the final state of the agent is from the start state
-            # simulated_ground_truth['r'] += distance_reward
+                reachability_reward = 0.1 * simulation['agent']['r'][-1].detach()
+                distance_reward = torch.mean((state_below['z'] - simulation['model']['z'][-1]) ** 2, dim=-1,
+                                             keepdim=True).detach()
+                # augment reward with how reachable the goal was for lower level
+                # simulated_ground_truth['r'] += reachability_reward
+                # augment reward with how different the final state of the agent is from the start state
+                # simulated_ground_truth['r'] += distance_reward
 
-            goal_rewards.append(simulation['agent']['r'][-1])
-            reachability_rewards.append(reachability_reward)
-            distance_rewards.append(distance_reward)
-            terminals.append(simulated_ground_truth['terminal'])
+                goal_rewards.append(simulation['agent']['r'][-1])
+                reachability_rewards.append(reachability_reward)
+                distance_rewards.append(distance_reward)
+                terminals.append(simulated_ground_truth['terminal'])
 
-            # TODO: sample_output changed to fixed false to reduce variance of training targets
-            if t < n_warmup:  # if still in warmup, re-do last step with simulated ground truth and use posterior
-                pred, next_state = mdl(a=a_t, o=simulated_ground_truth['o'], last_state=state,
-                                       use_posterior=True, sample_state=sample_state, sample_output=False,
-                                       reconstruct=reconstruct)
-                pred_other, next_state_other = mdl_other(a=a_t, o=simulated_ground_truth['o'],
-                                                         last_state=state, use_posterior=True,
-                                                         sample_state=sample_state,
-                                                         sample_output=False, reconstruct=reconstruct)
-            else:  # do ema model prediction in any case for model regularization
-                pred_other, next_state_other = mdl_other(a=a_t, last_state=state, use_posterior=False,
-                                                         sample_state=sample_state,
-                                                         sample_output=False, reconstruct=True)
+                # TODO: sample_output changed to fixed false to reduce variance of training targets
+                if t < n_warmup:  # if still in warmup, re-do last step with simulated ground truth and use posterior
+                    o_enc = mdl.o_encoder(simulated_ground_truth['o'])
+                    pred, next_state = mdl(a=a_t, o_enc=o_enc, last_state=state,
+                                           use_posterior=True, sample_state=sample_state, sample_output=False,
+                                           reconstruct=reconstruct)
+                    # pred_other, next_state_other = mdl_other(a=a_t, o_enc=o_enc,
+                    #                                         last_state=state, use_posterior=True,
+                    #                                         sample_state=sample_state,
+                    #                                         sample_output=False, reconstruct=reconstruct)
+                # else:  # do ema model prediction in any case for model regularization
+                #    pred_other, next_state_other = mdl_other(a=a_t, last_state=state, use_posterior=False,
+                #                                             sample_state=sample_state,
+                #                                             sample_output=False, reconstruct=True)
 
-            # update memories
-            for k, v in {**pred, **next_state}.items():
-                data = memory.get(k, [])
-                data.append(v)
-                memory[k] = data
-            for k, v in {**pred_other, **next_state_other}.items():
-                data = memory_other.get(k, [])
-                data.append(v)
-                memory_other[k] = data
-            for k, v in simulated_ground_truth.items():
-                data = memory_targets.get(k, [])
-                data.append(v)
-                memory_targets[k] = data
-            for k, v in simulation['model_state'].items():
-                data = memory_states_below.get(k, [])
-                data.append(v)
-                memory_states_below[k] = data
+                # update memories
+                # for k, v in {**pred, **next_state}.items():
+                #    data = memory.get(k, [])
+                #    data.append(v)
+                #    memory[k] = data
+                # for k, v in {**pred_other, **next_state_other}.items():
+                #    data = memory_other.get(k, [])
+                #    data.append(v)
+                #    memory_other[k] = data
+                # for k, v in simulated_ground_truth.items():
+                #    data = memory_targets.get(k, [])
+                #    data.append(v)
+                #    memory_targets[k] = data
+                # for k, v in simulation['model_state'].items():
+                #    data = memory_states_below.get(k, [])
+                #    data.append(v)
+                #    memory_states_below[k] = data
+                update_memory(memory, **pred, **next_state)
+                # update_memory(memory_other, **pred_other, **next_state_other)
+                update_memory(memory_other, **pred, **next_state)
+                update_memory(memory_targets, **simulated_ground_truth)
+                update_memory(memory_states_below, **simulation['model_state'])
 
-            # if start_time_step is not None:
-            #    data = memory.get('time_step', [])
-            #    data.append(start_time_step + (t + 1) * self.strides[level])
-            #    memory['time_step'] = data
+                # important: update model states
+                state = next_state
+                state_below = simulation['model_state']
 
-            # important: update model states
-            state = next_state
-            state_below = simulation['model_state']
+            if GlobalLogger.can_log('simulated_ground_truth_goal_distance', self._current_train_step):
+                sim_ground_truth_r = torch.stack(memory_targets['r'][1:]).mean(dim=1).detach().cpu().numpy()
+                goal_rewards = torch.stack(goal_rewards).mean(dim=1).detach().cpu().numpy().squeeze()
+                # reachability_rewards = torch.stack(reachability_rewards).mean(dim=1).detach().cpu().numpy().squeeze()
+                distance_rewards = torch.stack(distance_rewards).mean(dim=1).detach().cpu().numpy().squeeze()
+                terminals = torch.stack(terminals).mean(dim=1).detach().cpu().numpy().squeeze()
+                fig = plt.figure(dpi=60)
+                plt.plot(sim_ground_truth_r, label='sim ground truth r', marker='o')
+                plt.plot(goal_rewards, label='agent goal reward', marker='o')
+                # plt.plot(reachability_rewards, label='reachability reward', marker='o')
+                plt.plot(distance_rewards, label='distance reward', marker='o')
+                plt.plot(terminals, label='terminal flags', marker='o')
+                plt.suptitle(f'L{level} Model + Goal Seeking Agent')
+                plt.legend()
+                plt.tight_layout()
+                GlobalLogger.logger.log_plot(fig_to_img(fig), Scope.TRAIN() / f'model/{level}/goal_reward',
+                                             self._current_train_step)
+                plt.close(fig)
+                del fig
 
-        if GlobalLogger.can_log('simulated_ground_truth_goal_distance', self._current_train_step):
-            sim_ground_truth_r = torch.stack(memory_targets['r'][1:]).mean(dim=1).detach().cpu().numpy()
-            goal_rewards = torch.stack(goal_rewards).mean(dim=1).detach().cpu().numpy().squeeze()
-            # reachability_rewards = torch.stack(reachability_rewards).mean(dim=1).detach().cpu().numpy().squeeze()
-            distance_rewards = torch.stack(distance_rewards).mean(dim=1).detach().cpu().numpy().squeeze()
-            terminals = torch.stack(terminals).mean(dim=1).detach().cpu().numpy().squeeze()
-            fig = plt.figure(dpi=60)
-            plt.plot(sim_ground_truth_r, label='sim ground truth r', marker='o')
-            plt.plot(goal_rewards, label='agent goal reward', marker='o')
-            # plt.plot(reachability_rewards, label='reachability reward', marker='o')
-            plt.plot(distance_rewards, label='distance reward', marker='o')
-            plt.plot(terminals, label='terminal flags', marker='o')
-            plt.suptitle(f'L{level} Model + Goal Seeking Agent')
-            plt.legend()
-            plt.tight_layout()
-            GlobalLogger.logger.log_plot(fig_to_img(fig), Scope.TRAIN() / f'model/{level}/goal_reward',
-                                         self._current_train_step)
-            plt.close(fig)
-            del fig
+            memory_targets = {k: torch.stack(v) for k, v in memory_targets.items()}  # to fit loss calculation scheme
 
-        memory_targets = {k: torch.stack(v) for k, v in memory_targets.items()}  # to fit loss calculation scheme
-
-        return memory, memory_other, memory_targets, state, memory_states_below
+            return memory, memory_other, memory_targets, state, memory_states_below
 
     def forward_static(self,
                        trajectory: Dict[str, torch.Tensor],
+                       start_state: Dict[str, torch.Tensor],
                        level: int = 0,
                        n_steps: int = -1,
                        n_warmup: int = -1,
-                       start_state: Dict[str, torch.Tensor] = None,
                        memory: Dict[str, torch.Tensor] | None = None,
                        memory_other: Dict[str, torch.Tensor] | None = None,
                        sample_state: bool = True,
                        sample_output: bool = True,
                        reconstruct: bool = True,
                        use_ema_modules: bool = False):
-        mdl = self._ema_rssm_modules[level] if use_ema_modules else self.rssm_modules[level]
-        mdl_other = self.rssm_modules[level] if use_ema_modules else self._ema_rssm_modules[level]
-        memory = {} if memory is None else memory
-        memory_other = {} if memory_other is None else memory_other
-        o, a = trajectory['o'], trajectory['a']
+        with record_function('forward_static'):
+            mdl = self._ema_rssm_modules[level] if use_ema_modules else self.rssm_modules[level]
+            mdl_other = self.rssm_modules[level] if use_ema_modules else self._ema_rssm_modules[level]
+            memory = {} if memory is None else memory
+            memory_other = {} if memory_other is None else memory_other
+            o, a = trajectory['o'], trajectory['a']
 
-        if n_steps < 0:
-            n_steps = a.shape[0]
-        else:
-            assert n_steps <= a.shape[0], f'Not enough actions available ({a.shape[0]}) to go {n_steps} steps'
-
-        if n_warmup < 0:
-            n_warmup = n_steps
-
-        state = start_state
-        for t in range(n_steps):
-            if t < n_warmup:
-                o_t = o[t]
-                use_posterior = True
+            if n_steps < 0:
+                n_steps = a.shape[0]
             else:
-                o_t = None
-                use_posterior = False
-            a_t = a[t]
+                assert n_steps <= a.shape[0], f'Not enough actions available ({a.shape[0]}) to go {n_steps} steps'
 
-            pred, next_state = mdl(a=a_t, o=o_t, last_state=state, use_posterior=use_posterior,
-                                   sample_state=sample_state, sample_output=sample_output, reconstruct=reconstruct)
-            pred_other, next_state_other = mdl_other(a=a_t, o=o_t, last_state=state, use_posterior=use_posterior,
-                                                     sample_state=sample_state, sample_output=sample_output,
-                                                     reconstruct=reconstruct)
+            if n_warmup < 0:
+                n_warmup = n_steps
 
-            for k, v in {**pred, **next_state}.items():
-                data = memory.get(k, [])
-                data.append(v)
-                memory[k] = data
-            for k, v in {**pred_other, **next_state_other}.items():
-                data = memory_other.get(k, [])
-                data.append(v)
-                memory_other[k] = data
+            if n_warmup > 0:
+                o = mdl.o_encoder(o)
 
-            # if 'time_step' in next_state:
-            #    ts = memory.get('time_step', [])
-            #    ts.append(next_state['time_step'])
-            #    memory['time_step'] = ts
-            # if 'time_step' in trajectory:
-            #    ts = memory.get('time_step', [])
-            #    ts.append(trajectory['time_step'][t])
-            #    memory['time_step'] = ts
+            state = start_state
+            for t in range(n_steps):
+                if t < n_warmup:
+                    o_t = o[t]
+                    use_posterior = True
+                else:
+                    o_t = None
+                    use_posterior = False
+                a_t = a[t]
 
-            state = next_state
+                pred, next_state = mdl(a=a_t, o_enc=o_t, last_state=state, use_posterior=use_posterior,
+                                       sample_state=sample_state, sample_output=sample_output, reconstruct=reconstruct)
+                # pred_other, next_state_other = mdl_other(a=a_t, o_enc=o_t, last_state=state, use_posterior=use_posterior,
+                #                                         sample_state=sample_state, sample_output=sample_output,
+                #                                         reconstruct=reconstruct)
 
-        return memory, memory_other, state
+                update_memory(memory, **pred, **next_state)
+                # update_memory(memory_other, **pred_other, **next_state_other)
+                update_memory(memory_other, **pred, **next_state)
+
+                # for k, v in {**pred, **next_state}.items():
+                #    data = memory.get(k, [])
+                #    data.append(v)
+                #    memory[k] = data
+                # for k, v in {**pred_other, **next_state_other}.items():
+                #    data = memory_other.get(k, [])
+                #    data.append(v)
+                #    memory_other[k] = data
+
+                state = next_state
+
+            return memory, memory_other, state
 
     def filter_up(self,
                   o: List[torch.Tensor] | None = None,
@@ -330,7 +336,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
     def ground_level(self,
                      trajectory_below: Dict[str, List[torch.Tensor]],
                      level: int,
-                     start_state: Dict[str, torch.Tensor] = None,
+                     start_state: Dict[str, torch.Tensor],
                      memory: Dict[str, torch.Tensor] | None = None,
                      memory_other: Dict[str, torch.Tensor] | None = None,
                      memory_targets: Dict[str, torch.Tensor] | None = None,
@@ -339,45 +345,46 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                      sample_output: bool = True,
                      reconstruct: bool = True,
                      use_ema_modules: bool = False):
-        assert level > 0, 'Level 0 grounding is done automatically in forward_static() method'
+        with record_function('ground_level'):
+            assert level > 0, 'Level 0 grounding is done automatically in forward_static() method'
 
-        memory_targets = {} if memory_targets is None else memory_targets
-        memory_states_below = {} if memory_states_below is None else memory_states_below
-        n_steps = self.strides[level]
-        assert n_steps <= len(trajectory_below['z']), f'Not enough below level time steps to ground level {level}'
-        simulated_ground_truth = self.filter_up(o=trajectory_below['z'], r=trajectory_below['r'],
-                                                terminal=trajectory_below['terminal'], level=level,
-                                                respect_terminal_flag=False,
-                                                n_steps=n_steps)
-        d_batch = trajectory_below['o'][0].shape[0]
-        device = trajectory_below['o'][0].device
-        simulated_ground_truth['a'] = self.rssm_modules[level].zero_a(d_batch, device).unsqueeze(0)  # one dummy action
+            memory_targets = {} if memory_targets is None else memory_targets
+            memory_states_below = {} if memory_states_below is None else memory_states_below
+            n_steps = self.strides[level]
+            assert n_steps <= len(trajectory_below['z']), f'Not enough below level time steps to ground level {level}'
+            simulated_ground_truth = self.filter_up(o=trajectory_below['z'], r=trajectory_below['r'],
+                                                    terminal=trajectory_below['terminal'], level=level,
+                                                    respect_terminal_flag=False,
+                                                    n_steps=n_steps)
+            d_batch = trajectory_below['o'][0].shape[0]
+            device = trajectory_below['o'][0].device
+            simulated_ground_truth['a'] = self.rssm_modules[level].zero_a(d_batch, device).unsqueeze(
+                0)  # one dummy action
 
-        for k, v in simulated_ground_truth.items():
-            assert v.shape[0] == 1, f'k is too long: {v.shape[0]}'
+            for k, v in simulated_ground_truth.items():
+                assert v.shape[0] == 1, f'k is too long: {v.shape[0]}'
 
-        mem, mem_other, state = self.forward_static(simulated_ground_truth, n_steps=1, n_warmup=1, level=level,
-                                                    memory=memory, memory_other=memory_other, start_state=start_state,
-                                                    sample_state=sample_state,  # sampling state should be ok as always
-                                                    sample_output=False,  # decrease variance of target data
-                                                    reconstruct=reconstruct, use_ema_modules=use_ema_modules)
+            mem, mem_other, state = self.forward_static(simulated_ground_truth, start_state=start_state, level=level,
+                                                        n_steps=1, n_warmup=1, memory=memory, memory_other=memory_other,
+                                                        sample_state=sample_state, sample_output=False,
+                                                        reconstruct=reconstruct, use_ema_modules=use_ema_modules)
 
-        simulated_ground_truth = {k: v.squeeze(0) for k, v in simulated_ground_truth.items()}  # remove time dim
+            simulated_ground_truth = {k: v.squeeze(0) for k, v in simulated_ground_truth.items()}  # remove time dim
 
-        for k, v in simulated_ground_truth.items():
-            data = memory_targets.get(k, [])
-            data.append(v)
-            memory_targets[k] = data
+            for k, v in simulated_ground_truth.items():
+                data = memory_targets.get(k, [])
+                data.append(v)
+                memory_targets[k] = data
 
-        # reconstruct state of model below at time step that corresponds to one step by current level
-        state_below = {k: trajectory_below[k][n_steps - 1] for k in state.keys()}  # TODO: check this
+            # reconstruct state of model below at time step that corresponds to one step by current level
+            state_below = {k: trajectory_below[k][n_steps - 1] for k in state.keys()}  # TODO: check this
 
-        for k, v in state_below.items():
-            data = memory_states_below.get(k, [])
-            data.append(v)
-            memory_states_below[k] = data
+            for k, v in state_below.items():
+                data = memory_states_below.get(k, [])
+                data.append(v)
+                memory_states_below[k] = data
 
-        return mem, mem_other, memory_targets, state, state_below, memory_states_below
+            return mem, mem_other, memory_targets, state, state_below, memory_states_below
 
     def forward_all_levels(self,
                            ground_truth_trajectory: Dict[str, torch.Tensor],
@@ -388,17 +395,18 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                            sample_output: bool = True,
                            reconstruct: bool = True,
                            dynamic: bool = True):
+        d_batch = ground_truth_trajectory['o'].shape[1]
         memory = [None for _ in range(self.levels)]
         memory_ema = [None for _ in range(self.levels)]
         memory_states_below = [None for _ in range(self.levels)]
-        model_state = [None for _ in range(self.levels)] if model_state is None else model_state
+        if model_state is None:
+            model_state = [rssm.init_state(d_batch, self.device) for rssm in self.rssm_modules]
         targets = [ground_truth_trajectory] + [None for _ in range(self.levels - 1)]
 
         # lvl 0 is special and gets static ground truth trajectories
         memory[0], memory_ema[0], model_state[0] = self.forward_static(ground_truth_trajectory,
-                                                                       n_steps=model_steps[0],
-                                                                       n_warmup=warmup_steps[0], level=0,
-                                                                       start_state=model_state[0],
+                                                                       start_state=model_state[0], level=0,
+                                                                       n_steps=model_steps[0], n_warmup=warmup_steps[0],
                                                                        sample_state=sample_state,
                                                                        sample_output=sample_output,
                                                                        reconstruct=reconstruct)
@@ -465,12 +473,12 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         torch.nn.utils.clip_grad_norm_(self.parameters(), 10.0)
         optimizer.step()
 
-        if self._current_train_step % self.ema_update_interval == 0:
-            self._update_ema_modules()
+        # if self._current_train_step % self.ema_update_interval == 0:
+        #    self._update_ema_modules()
 
         return losses, pred, targets, states_below
 
-    @compile_if_not_debug
+    # @torch.compile(disable=disable_torch_compile)
     def _update_ema_modules(self):
         with torch.no_grad():
             rssm_params = chain.from_iterable([m.parameters() for m in self.rssm_modules])
@@ -478,50 +486,68 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             for param, ema_param in zip(rssm_params, ema_params):
                 ema_param[:] = self.ema_coeff * ema_param + (1 - self.ema_coeff) * param
 
-    @compile_if_not_debug
+    # @torch.compile(disable=disable_torch_compile)
     def _latent_overshooting(self, pred_tf, targets, n_lo):
-        losses_lo = {}
-        for l in range(self.levels):
-            offset = n_lo[l]
-            # we don't use the terminal flags here
-            start_state, _ = rssm_states_seq_to_batch(pred_tf[l], targets[l]['terminal'], self.rssm_modules[l],
-                                                      i_end=-offset)
-            start_state = self.rssm_modules[l].detach_state(start_state)
-            actions = torch.stack(pred_tf[l]['a']).detach()  # make tensor (time x batch x d_a)
-            mask = compute_mask(targets[l]['terminal'])  # compute mask from groundtruth sequences
-            action_windows, mask_windows, z_post_windows = [], [], []
-            # select for every start state the next n_lo actions
-            # since the rssm states are always recorded after an action was applied, correct actions and terminal
-            # flags for a start state at time step t start from t+1
-            for t in range(1, actions.shape[0] - offset + 1):
-                action_windows.append(actions[t: t + offset])
-                mask_windows.append(mask[t: t + offset])
-                z_post_windows.append(stack_dists(pred_tf[l]['z_post'][t: t + offset]))
-            actions = torch.concat(action_windows, dim=1)  # concat all windows along batch dimension
-            mask = torch.concat(mask_windows, dim=1)
-            trajectory = {'a': actions, 'o': None, 'r': None, 'terminal': None}
-            pred_lo_lvl, _, _ = self.forward_static(trajectory, level=l, start_state=start_state, n_warmup=0,
-                                                    reconstruct=False, sample_state=True)
-            z_post = concat_dists(z_post_windows, dim=1)
-            z_prior = stack_dists(pred_lo_lvl['z_prior'])
+        with record_function('latent_overshooting'):
+            losses_lo = {}
+            for l in range(self.levels):
+                offset = n_lo[l]
+                # prepare start states for latent overshooting (we us our own hand-made masks)
+                start_state, _ = rssm_states_seq_to_batch(pred_tf[l], targets[l]['terminal'], self.rssm_modules[l],
+                                                          i_end=-offset)
+                start_state = self.rssm_modules[l].detach_state(**start_state)
 
-            if GlobalLogger.can_log('mask_latent_overshooting', self._current_train_step):
-                fig = plt.figure(figsize=(5, 5))
-                plt.matshow(mask.detach().cpu().numpy().squeeze(), fignum=fig, aspect='auto')
-                plt.colorbar()
-                GlobalLogger.logger.log_plot(fig_to_img(fig), Scope.TRAIN() / f'model/l{l}_latent_overshooting_mask',
-                                             time_step=self._current_train_step)
-                plt.close(fig)
-                del fig
+                # prepare action, posterior and mask windows that contain for every start state the next n_lo time steps
+                actions = torch.stack(pred_tf[l]['a']).detach()  # make tensor (time x batch x d_a)
+                mask = compute_mask(targets[l]['terminal'])  # compute mask from groundtruth sequences
+                # stacked_posterior = {k: [] for k in pred_tf[l]['z_post'][0]}
+                # for dist_params in pred_tf[l]['z_post']:
+                #    for k, v in dist_params.items():
+                #        stacked_posterior[k].append(v)
+                # stacked_posterior = {k: torch.stack(v) for k, v in stacked_posterior.items()}
+                z_post = stack_tensor_dicts(pred_tf[l]['z_post'])
 
-            if self.kl_balance is not None:
-                kl_0 = torch.mean(torch.distributions.kl_divergence(detach_dist(z_post), z_prior) * (1 - mask))
-                kl_1 = torch.mean(torch.distributions.kl_divergence(z_post, detach_dist(z_prior)) * (1 - mask))
-                kl = (self.kl_balance * kl_0 + (1 - self.kl_balance) * kl_1) / offset
-            else:
-                kl = torch.mean(torch.distributions.kl_divergence(detach_dist(z_post), z_prior) * (1 - mask)) / offset
-            losses_lo[f'kl_latent_overshooting_{l}'] = self.kl_betas[l] * kl
-        return losses_lo
+                # select for every start state the next n_lo actions, mask items and posteriors
+                # since the rssm states are always recorded after an action was applied, correct actions and terminal
+                # flags for a start state at time step t start from t+1
+                action_windows, mask_windows, z_post_windows = [], [], []
+                for t in range(1, actions.shape[0] - offset + 1):
+                    action_windows.append(actions[t: t + offset])
+                    mask_windows.append(mask[t: t + offset])
+                    z_post_windows.append({k: v[t: t + offset] for k, v in z_post.items()})
+
+                # concat all windows along the batch dimension for parallel loss calculation
+                actions = torch.concat(action_windows, dim=1)
+                mask = torch.concat(mask_windows, dim=1)
+                z_post = concat_tensor_dicts(z_post_windows, dim=1)
+
+                # do the model rollout
+                trajectory = {'a': actions, 'o': None, 'r': None, 'terminal': None}
+                pred_lo_lvl, _, _ = self.forward_static(trajectory, start_state=start_state, level=l, n_warmup=0,
+                                                        sample_state=True, reconstruct=False)
+                z_prior = stack_tensor_dicts(pred_lo_lvl['z_prior'])
+
+                if GlobalLogger.can_log('mask_latent_overshooting', self._current_train_step):
+                    fig = plt.figure(figsize=(5, 5))
+                    plt.matshow(mask.detach().cpu().numpy().squeeze(), fignum=fig, aspect='auto')
+                    plt.colorbar()
+                    GlobalLogger.logger.log_plot(fig_to_img(fig),
+                                                 Scope.TRAIN() / f'model/l{l}_latent_overshooting_mask',
+                                                 time_step=self._current_train_step)
+                    plt.close(fig)
+                    del fig
+
+                if self.kl_balance is not None:
+                    z_prior = self.rssm_modules[l].z_dist(z_prior)
+                    z_post = self.rssm_modules[l].z_dist(z_post)
+                    kl_0 = torch.mean(torch.distributions.kl_divergence(detach_dist(z_post), z_prior) * (1 - mask))
+                    kl_1 = torch.mean(torch.distributions.kl_divergence(z_post, detach_dist(z_prior)) * (1 - mask))
+                    kl = (self.kl_balance * kl_0 + (1 - self.kl_balance) * kl_1) / offset
+                else:
+                    kl = torch.mean(
+                        torch.distributions.kl_divergence(detach_dist(z_post), z_prior) * (1 - mask)) / offset
+                losses_lo[f'kl_latent_overshooting_{l}'] = self.kl_betas[l] * kl
+            return losses_lo
 
     def _eval_step(self,
                    training_data: Dict[str, torch.Tensor],
@@ -600,67 +626,76 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                   kl_beta: float,
                   kl_reg_beta: float = 0.0,
                   level: int = 0):
-        valid = 1 - mask  # use mask to multiply irrelevant steps with zero
+        with record_function('calc_loss'):
+            valid = 1 - mask  # use mask to multiply irrelevant steps with zero
 
-        assert (valid >= 0.0).all(), 'Negative valid values detected!'
+            assert (valid >= 0.0).all(), 'Negative valid values detected!'
 
-        rec_o = self._neg_log_prob(pred['o_dist'], targets['o'], valid)
-        rec_r = self._neg_log_prob(pred['r_dist'], targets['r'], valid)
-        rec_term = self._neg_log_prob(pred['terminal_dist'], targets['terminal'], valid)
-        if self.kl_balance is not None:
-            kl_0 = self._kl_div(pred['z_post'], pred['z_prior'], valid, detach_ps=True)
-            kl_1 = self._kl_div(pred['z_post'], pred['z_prior'], valid, detach_qs=True)
-            kl_z = self.kl_balance * kl_0 + (1 - self.kl_balance) * kl_1
-        else:
-            kl_z = self._kl_div(pred['z_post'], pred['z_prior'], valid)
-        kl_reg_z = self._kl_reg(pred['z_post'], valid)
-        contrastive_z = torch.tensor(0.0, dtype=torch.float32,
-                                     device=self.device)  # 0.05 * self._contrastive_loss(pred['z'], pred['terminal'], valid[:1])
+            rec_o = self._neg_log_prob(pred['o_dist'], targets['o'], valid)
+            rec_r = self._neg_log_prob(pred['r_dist'], targets['r'], valid)
+            rec_term = self._neg_log_prob(pred['terminal_dist'], targets['terminal'], valid)
 
-        mae_o = self._mae(pred['o'], targets['o'], valid)
-        mae_r = self._mae(pred['r'], targets['r'], valid)
-        mae_term = self._mae(pred['terminal'], targets['terminal'], valid)
+            states_stacked = self.rssm_modules[level].stack_states(**pred)
+            z_prior = self.rssm_modules[level].z_dist(states_stacked['z_prior'])
+            z_post = self.rssm_modules[level].z_dist(states_stacked['z_post'])
+            if self.kl_balance is not None:
+                # kl_0 = self._kl_div(pred['z_post'], pred['z_prior'], valid, detach_ps=True)
+                # kl_1 = self._kl_div(pred['z_post'], pred['z_prior'], valid, detach_qs=True)
+                kl_0 = self._kl_div_2(z_post, z_prior, valid, detach_ps=True)
+                kl_1 = self._kl_div_2(z_post, z_prior, valid, detach_qs=True)
+                kl_z = self.kl_balance * kl_0 + (1 - self.kl_balance) * kl_1
+            else:
+                # kl_z = self._kl_div(pred['z_post'], pred['z_prior'], valid)
+                kl_z = self._kl_div_2(z_post, z_prior, valid)
+            # kl_reg_z = self._kl_reg_2(pred['z_post'], valid)
+            kl_reg_z = self._kl_reg_2(z_post, valid)
+            contrastive_z = torch.tensor(0.0, dtype=torch.float32,
+                                         device=self.device)  # 0.05 * self._contrastive_loss(pred['z'], pred['terminal'], valid[:1])
 
-        total = rec_o + rec_r + rec_term + kl_z * kl_beta + kl_reg_z * kl_reg_beta + contrastive_z
-        loss = {'total': total, 'o': rec_o, 'r': rec_r, 'term': rec_term, 'kl_z': kl_z, 'kl_reg_z': kl_reg_z,
-                'monitoring_o': mae_o, 'monitoring_r': mae_r, 'monitoring_term': mae_term,
-                'contrastive_z': contrastive_z}
+            mae_o = self._mae(pred['o'], targets['o'], valid)
+            mae_r = self._mae(pred['r'], targets['r'], valid)
+            mae_term = self._mae(pred['terminal'], targets['terminal'], valid)
 
-        if self.ema_regularization:
-            cons_o = self._kl_div(pred['o_dist'], pred_ema['o_dist'], valid, detach_qs=True)
-            cons_r = self._kl_div(pred['r_dist'], pred_ema['r_dist'], valid, detach_qs=True)
-            cons_term = self._kl_div(pred['terminal_dist'], pred_ema['terminal_dist'], valid, detach_qs=True)
-            cons_z_prior = self._kl_div(pred['z_prior'], pred_ema['z_prior'], valid, detach_qs=True)
-            cons_z_post = self._kl_div(pred['z_post'], pred_ema['z_post'], valid, detach_qs=True)
-            loss['ema_reg'] = self.ema_regularization * (cons_o + cons_r + cons_term + cons_z_prior + cons_z_post)
-            loss['total'] += loss['ema_reg']
+            total = rec_o + rec_r + rec_term + kl_z * kl_beta + kl_reg_z * kl_reg_beta + contrastive_z
+            loss = {'total': total, 'o': rec_o, 'r': rec_r, 'term': rec_term, 'kl_z': kl_z, 'kl_reg_z': kl_reg_z,
+                    'monitoring_o': mae_o, 'monitoring_r': mae_r, 'monitoring_term': mae_term,
+                    'contrastive_z': contrastive_z}
 
-        if self.temporal_activation_regularization > 0:
-            # loss['temporal_act_reg'] = self._mse(pred['h'][:-1], torch.stack(pred['h'][1:]), valid[:-1])
-            # loss['temporal_act_reg'] *= self.temporal_activation_regularization
-            # loss['total'] += loss['temporal_act_reg']
-            loss['temporal_act_reg'] = self._mse(pred['z'][:-1], torch.stack(pred['z'][1:]), valid[:-1])
-            loss['temporal_act_reg'] *= self.temporal_activation_regularization
-            loss['total'] += loss['temporal_act_reg']
+            if self.ema_regularization:
+                cons_o = self._kl_div(pred['o_dist'], pred_ema['o_dist'], valid, detach_qs=True)
+                cons_r = self._kl_div(pred['r_dist'], pred_ema['r_dist'], valid, detach_qs=True)
+                cons_term = self._kl_div(pred['terminal_dist'], pred_ema['terminal_dist'], valid, detach_qs=True)
+                cons_z_prior = self._kl_div(pred['z_prior'], pred_ema['z_prior'], valid, detach_qs=True)
+                cons_z_post = self._kl_div(pred['z_post'], pred_ema['z_post'], valid, detach_qs=True)
+                loss['ema_reg'] = self.ema_regularization * (cons_o + cons_r + cons_term + cons_z_prior + cons_z_post)
+                loss['total'] += loss['ema_reg']
 
-        # if level > 0:
-        #    raise RuntimeError('_avg_z_distance is shared by all levels whereas there should be one per level!')
-        #    with torch.no_grad():
-        #        weights = torch.mean((torch.stack(pred['z'][:-1]) - torch.stack(pred['z'][1:])) ** 2, dim=-1, keepdim=True)
-        #        self._avg_z_distance.copy_(0.95 * self._avg_z_distance + 0.05 * weights.mean())
-        #        # for z with or above average distance, contrastive goal loss weight is 0
-        #        weights = torch.maximum(1 - weights / self._avg_z_distance,
-        #                                torch.tensor(0.0, dtype=torch.float32, device=self.device))
-        #        weighted_valid = valid[:1] * weights
-        #    #weighted_valid = valid[:1]
-        #    loss['monitoring_average_z_distance'] = self._avg_z_distance
-        #    loss['contrastive_goal_loss'] = self._contrastive_loss(pred['o'], pred['terminal'], weighted_valid)
-        #    loss['total'] += loss['contrastive_goal_loss']
+            if self.temporal_activation_regularization > 0:
+                # loss['temporal_act_reg'] = self._mse(pred['h'][:-1], torch.stack(pred['h'][1:]), valid[:-1])
+                # loss['temporal_act_reg'] *= self.temporal_activation_regularization
+                # loss['total'] += loss['temporal_act_reg']
+                loss['temporal_act_reg'] = self._mse(pred['z'][:-1], torch.stack(pred['z'][1:]), valid[:-1])
+                loss['temporal_act_reg'] *= self.temporal_activation_regularization
+                loss['total'] += loss['temporal_act_reg']
 
-        return loss
+            # if level > 0:
+            #    raise RuntimeError('_avg_z_distance is shared by all levels whereas there should be one per level!')
+            #    with torch.no_grad():
+            #        weights = torch.mean((torch.stack(pred['z'][:-1]) - torch.stack(pred['z'][1:])) ** 2, dim=-1, keepdim=True)
+            #        self._avg_z_distance.copy_(0.95 * self._avg_z_distance + 0.05 * weights.mean())
+            #        # for z with or above average distance, contrastive goal loss weight is 0
+            #        weights = torch.maximum(1 - weights / self._avg_z_distance,
+            #                                torch.tensor(0.0, dtype=torch.float32, device=self.device))
+            #        weighted_valid = valid[:1] * weights
+            #    #weighted_valid = valid[:1]
+            #    loss['monitoring_average_z_distance'] = self._avg_z_distance
+            #    loss['contrastive_goal_loss'] = self._contrastive_loss(pred['o'], pred['terminal'], weighted_valid)
+            #    loss['total'] += loss['contrastive_goal_loss']
+
+            return loss
 
     @staticmethod
-    @compile_if_not_debug
+    # @torch.compile(disable=disable_torch_compile)
     def _contrastive_loss(x: List[torch.Tensor],
                           terminal: List[torch.Tensor],
                           valid: torch.Tensor):
@@ -673,7 +708,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         return cont_loss
 
     @staticmethod
-    @compile_if_not_debug
+    # @torch.compile(disable=disable_torch_compile)
     def _neg_log_prob(distributions: List[torch.distributions.Distribution],
                       x_target: torch.Tensor,
                       valid: torch.Tensor):
@@ -717,7 +752,49 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         return kl
 
     @staticmethod
-    @compile_if_not_debug
+    # should not be compiled since it causes constant re-compilation for some reason
+    def _kl_div_2(ps: torch.distributions.Distribution,
+                  qs: torch.distributions.Distribution,
+                  valid: torch.Tensor,
+                  detach_ps: bool = False,
+                  detach_qs: bool = False):
+        if detach_ps:
+            ps = detach_dist(ps)
+        if detach_qs:
+            qs = detach_dist(qs)
+
+        kl = torch.sum(torch.distributions.kl.kl_divergence(ps, qs) * valid, dim=-1)
+        kl = kl.mean()
+
+        return kl
+
+    @staticmethod
+    # @torch.compile(disable=disable_torch_compile)
+    def _kl_reg_2(ps: torch.distributions.Distribution,
+                  valid: torch.Tensor):
+        # two sources of invalidity:
+        # 1) ps can contain None elements, they're filled with distributions that have the same parameters as the
+        #    regularizing ones to produce zero kl divergence, so they effectively don't count
+        # 2) valid tensor can be 0 somewhere, this is filtered out after kl divergence computation
+
+        if isinstance(ps, torchd.Normal):  # assume at least first distribution is not None
+            reg_dist = torch.distributions.Normal(loc=torch.zeros_like(ps.loc), scale=torch.ones_like(ps.scale))
+
+        # elif isinstance(ps[0], torch.distributions.ContinuousBernoulli):
+        #    reg_dist = torch.distributions.ContinuousBernoulli(probs=torch.full_like(ps.probs, 0.5))
+        elif isinstance(ps, torchd.OneHotCategorical):
+            reg_dist = torch.distributions.OneHotCategorical(logits=torch.ones_like(ps.logits))
+        else:
+            raise ValueError(f'No regularization distribution for distribution {ps} found')
+
+        kl_reg = torch.sum(torch.distributions.kl.kl_divergence(ps, reg_dist) * valid, dim=-1)
+        kl_reg = kl_reg.mean()
+
+        # kl_reg = [kl_divergence(p, reg_dist) * m for p, m in zip(ps, mask) if p is not None]
+        # kl_reg = torch.stack(kl_reg, dim=0).mean()
+        return kl_reg
+
+    @staticmethod
     def _kl_reg(ps: List[torch.distributions.Distribution],
                 valid: torch.Tensor):
         # two sources of invalidity:
@@ -748,14 +825,12 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         return kl_reg
 
     @staticmethod
-    @compile_if_not_debug
     def _mae(y_hats: List[torch.Tensor], ys: torch.Tensor, valid: torch.Tensor):
         y_hats = torch.stack(y_hats, dim=0)
         valid = valid.reshape(*valid.shape + (1,) * (y_hats.ndim - valid.ndim))  # append size 1 dim for broadcasting
         return torch.mean(torch.abs(ys - y_hats) * valid)
 
     @staticmethod
-    @compile_if_not_debug
     def _mse(y_hats: List[torch.Tensor],
              ys: torch.Tensor,
              valid: torch.Tensor):

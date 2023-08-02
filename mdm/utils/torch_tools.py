@@ -14,16 +14,14 @@ RnnStateType = TypeVar('RnnStateType', torch.Tensor, Tuple[torch.Tensor, torch.T
 _Placeholder = namedtuple('placeholder', 'device')
 
 # define torch.compile decorator depending on whether we're in debug mode or not
-if True or gettrace() or 'PYCHARM_HOSTED' in os.environ:
+if gettrace() or 'PYCHARM_HOSTED' in os.environ:
     print('Debugging or running in PyCharm IDE, disabling torch.compile')
 
-
-    def compile_if_not_debug(func):
-        return func
+    disable_torch_compile = True
 else:
-    print('Compiling functions with compile_if_not_debug decorator')
-    torch.set_float32_matmul_precision('high')
-    compile_if_not_debug = torch.compile  # partial(torch.compile, dynamic=True)
+    print('Compiling functions with torch.compile')
+    #torch.set_float32_matmul_precision('high')
+    disable_torch_compile = False
 
 
 class DeviceMixin:
@@ -160,6 +158,7 @@ class RunningMeanStd(torch.nn.Module):
         self.var = torch.nn.Parameter(torch.ones(*shape, dtype=torch.float64), requires_grad=False)
         self.count = torch.nn.Parameter(torch.tensor(epsilon, dtype=torch.float64), requires_grad=False)
 
+    @torch.compile(disable=disable_torch_compile)
     def update(self,
                x: torch.Tensor,
                mask: None | torch.Tensor = None):
@@ -180,6 +179,7 @@ class RunningMeanStd(torch.nn.Module):
             batch_count = x.shape[0]
             self.update_from_moments(batch_mean, batch_var, batch_count)
 
+    @torch.compile(disable=disable_torch_compile)
     def update_from_moments(self, batch_mean, batch_var, batch_count):
         """Updates from batch mean, variance and count moments."""
         new_mean, new_var, new_count = update_mean_var_count_from_moments(self.mean, self.var, self.count,
@@ -189,6 +189,7 @@ class RunningMeanStd(torch.nn.Module):
         self.count.copy_(new_count)
 
 
+@torch.compile(disable=disable_torch_compile)
 def update_mean_var_count_from_moments(mean, var, count, batch_mean, batch_var, batch_count):
     """Updates the mean, var and count using the previous mean, var, count and batch values."""
     delta = batch_mean - mean
@@ -423,7 +424,7 @@ def get_dist_params(d: torch.distributions.Distribution):
         raise RuntimeError(f'Can\'t extract parameters of the given distribution: {d}')
 
 
-@compile_if_not_debug
+@torch.compile(disable=disable_torch_compile)
 def detach_dist(d: torch.distributions.Distribution):
     if isinstance(d, (torch.distributions.Normal, torch.distributions.Cauchy, torch.distributions.Gumbel,
                       torch.distributions.Laplace, torch.distributions.LogNormal)):
@@ -449,7 +450,6 @@ def detach_dist(d: torch.distributions.Distribution):
         raise RuntimeError(f'Can\'t detach the given distribution: {d}')
 
 
-@compile_if_not_debug
 def stack_dists(dists: List[torch.distributions.Distribution]):
     cls = set([type(d) for d in dists])
     assert len(cls) == 1, 'All distributions have to share the same class'
@@ -510,7 +510,6 @@ def unstack_dist(dist: torch.distributions.Distribution,
         raise ValueError(f'Unsupported distribution class: {type(dist)}')
 
 
-@compile_if_not_debug
 def concat_dists(dists: List[torch.distributions.Distribution],
                  dim: int = 0):
     cls = set([type(d) for d in dists])
@@ -607,6 +606,7 @@ def pack_rnn_state(rnn_state: RnnStateType):
         return torch.stack([rnn_state.transpose(0, 1)], dim=-2)
 
 
+@torch.compile(disable=disable_torch_compile)
 def to_tensors(mem: List[Dict[str, int | float | np.single | np.double | bool | np.ndarray]],
                device: torch.device,
                dtypes: Union[List, Tuple] = None,
@@ -694,7 +694,7 @@ def to_np(data_dict: Dict[str, Union[torch.Tensor, Dict]]):
     return np_data_dict
 
 
-@compile_if_not_debug
+@torch.compile(disable=disable_torch_compile)
 def compute_mask(terminals: List[torch.Tensor] | torch.Tensor,
                  mode: str = 'default',
                  threshold: float | None = None,
@@ -752,7 +752,6 @@ def compute_mask(terminals: List[torch.Tensor] | torch.Tensor,
         """
 
 
-@compile_if_not_debug
 def compute_mask_old(terminals: torch.Tensor,
                      mode: str = 'default',
                      threshold: float | None = None,
@@ -824,3 +823,22 @@ def stack_if_list(x: torch.Tensor | List[torch.Tensor],
     if isinstance(x, list):
         x = torch.stack(x, dim=dim)
     return x
+
+
+def stack_tensor_dicts(x: List[Dict[str, torch.Tensor]]):
+    x_stacked = {k: [] for k in x[0]}
+    for dist_params in x:
+        for k, v in dist_params.items():
+            x_stacked[k].append(v)
+    x_stacked = {k: torch.stack(v) for k, v in x_stacked.items()}
+    return x_stacked
+
+
+def concat_tensor_dicts(x: List[Dict[str, torch.Tensor]],
+                        dim: int):
+    x_concat = {k: [] for k in x[0]}
+    for dist_params in x:
+        for k, v in dist_params.items():
+            x_concat[k].append(v)
+    x_concat = {k: torch.concat(v, dim=dim) for k, v in x_concat.items()}
+    return x_concat

@@ -7,6 +7,7 @@ from math import floor, ceil
 
 import torch
 from sklearn.decomposition import PCA
+from torch.profiler import record_function
 import matplotlib.pyplot as plt
 from matplotlib.colors import hsv_to_rgb, to_rgba
 from matplotlib.patches import Rectangle
@@ -29,7 +30,7 @@ from mdm.utils.gym_nav2d_tools import gen_regular_grid_trajectories, visualize_o
 
 
 def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collect_fn, eval_env, test_driver,
-                train_driver, logger, log_videos: bool = True, video_env=None):
+                train_driver, logger, log_videos: bool = True, video_env=None, profile=False):
     model_train_steps = cfg['trainer']['model_train_steps']
     freeze_model = cfg['trainer']['freeze_model'] if cfg['trainer']['freeze_model'] > 0 else sys.maxsize
     stop_collect = cfg['trainer']['stop_collect'] if cfg['trainer']['stop_collect'] > 0 else sys.maxsize
@@ -40,23 +41,24 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
     # grid_trajs = gen_regular_grid_trajectories(eval_env.env_fns[0](), trajs_vert=10, trajs_horiz=10, step_size=1.0)
     # grid_trajs = to_tensors(grid_trajs, model.device, padding='repeat')
     # grid_trajs = prepare_data(grid_trajs)
+    if profile:
+        cfg['trainer']['n_train_steps'] = 1
 
     for i_step in tqdm(range(cfg['trainer']['n_train_steps']), desc='Training Progress'):
         batch = train_driver.interact(cfg['trainer']['d_batch'])
         batch = to_tensors(batch, model.device, padding='repeat')
         batch = prepare_data(batch)
-        # for easier diagnosis and debugging
 
-        # train model normal
-        model.train()
-        agent_eval_mode(r_max_agents + goal_seeking_agents)
         if cfg['trainer']['subtrajectory_len'] > 0:
             # model_batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
             # model_batch = valid_subtrajectories_unbiased(batch, 15)
-            model_batch = valid_subtrajectories_unbiased_fast(batch, cfg['trainer']['subtrajectory_len'])
+            model_batch = valid_subtrajectories_unbiased(batch, cfg['trainer']['subtrajectory_len'])
         else:
             model_batch = batch
 
+        #with record_function('model_training'):
+        model.train()
+        agent_eval_mode(r_max_agents + goal_seeking_agents)
         if i_step < freeze_model:
             train_losses, pred, targets, states_below = model.train_step(model_batch, opt_model,
                                                                          model_steps=model_train_steps)
@@ -65,7 +67,6 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                                                                         force_warmup=[-1 for _ in range(model.levels)])
 
             print('freezing model')
-
         logger.log(to_np(train_losses), Scope.TRAIN(), i_step)
 
         # train model in observation mode
@@ -78,25 +79,28 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
             agent_model_steps = cfg['trainer']['agent_model_steps']
 
             for l in range(model.levels):
-                # use all time steps of teacher forcing rollout from model as starting point
-                start_state_lvl, start_state_mask = rssm_states_seq_to_batch(pred[l], targets[l]['terminal'],
-                                                                             model.rssm_modules[l])
-                # prevent gradient flow into the start state
-                start_state_lvl = model.rssm_modules[l].detach_state(start_state_lvl)
+
+                with record_function(f'prepare_agent_data_{l}'):
+                    # use all time steps of teacher forcing rollout from model as starting point
+                    start_state_lvl, start_state_mask = rssm_states_seq_to_batch(pred[l], targets[l]['terminal'],
+                                                                                 model.rssm_modules[l])
+                    # prevent gradient flow into the start state
+                    start_state_lvl = model.rssm_modules[l].detach_state(**start_state_lvl)
 
                 # mask to eliminate training steps that start after an episode has already ended
 
-                # r_max agent
-                r_max_agent, r_max_actor_opt, r_max_critic_opt = model.r_max_agents[l]
-                abstract_level = l > 0
-                r_max_simulation = r_max_agent.act_in_sim(start_state_lvl, model, agent_model_steps[l],
-                                                          sample_model=True, sample_actions=True,
-                                                          reconstruct=not abstract_level)
-                r_max_simulation['agent']['first_step_mask'] = start_state_mask.unsqueeze(0)
-                r_max_losses = r_max_agent.train_step(r_max_simulation['agent'], actor_optimizer=r_max_actor_opt,
-                                                      critic_optimizer=r_max_critic_opt)
-                r_max_losses['obtained_reward'] = torch.stack(r_max_simulation['agent']['r']).mean()
-                logger.log(to_np(r_max_losses), Scope.TRAIN() / f'r_max_agent/{l}/', i_step)
+                with record_function(f'r_max_agent_training_{l}'):
+                    # r_max agent
+                    r_max_agent, r_max_actor_opt, r_max_critic_opt = model.r_max_agents[l]
+                    abstract_level = l > 0
+                    r_max_simulation = r_max_agent.act_in_sim(start_state_lvl, model, agent_model_steps[l],
+                                                              sample_model=True, sample_actions=True,
+                                                              reconstruct=not abstract_level)
+                    r_max_simulation['agent']['first_step_mask'] = start_state_mask.unsqueeze(0)
+                    r_max_losses = r_max_agent.train_step(r_max_simulation['agent'], actor_optimizer=r_max_actor_opt,
+                                                          critic_optimizer=r_max_critic_opt)
+                    r_max_losses['obtained_reward'] = torch.stack(r_max_simulation['agent']['r']).mean()
+                    logger.log(to_np(r_max_losses), Scope.TRAIN() / f'r_max_agent/{l}/', i_step)
 
                 if GlobalLogger.can_log('sanity_check_goal_computation', i_step):
                     if l < model.levels - 1:
@@ -215,127 +219,129 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                     We start at the same spot as the r_max agent, namely at start_state_lvl. We then use every
                     k-th time step from the r_max agent's simulation as intermediate goal and train goal finding
                     """
-                    goal_agent, goal_actor_opt, goal_critic_opt = model.goal_seeking_agents[l]
-                    goals = model.filter_up(o=r_max_simulation['model']['z'], r=r_max_simulation['model']['r'],
-                                            terminal=r_max_simulation['model']['terminal'], level=l + 1,
-                                            respect_terminal_flag=True)
-                    chunk_size = model.strides[l + 1]
-                    agent_mem = {}
-                    state = start_state_lvl
-                    # TODO: Compute the amount of required steps individually per batch item as each trajectory could
-                    #       differ in length and thus the number of required steps in the final chunk. This probably
-                    #       requires the adaption of act_in_sim code.
-                    #       Idea: n_steps has d_batch dim and where n_steps have been done, the terminal flag of the
-                    #       env is overwritten with True to invalidate all further efforts of the goal seeking agent
-                    #       to reach the goal.
-                    for i_goal, goal in enumerate(goals['o']):
-                        """
-                        Variation B-1:
-                        give one additional step in last chunk
-                        
-                        if i_goal == len(goals['o']) - 1:
-                           n_steps = chunk_size + 1
-                        else:
-                           n_steps = chunk_size
-                        """
-                        n_steps = chunk_size
-                        goal_simulation = goal_agent.act_in_sim(state, model, n_steps, goal, agent_memory=agent_mem,
-                                                                sample_model=True, sample_actions=True,
-                                                                disable_exploration=False, reconstruct=False)
-                        state = goal_simulation['model_state']
-                        """
-                        Variation B-2:
-                        ground goal agent with r_max agent trajectory after every chunk
-                        
-                        state = {'z': r_max_simulation['model']['z'][t].detach(),
-                                'rnn_state': (r_max_simulation['model']['rnn_state'][t][0].detach(),
-                                              r_max_simulation['model']['rnn_state'][t][1].detach())}
-                        """
 
-                    """
-                    Version C:
-                    goals from current level r_max agent but with half of the goals replaced by noisy trajectories
-                    that are freshly generated from the model using noisy versions of the r_mas agent's actions
+                    with record_function(f'goal_seeking_agent_training_{l}'):
+                        goal_agent, goal_actor_opt, goal_critic_opt = model.goal_seeking_agents[l]
+                        goals = model.filter_up(o=r_max_simulation['model']['z'], r=r_max_simulation['model']['r'],
+                                                terminal=r_max_simulation['model']['terminal'], level=l + 1,
+                                                respect_terminal_flag=True)
+                        chunk_size = model.strides[l + 1]
+                        agent_mem = {}
+                        state = start_state_lvl
+                        # TODO: Compute the amount of required steps individually per batch item as each trajectory could
+                        #       differ in length and thus the number of required steps in the final chunk. This probably
+                        #       requires the adaption of act_in_sim code.
+                        #       Idea: n_steps has d_batch dim and where n_steps have been done, the terminal flag of the
+                        #       env is overwritten with True to invalidate all further efforts of the goal seeking agent
+                        #       to reach the goal.
+                        for i_goal, goal in enumerate(goals['o']):
+                            """
+                            Variation B-1:
+                            give one additional step in last chunk
+                            
+                            if i_goal == len(goals['o']) - 1:
+                               n_steps = chunk_size + 1
+                            else:
+                               n_steps = chunk_size
+                            """
+                            n_steps = chunk_size
+                            goal_simulation = goal_agent.act_in_sim(state, model, n_steps, goal, agent_memory=agent_mem,
+                                                                    sample_model=True, sample_actions=True,
+                                                                    disable_exploration=False, reconstruct=False)
+                            state = goal_simulation['model_state']
+                            """
+                            Variation B-2:
+                            ground goal agent with r_max agent trajectory after every chunk
+                            
+                            state = {'z': r_max_simulation['model']['z'][t].detach(),
+                                    'rnn_state': (r_max_simulation['model']['rnn_state'][t][0].detach(),
+                                                  r_max_simulation['model']['rnn_state'][t][1].detach())}
+                            """
 
-                    noisy_actions = torch.stack(r_max_simulation['agent']['a'])
-                    a_space_midpoint = (r_max_agent.max_a + r_max_agent.min_a) / 2
-                    a_space_span = r_max_agent.max_a - r_max_agent.min_a
-                    act_noise = (torch.rand_like(noisy_actions[:, ::2]) - 0.5 + a_space_midpoint) * a_space_span
-                    noisy_actions[:, ::2] += act_noise  # every 2nd trajectory gets noisy actions
-                    noisy_actions = torch.clamp(noisy_actions, r_max_agent.min_a, r_max_agent.max_a)
-                    noisy_simulation, _, _ = model.forward_static({'o': None, 'a': noisy_actions}, level=l, n_warmup=0,
-                                                                 start_state=start_state_lvl, sample_state=True,
-                                                                 sample_output=False, reconstruct=False)
-                    goals = model.filter_up(o=noisy_simulation['z'], r=noisy_simulation['r'],
-                                           terminal=noisy_simulation['terminal'], level=l + 1,
-                                           respect_terminal_flag=True)
-                    chunk_size = model.strides[l + 1]
-                    agent_mem = {}
-                    state = start_state_lvl
-                    for i_goal, goal in enumerate(goals['o']):
-                        n_steps = chunk_size
-                        goal_simulation = goal_agent.act_in_sim(state, model, n_steps, goal, agent_memory=agent_mem,
-                                                                sample_model=True, sample_actions=True,
-                                                                disable_exploration=False, reconstruct=False)
-                        state = goal_simulation['model_state']
-                    """
-                    """
-                    Version D:
-                    perform hindsight experience replay by replacing initial goals with the achieved goals, this means
-                    the agent needs to be trained with standard policy gradients method and can't be trained by 
-                    backpropagating through dynamics model anymore
-                    
-                    achieved_goals = model.filter_up(o=agent_mem['o_env_next'], r=agent_mem['r'],
-                                                     terminal=agent_mem['terminal'], level=l + 1,
-                                                     respect_terminal_flag=True)
-                    agent_mem['r_old'] = [x.clone() for x in agent_mem['r']]
-                    for i_goal, goal in enumerate(achieved_goals['o']):
-                        for t_chunk in range(n_steps):
+                        """
+                            Version C:
+                            goals from current level r_max agent but with half of the goals replaced by noisy trajectories
+                            that are freshly generated from the model using noisy versions of the r_mas agent's actions
+                            
+                            noisy_actions = torch.stack(r_max_simulation['agent']['a'])
+                            a_space_midpoint = (r_max_agent.max_a + r_max_agent.min_a) / 2
+                            a_space_span = r_max_agent.max_a - r_max_agent.min_a
+                            act_noise = (torch.rand_like(noisy_actions[:, ::2]) - 0.5 + a_space_midpoint) * a_space_span
+                            noisy_actions[:, ::2] += act_noise  # every 2nd trajectory gets noisy actions
+                            noisy_actions = torch.clamp(noisy_actions, r_max_agent.min_a, r_max_agent.max_a)
+                            noisy_simulation, _, _ = model.forward_static({'o': None, 'a': noisy_actions}, level=l, n_warmup=0,
+                            start_state=start_state_lvl, sample_state=True,
+                            sample_output=False, reconstruct=False)
+                            goals = model.filter_up(o=noisy_simulation['z'], r=noisy_simulation['r'],
+                            terminal=noisy_simulation['terminal'], level=l + 1,
+                            respect_terminal_flag=True)
+                            chunk_size = model.strides[l + 1]
+                            agent_mem = {}
+                            state = start_state_lvl
+                            for i_goal, goal in enumerate(goals['o']):
+                            n_steps = chunk_size
+                            goal_simulation = goal_agent.act_in_sim(state, model, n_steps, goal, agent_memory=agent_mem,
+                            sample_model=True, sample_actions=True,
+                            disable_exploration=False, reconstruct=False)
+                            state = goal_simulation['model_state']
+                            """
+                        """
+                            Version D:
+                            perform hindsight experience replay by replacing initial goals with the achieved goals, this means
+                            the agent needs to be trained with standard policy gradients method and can't be trained by 
+                            backpropagating through dynamics model anymore
+                            
+                            achieved_goals = model.filter_up(o=agent_mem['o_env_next'], r=agent_mem['r'],
+                            terminal=agent_mem['terminal'], level=l + 1,
+                            respect_terminal_flag=True)
+                            agent_mem['r_old'] = [x.clone() for x in agent_mem['r']]
+                            for i_goal, goal in enumerate(achieved_goals['o']):
+                            for t_chunk in range(n_steps):
                             t = i_goal * n_steps + t_chunk
                             r_her = goal_agent.build_step_reward(agent_mem['o_env_next'][t],
-                                                                 agent_mem['r_raw'][t], goal,
-                                                                 use_goal_reward=True)
+                            agent_mem['r_raw'][t], goal,
+                            use_goal_reward=True)
                             agent_mem['r'][t][::2] = r_her[::2]
-                    """
-                    """
-                    Version E:
-                    goal seeking agent on l-1 on current level's r_max agent trajectory
+                            """
+                        """
+                            Version E:
+                            goal seeking agent on l-1 on current level's r_max agent trajectory
+                            
+                            n_goals = 5
+                            mem_below = {**states_below[l], 'terminal': pred[l]['terminal']}  # need terminals for mask
+                            mem_below['z_post'] = mem_below['z_prior']  # both are not needed but z_post contains None elements
+                            start_states_lvl_below, start_state_mask_below = rssm_states_seq_to_batch(mem_below,
+                            model.rssm_modules[l - 1],
+                            i_end=-n_goals)
+                            start_states_lvl_below = model.rssm_modules[l - 1].detach_state(start_states_lvl_below)
+                            
+                            goal_agent, goal_actor_opt, goal_critic_opt = model.goal_seeking_agents[l - 1]
+                            
+                            goals = torch.stack(pred[l]['o'])
+                            goals_batched = []
+                            i_first = 1  # leave out first goal since we lack agent start state for it
+                            i_last = len(goals) - n_goals  # latest time step where we have n future goals
+                            for t in range(i_first, i_last + 1):
+                            goals_batched.append(goals[t: t + n_goals])
+                            goals_batched = torch.concat(goals_batched, dim=1)
+                            
+                            chunk_size = model.strides[l]
+                            agent_mem = {}
+                            
+                            state = start_states_lvl_below
+                            for goal in goals_batched:
+                            goal_simulation = goal_agent.act_in_sim(state, model, chunk_size, goal, agent_memory=agent_mem,
+                            sample_model=False, sample_actions=False,
+                            disable_exploration=False,
+                            reconstruct=False)
+                            state = goal_simulation['model_state']
+                            """
 
-                    n_goals = 5
-                    mem_below = {**states_below[l], 'terminal': pred[l]['terminal']}  # need terminals for mask
-                    mem_below['z_post'] = mem_below['z_prior']  # both are not needed but z_post contains None elements
-                    start_states_lvl_below, start_state_mask_below = rssm_states_seq_to_batch(mem_below,
-                                                                                              model.rssm_modules[l - 1],
-                                                                                              i_end=-n_goals)
-                    start_states_lvl_below = model.rssm_modules[l - 1].detach_state(start_states_lvl_below)
-
-                    goal_agent, goal_actor_opt, goal_critic_opt = model.goal_seeking_agents[l - 1]
-
-                    goals = torch.stack(pred[l]['o'])
-                    goals_batched = []
-                    i_first = 1  # leave out first goal since we lack agent start state for it
-                    i_last = len(goals) - n_goals  # latest time step where we have n future goals
-                    for t in range(i_first, i_last + 1):
-                        goals_batched.append(goals[t: t + n_goals])
-                    goals_batched = torch.concat(goals_batched, dim=1)
-
-                    chunk_size = model.strides[l]
-                    agent_mem = {}
-
-                    state = start_states_lvl_below
-                    for goal in goals_batched:
-                        goal_simulation = goal_agent.act_in_sim(state, model, chunk_size, goal, agent_memory=agent_mem,
-                                                                sample_model=False, sample_actions=False,
-                                                                disable_exploration=False,
-                                                                reconstruct=False)
-                        state = goal_simulation['model_state']
-                    """
-
-                    agent_mem['first_step_mask'] = start_state_mask.unsqueeze(0)
-                    goal_losses = goal_agent.train_step(agent_mem, actor_optimizer=goal_actor_opt,
-                                                        critic_optimizer=goal_critic_opt)
-                    obtained_step_reward = torch.stack(agent_mem['r'])
-                    goal_losses['obtained_reward'] = obtained_step_reward.mean()
+                        agent_mem['first_step_mask'] = start_state_mask.unsqueeze(0)
+                        goal_losses = goal_agent.train_step(agent_mem, actor_optimizer=goal_actor_opt,
+                                                            critic_optimizer=goal_critic_opt)
+                        obtained_step_reward = torch.stack(agent_mem['r'])
+                        goal_losses['obtained_reward'] = obtained_step_reward.mean()
 
                     if GlobalLogger.can_log('simulated_ground_truth_goal_distance', i_step):
                         obtained_step_reward = obtained_step_reward.mean(dim=1)
@@ -356,7 +362,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
             collect_fn()
 
         # eval =========================================================================================================
-        if cfg['trainer']['eval_interval'] is not None and i_step % cfg['trainer']['eval_interval'] == 0:
+        if not profile and i_step % cfg['trainer']['eval_interval'] == 0:
             agent_eval_mode(r_max_agents + goal_seeking_agents)
             model.eval()
 
@@ -525,7 +531,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
             timestamp = time.time_ns()
             pid = os.getpid()
             model_path = f'.checkpoint_model_weights_{pid}_{timestamp}_{logger.run_id}.ptmdl'
-            torch.save(model, model_path)
+            torch.save(model.state_dict(), model_path)
             cpt_file = InMemoryFile.consume_file(model_path, new_name='checkpoint')
             logger.log_file(cpt_file, Scope.DATA() / 'weights')
 

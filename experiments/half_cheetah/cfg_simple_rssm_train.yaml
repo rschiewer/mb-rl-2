@@ -62,7 +62,7 @@ mdm:
 
 optim:
    type: 'adam'  # 'adamW' 'adam'
-   lr: 0.001 #0.0002
+   lr: 0.0002 #0.0002
 
 trainer:
    n_train_steps: 100000
@@ -90,7 +90,7 @@ agents:
         tr_policy_ema_update_coeff: 0.98
         use_ema_world_model: False
         lr_actor: 0.0001
-        lr_critic: 0.0004
+        lr_critic: 0.0005
         min_a: <infer>
         max_a: <infer>
         actor_lws: [ 64, 64, 64 ]
