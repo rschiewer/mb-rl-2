@@ -10,6 +10,7 @@ import time
 from enum import auto
 from inspect import stack
 from pathlib import Path
+from typing import Any
 
 import gym
 import matplotlib.animation as animation
@@ -597,6 +598,7 @@ def valid_subtrajectories_unbiased_fast(data: Dict[str, torch.Tensor],
     return ret_data
 
 
+@torch.compile
 def valid_subtrajectories_unbiased(data: Dict[str, torch.Tensor],
                                    length: int):
     assert length < data['o'].shape[0]
@@ -1059,3 +1061,12 @@ def copy_params(src: 'HierarchicalRSSM',
         ag_dst[0].load_state_dict(ag_src[0].state_dict())
     for ag_src, ag_dst in zip(src.r_max_agents, dst.r_max_agents):
         ag_dst[0].load_state_dict(ag_src[0].state_dict())
+
+
+def update_memory(memory: Dict[str, List[Any]],
+                  **kwitems: Any):
+    for k, v in kwitems.items():
+        data = memory.get(k, [])
+        data.append(v)
+        memory[k] = data
+    return memory
