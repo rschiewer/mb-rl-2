@@ -536,12 +536,15 @@ def valid_subtrajectories(data: Dict[str, torch.Tensor],
 
 def valid_subtrajectories_unbiased_fast(data: Dict[str, torch.Tensor],
                                         length: int):
-    #assert length < data['o'].shape[0]
-
     l_max, n_trajs = data['o'].shape[:2]
+
+    if length > l_max:
+        length = l_max
+
     l_trajs = (1 - data['mask']).sum(dim=0).detach().cpu().numpy().squeeze()
 
-    i_start = np.random.randint(low=[-length + 1 for _ in range(n_trajs)], high=l_trajs)
+    low = np.array([-length + 1]).repeat(n_trajs)
+    i_start = np.random.randint(low=low, high=l_trajs)
     i_end = i_start + length
     # get indices that simply address their current position
     i_row, i_col_raw = np.indices((n_trajs, l_max), sparse=True)
@@ -554,11 +557,15 @@ def valid_subtrajectories_unbiased_fast(data: Dict[str, torch.Tensor],
     # do the rotation, inspired by https://stackoverflow.com/questions/20360675/roll-rows-of-a-matrix-independently
     shifts = i_col_raw - shifts[:, None]
     i_col_shifted = i_col_masked_start[i_row, shifts]
-    # mask end indices that should not be available due to natural end of a trajectory
-    # redirect those indices to an artificial last element that is concatenated to the end of the buffers
+    # mask end indices that should not be available due to natural end of a trajectory, for that
+    # redirect those indices to an artificial last element that is later concatenated to the end of the buffers,
+    # currently this index would cause out of bounds exception
     i_col_corrected = np.where(i_col_shifted >= np.minimum(i_end, l_trajs)[..., None], l_max, i_col_shifted)
     # cut off part of index matrix that can only contain invalid indices
     i_col_corrected = i_col_corrected[:, :length]
+    # if length > l_max, i_col_corrected can contain trailing -1 indices due to shifting that have to be replaced by
+    # l_max since torch.gather doesn't support negative indices
+    i_col_corrected = np.where(i_col_corrected == -1, l_max, i_col_corrected)
     # transform to torch tensor
     i_matrix = torch.from_numpy(i_col_corrected).to(device=data['o'].device, dtype=torch.int64)
 
@@ -602,7 +609,10 @@ def valid_subtrajectories_unbiased_fast(data: Dict[str, torch.Tensor],
 
 def valid_subtrajectories_unbiased(data: Dict[str, torch.Tensor],
                                    length: int):
-    assert length < data['o'].shape[0]
+    raise RuntimeError('Check indices in case length < l_max first')
+
+    if length > data['o'].shape[0]:
+        length = data['o'].shape[0] - 1
 
     n_trajs = data['o'].shape[1]
     l_trajs = (1 - data['mask']).sum(dim=0).detach().cpu().numpy().squeeze()
