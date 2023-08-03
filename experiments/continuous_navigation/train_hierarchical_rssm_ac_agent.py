@@ -1,8 +1,9 @@
 import os.path
 import argparse
 from warnings import simplefilter
+from functools import partialmethod
 
-import gym.vector
+import gymnasium as gym
 import neptune
 from torch.profiler import profile, record_function, ProfilerActivity
 
@@ -16,6 +17,8 @@ from mdm.training.gym_driver import collect_data, GymEpisodeDriver
 from mdm.policies.agent_policy import *
 from mdm.utils.torch_tools import disable_torch_compile
 
+#from tqdm import tqdm
+#tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
 
 def main():
     simplefilter(action='ignore', category=DeprecationWarning)  # numpy deprecation warning from outdated gym lib
@@ -41,7 +44,7 @@ def main():
     GlobalLogger.bind(logger, {'_mask_model': 50,
                                '_mask_latent_overshooting': 50,
                                '_mask_agent': 50,
-                               'simulated_ground_truth_goal_distance': 50,
+                               '_simulated_ground_truth_goal_distance': 50,
                                '_sanity_check_goal_computation': 50})
 
     env = gym.make(cfg['env_name'])
@@ -58,9 +61,9 @@ def main():
     r_max_agents, goal_seeking_agents = build_agents(cfg, env, 'cuda')
 
     #for i, agent in enumerate(r_max_agents):
-    #    r_max_agents[i] = torch.compile(agent[0], disable=disable_torch_compile), agent[1], agent[2]
+    #    r_max_agents[i] = torch.jit.script(agent[0]), agent[1], agent[2]
     #for i, agent in enumerate(goal_seeking_agents):
-    #    goal_seeking_agents[i] = torch.compile(agent[0], disable=disable_torch_compile), agent[1], agent[2]
+    #    goal_seeking_agents[i] = torch.jit.script(agent[0]), agent[1], agent[2]
 
     model = HierarchicalRSSM(**cfg['mdm'], r_max_agents=r_max_agents, goal_seeking_agents=goal_seeking_agents)
 
@@ -90,9 +93,11 @@ def main():
     #opt_model = torch.optim.Adam(params, **cfg['optim'])
     # temporary hack end
 
-    collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['trainer']['collect_envs'])
+    #collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['trainer']['collect_envs'])
+    collect_env = gym.vector.SyncVectorEnv([make_env_fn] * cfg['trainer']['collect_envs'])
     collect_env = CacheLastStepVecEnv(collect_env)
-    eval_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['eval']['eval_envs'])
+    #eval_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['eval']['eval_envs'])
+    eval_env = gym.vector.SyncVectorEnv([make_env_fn] * cfg['eval']['eval_envs'])
     eval_env = CacheLastStepVecEnv(eval_env)
 
     train_mem = []
@@ -138,8 +143,9 @@ def main():
         # visualize_trajectory(collected_data_trajectories[0])
         train_mem.extend(collected_data_trajectories)
 
+    print('Starting Training')
     #with torch.autograd.detect_anomaly(check_nan=True):
-    profiling_run = True
+    profiling_run = False
     train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collect_fn, eval_env, test_driver,
                 train_driver, logger, profile=profiling_run)
     if profile:
@@ -148,6 +154,8 @@ def main():
                 train_driver, logger, profile=profiling_run)
         print(prof.key_averages(group_by_input_shape=True).table(sort_by="cpu_time_total", row_limit=10))
 
+    collect_env.close()
+    eval_env.close()
     # store model and output run id
     p = here() / cfg['final_model_path'][:cfg['final_model_path'].rindex('/')]
     if not os.path.exists(p):

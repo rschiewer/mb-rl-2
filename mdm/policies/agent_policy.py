@@ -83,13 +83,13 @@ class LatentAgentPolicy(Policy):
                                                                   sample_state=True, sample_output=False,
                                                                   use_ema_modules=self._use_ema_modules)
 
-        if torch.isnan(self._current_env_state['z']).any():
-            raise RuntimeError(f'Invalid NAN state in step {env.current_step}: {self._current_env_state["z"]}')
-        if torch.isinf(self._current_env_state['z']).any():
-            raise RuntimeError(f'Invalid inf state in step {env.current_step}: {self._current_env_state["z"]}')
+        if torch.isnan(self._current_env_state[0]).any():
+            raise RuntimeError(f'Invalid NAN state in step {env.current_step}: {self._current_env_state[0]}')
+        if torch.isinf(self._current_env_state[0]).any():
+            raise RuntimeError(f'Invalid inf state in step {env.current_step}: {self._current_env_state[0]}')
 
         agent_o = self.agent.preproc_o(self._current_env_state)
-        a_dist, a, v = self.agent(agent_o, sample=True, disable_exploration=True)
+        a_dist, a, = self.agent(agent_o, sample=True, disable_exploration=True)
 
         if torch.isnan(a).any():
             raise RuntimeError(f'Invalid NAN action: {a}')

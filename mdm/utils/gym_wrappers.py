@@ -1,9 +1,9 @@
 from typing import Tuple, Optional, Union, List
 
-import gym
+import gymnasium as gym
 import numpy as np
-from gym import spaces
-from gym.core import ObsType, ActType
+from gymnasium import spaces
+from gymnasium.core import ObsType, ActType
 import envpool
 from envpool.python.gym_envpool import GymEnvPoolMeta
 from envpool.python.gymnasium_envpool import GymnasiumEnvPoolMeta

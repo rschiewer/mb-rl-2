@@ -1,8 +1,8 @@
 import sys
 from typing import Callable, List, Dict, TypeVar, Union
 
-import gym
-from gym.core import ActType
+import gymnasium as gym
+from gymnasium.core import ActType
 import numpy as np
 from tqdm import tqdm
 

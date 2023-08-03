@@ -7,7 +7,7 @@ from gym_nav2d.envs import Nav2dEnv
 from tqdm import tqdm
 import numpy as np
 import matplotlib.pyplot as plt
-import gym
+import gymnasium as gym
 import gym_nav2d
 
 from mdm.training.gym_driver import GymEpisodeDriver

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import numba
-import gym
+import gymnasium as gym
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 import numpy.ma as ma
@@ -31,6 +31,7 @@ from mdm.utils.torch_tools import compute_mask, unsqueeze_right, stack_if_list
 SliceType = TypeVar("SliceType", bound=Sequence)
 BasicDtype = TypeVar('BasicDtype', int, float, np.single, np.double, bool)
 DataType = TypeVar('DataType', int, float, np.single, np.double, bool, np.ndarray)
+
 
 
 class DistributionType(Enum):
@@ -599,7 +600,6 @@ def valid_subtrajectories_unbiased_fast(data: Dict[str, torch.Tensor],
     return ret_data
 
 
-@torch.compile
 def valid_subtrajectories_unbiased(data: Dict[str, torch.Tensor],
                                    length: int):
     assert length < data['o'].shape[0]
@@ -613,6 +613,8 @@ def valid_subtrajectories_unbiased(data: Dict[str, torch.Tensor],
     i_end = np.clip(i_end, 0, l_trajs)
     i_start = i_start.astype(int)
     i_end = i_end.astype(int)
+    i_start = torch.from_numpy(i_start)
+    i_end = torch.from_numpy(i_end)
     # i_start = torch.from_numpy(i_start).to(device=data['o'].device, dtype=torch.float64)
     # i_end = torch.from_numpy(i_end).to(device=data['o'].device, dtype=torch.float64)
     # redirect invalid indices to -1, which is a zero-element we'll append to the data further down
@@ -634,7 +636,6 @@ def valid_subtrajectories_unbiased(data: Dict[str, torch.Tensor],
     return ret_data
 
 
-@torch.compile
 def valid_subtrajectories_2(data: Dict[str, torch.Tensor],
                             length: int):
     assert length < data['o'].shape[0]
@@ -1010,14 +1011,10 @@ def random_walk_success_rate(env: gym.Env,
 
 def rssm_states_seq_to_batch(mem: Dict[str, List[torch.Tensor]],
                              terminal_flags: List[torch.Tensor] | torch.Tensor,
-                             rssm_instance: RSSMCell,
                              i_start: int = 0,
                              i_end: int = sys.maxsize):
-    state_keys = rssm_instance.init_state(1, 'cpu')
-    states = {k: v[i_start: i_end] for k, v in mem.items() if k in state_keys}
-    del state_keys
-
-    states = rssm_instance.state_seq_to_batch(**states)
+    states = {k: v[i_start: i_end] for k, v in mem.items() if k in RSSMCell.state_keys()}
+    states = RSSMCell.state_seq_to_batch(**states)
 
     # we can inject terminal flags from target data which are already stacked, so we use this convenience wrapper
     terminal = stack_if_list(terminal_flags)

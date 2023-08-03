@@ -14,9 +14,8 @@ RnnStateType = TypeVar('RnnStateType', torch.Tensor, Tuple[torch.Tensor, torch.T
 _Placeholder = namedtuple('placeholder', 'device')
 
 # define torch.compile decorator depending on whether we're in debug mode or not
-if gettrace() or 'PYCHARM_HOSTED' in os.environ:
+if True or gettrace() or 'PYCHARM_HOSTED' in os.environ:
     print('Debugging or running in PyCharm IDE, disabling torch.compile')
-
     disable_torch_compile = True
 else:
     print('Compiling functions with torch.compile')
@@ -145,7 +144,7 @@ class ManagedStatefulTrainingModule(torch.nn.Module):
 
 
 # adapted from https://github.com/openai/baselines/blob/master/baselines/common/vec_env/vec_normalize.py
-class RunningMeanStd(torch.nn.Module):
+class RunningMeanStd(torch.jit.ScriptModule):
     """Tracks the mean, variance and count of values."""
 
     # https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
@@ -158,7 +157,7 @@ class RunningMeanStd(torch.nn.Module):
         self.var = torch.nn.Parameter(torch.ones(*shape, dtype=torch.float64), requires_grad=False)
         self.count = torch.nn.Parameter(torch.tensor(epsilon, dtype=torch.float64), requires_grad=False)
 
-    @torch.compile(disable=disable_torch_compile)
+    @torch.jit.export
     def update(self,
                x: torch.Tensor,
                mask: None | torch.Tensor = None):
@@ -179,7 +178,6 @@ class RunningMeanStd(torch.nn.Module):
             batch_count = x.shape[0]
             self.update_from_moments(batch_mean, batch_var, batch_count)
 
-    @torch.compile(disable=disable_torch_compile)
     def update_from_moments(self, batch_mean, batch_var, batch_count):
         """Updates from batch mean, variance and count moments."""
         new_mean, new_var, new_count = update_mean_var_count_from_moments(self.mean, self.var, self.count,
@@ -189,7 +187,6 @@ class RunningMeanStd(torch.nn.Module):
         self.count.copy_(new_count)
 
 
-@torch.compile(disable=disable_torch_compile)
 def update_mean_var_count_from_moments(mean, var, count, batch_mean, batch_var, batch_count):
     """Updates the mean, var and count using the previous mean, var, count and batch values."""
     delta = batch_mean - mean
@@ -828,7 +825,7 @@ def stack_if_list(x: torch.Tensor | List[torch.Tensor],
 def stack_tensor_dicts(x: List[Dict[str, torch.Tensor]]):
     x_stacked = {k: [] for k in x[0]}
     for dist_params in x:
-        for k, v in dist_params.items():
+        for k, v in dist_params.item():
             x_stacked[k].append(v)
     x_stacked = {k: torch.stack(v) for k, v in x_stacked.items()}
     return x_stacked

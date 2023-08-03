@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Tuple, Optional, Sequence, Union, TypeVar, Dict, List, Any
 from abc import ABC, abstractmethod
+from collections import namedtuple
 from itertools import product
 from enum import Enum
 
@@ -10,8 +11,10 @@ import torch.masked as torchm
 import numpy as np
 from mdm.utils.torch_tools import (layers_with_activation as lwa, get_dist_params, RnnStateType,
                                    sample_from_categorical, ManagedStatefulTrainingModule, detach_dist, concat_dists,
-                                   disable_torch_compile, stack_tensor_dicts)
+                                   disable_torch_compile, stack_tensor_dicts, concat_tensor_dicts)
 from torch.profiler import record_function
+
+AnySameType = TypeVar('AnySameType')
 
 
 class DeprecatedRSSM(torch.nn.Module):
@@ -540,6 +543,7 @@ class SumUpwardsFilter(UpwardsFilter):
 
 class AvgUpwardsFilter(UpwardsFilter):
 
+    @torch.jit.ignore
     def forward(self,
                 x: torch.Tensor,
                 mask: torch.Tensor | None = None,
@@ -558,6 +562,7 @@ class AvgUpwardsFilter(UpwardsFilter):
 
 class MaxUpwardsFilter(UpwardsFilter):
 
+    @torch.jit.ignore
     def forward(self,
                 x: torch.Tensor,
                 mask: torch.Tensor | None = None,
@@ -575,6 +580,7 @@ class MaxUpwardsFilter(UpwardsFilter):
 
 class MinUpwardsFilter(UpwardsFilter):
 
+    @torch.jit.ignore
     def forward(self,
                 x: torch.Tensor,
                 mask: torch.Tensor | None = None,
@@ -620,6 +626,7 @@ class PickOneUpwardsFilter(UpwardsFilter):
 
         return x_filtered
 
+    @torch.jit.ignore
     def forward(self,
                 x: torch.Tensor,
                 mask: torch.Tensor | None = None,
@@ -769,6 +776,7 @@ class IdentityUpwardsFilter(UpwardsFilter):
     def __init__(self):
         super(IdentityUpwardsFilter, self).__init__(1)
 
+    @torch.jit.ignore
     def forward(self,
                 x: torch.Tensor,
                 mask: torch.Tensor | None = None,
@@ -783,6 +791,7 @@ class ConstUpwardsFilter(UpwardsFilter):
         super().__init__(window_size)
         self.constant = constant
 
+    @torch.jit.ignore
     def forward(self,
                 x: torch.Tensor,
                 mask: torch.Tensor | None = None,
@@ -793,7 +802,10 @@ class ConstUpwardsFilter(UpwardsFilter):
         return torch.zeros_like(x)
 
 
-class RSSMCell(torch.jit.ScriptModule):
+RSSMStateType = Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+
+
+class RSSMCell(torch.nn.Module):
 
     def __init__(self,
                  d_z: int,
@@ -844,20 +856,21 @@ class RSSMCell(torch.jit.ScriptModule):
 
         self.n_latent_categories = n_latent_categories
         if latent_dist == 'normal':
-            d_z_final = d_z * 2
+            d_z_out = d_z * 2
             d_z_smpl = d_z
         elif latent_dist == 'bernoulli':
-            d_z_final = d_z
+            d_z_out = d_z
             d_z_smpl = d_z
         elif latent_dist == 'categorical':
-            d_z_final = d_z * self.n_latent_categories
+            d_z_out = d_z * self.n_latent_categories
             d_z_smpl = d_z * self.n_latent_categories
         else:
             raise ValueError(f'Unknown latent distribution type: {latent_dist}')
         self.d_z_smpl = d_z_smpl
+        self.d_z_out = d_z_out
 
-        z_prior_lws = (d_h, *z_prior_lws, d_z_final)
-        z_post_lws = (d_h + self.d_o_encoded, *z_post_lws, d_z_final)
+        z_prior_lws = (d_h, *z_prior_lws, d_z_out)
+        z_post_lws = (d_h + self.d_o_encoded, *z_post_lws, d_z_out)
 
         d_det_core = d_z_smpl + d_a
         # need both to satisfy torch script
@@ -877,57 +890,63 @@ class RSSMCell(torch.jit.ScriptModule):
     def d_o_encoded(self):
         return self.o_encoder.d_x_encoded
 
+    @torch.jit.export
     def init_state(self,
                    d_batch: int,
-                   device: torch.device):
+                   device: torch.device) -> RSSMStateType:
         z = self.zero_z(d_batch, device)
         rnn_state = self.zero_rnn_state(d_batch, device)
-        return {'z': z, 'z_prior': None, 'z_post': None, 'rnn_state': rnn_state}
+        mock = torch.zeros(d_batch, self.d_z_out, device=device)
+        z_prior_params = self.z_dist_params(mock)
+        z_post_params = self.z_dist_params(mock)
+        return z, z_prior_params, z_post_params, rnn_state
+        # return {'z': z, 'z_prior': None, 'z_post': None, 'rnn_state': rnn_state}
 
-    def zero_s(self,
-               d_batch: int,
-               device: torch.device) -> torch.Tensor:
-        return torch.zeros(d_batch, self.d_state, device=device)
-
+    @torch.jit.export
     def zero_z(self,
                d_batch: int,
                device: torch.device) -> torch.Tensor:
         return torch.zeros(d_batch, self.d_z_smpl, device=device)
 
+    @torch.jit.export
     def zero_o(self,
                d_batch: int,
                device: torch.device) -> torch.Tensor:
         return torch.zeros(d_batch, *self.o_shape, device=device)
 
+    @torch.jit.export
     def zero_a(self,
                d_batch: int,
                device: torch.device) -> torch.Tensor:
         return torch.zeros(d_batch, self.d_a, device=device)
 
+    @torch.jit.export
     def zero_r(self,
                d_batch: int,
                device: torch.device) -> torch.Tensor:
         return torch.zeros(d_batch, 1, device=device)
 
+    @torch.jit.export
     def zero_term(self,
                   d_batch: int,
                   device: torch.device) -> torch.Tensor:
         return torch.zeros(d_batch, 1, device=device)
 
+    @torch.jit.export
     def zero_rnn_state(self,
                        d_batch: int,
-                       device: torch.device) -> RnnStateType:
+                       device: torch.device) -> torch.Tensor:
         if self.rnn_type == 'lstm':
-            return torch.zeros(2, d_batch, self.d_h, device=device)
+            return torch.zeros(d_batch, self.d_h, 2, device=device)
         else:
             return torch.zeros(d_batch, self.d_h, device=device)
 
     def _lstm_forward(self,
                       inp: torch.Tensor,
                       last_rnn_state: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        h, c = last_rnn_state.unbind(0)
+        h, c = last_rnn_state.unbind(-1)
         h_next, c_next = self._lstm(inp, (h, c))
-        next_rnn_state = torch.stack([h_next, c_next])
+        next_rnn_state = torch.stack([h_next, c_next], dim=-1)
         return h_next, next_rnn_state
 
     def _gru_forward(self,
@@ -936,7 +955,6 @@ class RSSMCell(torch.jit.ScriptModule):
         h_next = self._gru(inp, last_rnn_state)
         return h_next, h_next
 
-    @torch.jit.script_method
     def imagine(self,
                 a: torch.Tensor,
                 last_z: torch.Tensor,
@@ -970,7 +988,6 @@ class RSSMCell(torch.jit.ScriptModule):
 
         return h, z_smpl, z_prior_params, z_prior_params, next_rnn_state
 
-    @torch.jit.script_method
     def observe(self,
                 a: torch.Tensor,
                 o_enc: torch.Tensor,
@@ -995,16 +1012,14 @@ class RSSMCell(torch.jit.ScriptModule):
 
     def forward(self,
                 a: torch.Tensor,
-                o_enc: torch.Tensor | None = None,
-                last_state: Dict[str, torch.Tensor] | None = None,
+                o_enc: Optional[torch.Tensor] = None,
+                last_state: Optional[RSSMStateType] = None,
                 use_posterior: bool = True,
-                reconstruct: bool = True,
-                sample_state: bool = True,
-                sample_output: bool = True):
+                sample_state: bool = True) -> Tuple[torch.Tensor, RSSMStateType]:
         with record_function('rssm_cell_call'):
-            #if torch.isnan(a).any() or torch.isinf(a).any():
+            # if torch.isnan(a).any() or torch.isinf(a).any():
             #    raise RuntimeError(f'Invalid action in imagine: {a}')
-            #if torch.isnan(last_state['z']).any() or torch.isinf(last_state['z']).any():
+            # if torch.isnan(last_state['z']).any() or torch.isinf(last_state['z']).any():
             #    raise RuntimeError(f'Invalid last state in imagine: {last_state["z"]}')
 
             # if o is None and last_state is None:
@@ -1012,82 +1027,119 @@ class RSSMCell(torch.jit.ScriptModule):
             # if o is None and use_posterior:
             #    raise ValueError('Can\'t use posterior if no ground truth data is provided')
 
-            # compute next world state
+            d_batch = a.shape[0]
+            if last_state is None:
+                last_state = self.init_state(d_batch, a.device)
+            if o_enc is None:
+                o_enc = torch.zeros(d_batch, self.o_encoder.d_x_encoded, device=a.device)
+
             if use_posterior:
-                ret = self.observe(a, o_enc, last_state['z'], last_state['rnn_state'], sample_state)
+                ret = self.observe(a, o_enc, last_state[0], last_state[3], sample_state)
             else:
-                ret = self.imagine(a, last_state['z'], last_state['rnn_state'], sample_state)
+                ret = self.imagine(a, last_state[0], last_state[3], sample_state)
             h, z_smpl, z_prior_params, z_post_params, next_rnn_state = ret
 
-            # predict outputs
             s = torch.concat([h, z_smpl], dim=-1)
-            r_dist, r_smpl = self.r_decoder(s, sample_output)
-            term_dist, term_smpl = self.term_decoder(s, sample_output)
+            return s, (z_smpl, z_prior_params, z_post_params, next_rnn_state)
 
-            if reconstruct:
-                o_dist, o_smpl = self.o_decoder(s, sample_output)
-            else:
-                o_dist, o_smpl = None, None
+    @torch.jit.export
+    def scan(self,
+             a: torch.Tensor,
+             o_enc: Optional[torch.Tensor] = None,
+             start_state: Optional[RSSMStateType] = None,
+             posterior_steps: int = 0,
+             sample_state: bool = True) -> Tuple[List[torch.Tensor], List[RSSMStateType]]:
+        d_time, d_batch = a.shape[:2]
 
-            reconstruction = {'o': o_smpl, 'o_dist': o_dist, 'a': a, 'r_dist': r_dist, 'r': r_smpl,
-                              'terminal_dist': term_dist, 'terminal': term_smpl}
-            next_state = {'z': z_smpl, 'z_prior': z_prior_params, 'z_post': z_post_params, 'rnn_state': next_rnn_state}
+        if o_enc is None:
+            o_enc = torch.zeros(d_time, d_batch, self.o_encoder.d_x_encoded, device=a.device)
 
-            return reconstruction, next_state
+        s_mem: List[torch.Tensor] = []
+        state_mem: List[RSSMStateType] = []
+        state = start_state
+        for t, a_t in enumerate(a):
+            use_posterior = t <= posterior_steps
+            s, state = self(a[t], o_enc[t], state, use_posterior, sample_state)
+            s_mem.append(s)
+            state_mem.append(state)
+
+        return s_mem, state_mem
 
     def z_dist_params(self,
                       net_output: torch.Tensor):
         if self.latent_dist == 'normal':
-            mu, logvar = torch.tensor_split(net_output, 2, dim=-1)
+            mu, logvar = torch.tensor_split(net_output, 2, -1)
             sigma = torch.nn.functional.softplus(logvar) + self.epsilon
-            z_dist = {'mu': mu, 'sigma': sigma}
+            z_dist = torch.stack([mu, sigma], dim=-1)
         elif self.latent_dist == 'bernoulli':
             probs = torch.nn.functional.sigmoid(net_output)
-            z_dist = {'probs': probs}
+            z_dist = probs
         else:  # categorical
             net_output = net_output.reshape((net_output.shape[0], self.d_z, self.n_latent_categories))
             probs = torch.nn.functional.softmax(net_output, dim=-1)
-            z_dist = {'probs': probs}
+            z_dist = probs
         return z_dist
 
     def z_sample(self,
-                 dist_params: Dict[str, torch.Tensor]):
+                 dist_params: torch.Tensor):
         if self.latent_dist == 'normal':
-            z_smpl = dist_params['mu'] + torch.rand_like(dist_params['sigma']) * dist_params['sigma']
+            mu, sigma = dist_params.unbind(-1)
+            z_smpl = mu + torch.rand_like(sigma) * sigma
         elif self.latent_dist == 'bernoulli':
             # TODO: continuous bernoulli?
-            z_smpl = torch.bernoulli(dist_params['probs']) + dist_params['probs'] - dist_params['probs'].detach()
+            z_smpl = torch.bernoulli(dist_params) + dist_params - dist_params.detach()
         else:  # categorical
-            probs = dist_params['probs']
-            probs_reshaped = probs.reshape(probs.shape[0] * self.d_z, self.n_latent_categories)
+            probs_reshaped = dist_params.reshape(dist_params.shape[0] * self.d_z, self.n_latent_categories)
             indices = torch.multinomial(probs_reshaped, 1, True).T
-            z_smpl = torch.nn.functional.one_hot(indices, self.n_latent_categories).to(probs)
+            z_smpl = torch.nn.functional.one_hot(indices, self.n_latent_categories).to(dist_params)
             # z_smpl = torch.distributions.OneHotCategorical(probs=dist_params['probs']).sample()
             # z_smpl = z_smpl + dist_params['probs'] - dist_params['probs'].detach()
             # z_smpl = torch.flatten(z_smpl, start_dim=-2, end_dim=-1)
         return z_smpl
 
     def z_mode(self,
-               dist_params: Dict[str, torch.Tensor]):
+               dist_params: torch.Tensor):
         if self.latent_dist == 'normal':
-            z_smpl = dist_params['mu']
+            mu, sigma = dist_params.unbind(-1)
+            z_smpl = mu
         elif self.latent_dist == 'bernoulli':
-            z_smpl = torch.round(dist_params['probs']) + dist_params['probs'] - dist_params['probs'].detach()
+            z_smpl = torch.round(dist_params) + dist_params - dist_params.detach()
         else:  # categorical
-            z_smpl = torch.argmax(dist_params['probs'], dim=-1)
+            z_smpl = torch.argmax(dist_params, dim=-1)
             z_smpl = torch.nn.functional.one_hot(z_smpl, num_classes=self.n_latent_categories)
-            z_smpl = z_smpl + dist_params['probs'] - dist_params['probs'].detach()
+            z_smpl = z_smpl + dist_params - dist_params.detach()
             z_smpl = torch.flatten(z_smpl, start_dim=-2, end_dim=-1)
         return z_smpl
 
+    @torch.jit.ignore
+    def decode(self,
+               s: torch.Tensor,
+               sample: bool,
+               reconstruct_observation: bool):
+        if s.ndim == 2:
+            d_batch = 0
+        else:
+            d_batch = 1
+        if reconstruct_observation:
+            o_dist, o_smpl = self.o_decoder(s, sample)
+        else:
+            o_dist, o_smpl = None, None #self.zero_o(d_batch, device=s.device)
+        r_dist, r_smpl = self.r_decoder(s, sample)
+        term_dist, term_smpl = self.term_decoder(s, sample)
+
+        return {'o': o_smpl, 'o_dist': o_dist, 'r': r_smpl, 'r_dist': r_dist, 'terminal': term_smpl,
+                'terminal_dist': term_dist}
+
+    @torch.jit.ignore
     def z_dist(self,
-               dist_params: Dict[str, torch.Tensor]):
+               dist_params: torch.Tensor):
         if self.latent_dist == 'normal':
-            z_dist = torch.distributions.Normal(loc=dist_params['mu'], scale=dist_params['sigma'])
+            mu, sigma = dist_params.unbind(-1)
+            z_dist = torch.distributions.Normal(loc=mu, scale=sigma)
         elif self.latent_dist == 'bernoulli':
-            z_dist = torch.distributions.Bernoulli(probs=dist_params['probs'])
+            z_dist = torch.distributions.Bernoulli(probs=dist_params)
         else:  # categorical
-            z_dist = torch.distributions.OneHotCategorical(probs=dist_params['probs'])
+            z_dist = torch.distributions.OneHotCategorical(probs=dist_params)
         return z_dist
 
     """
@@ -1140,72 +1192,107 @@ class RSSMCell(torch.jit.ScriptModule):
         return z_post, z_smpl
     """
 
-    # @torch.compile(disable=disable_torch_compile)
-    def stack_states(self,
-                     z: List[torch.Tensor],
-                     z_prior: List[Dict[str, torch.Tensor]],
-                     z_post: List[Dict[str, torch.Tensor]],
-                     rnn_state: List[torch.Tensor | Tuple[torch.Tensor]],
+    @staticmethod
+    @torch.jit.ignore
+    def stack_states(z: List[torch.Tensor],
+                     z_prior: List[torch.Tensor],  # List[Dict[str, torch.Tensor]],
+                     z_post: List[torch.Tensor],  # List[Dict[str, torch.Tensor]],
+                     rnn_state: List[torch.Tensor],
                      **kwargs):
-        stacked_z = torch.stack(z)
+        return torch.stack(z), torch.stack(z_prior), torch.stack(z_post), torch.stack(rnn_state)
+        # return {'z': torch.stack(z),
+        #        'z_prior': torch.stack(z_prior),
+        #        'z_post': torch.stack(z_post),
+        #        'rnn_state': torch.stack(rnn_state)}
 
-        stacked_prior = stack_tensor_dicts(z_prior)
-        stacked_posterior = stack_tensor_dicts(z_post)
+    #        stacked_z = torch.stack(z)
 
-        if self.rnn_type == 'lstm':
-            stacked_rnn_state = (torch.stack([s[0] for s in rnn_state], dim=1),
-                                 torch.stack([s[1] for s in rnn_state], dim=1))
-        else:
-            stacked_rnn_state = torch.stack(rnn_state, dim=1)
+    # stacked_prior = stack_tensor_dicts(z_prior)
+    # stacked_posterior = stack_tensor_dicts(z_post)
 
-        stacked_state = {'z': stacked_z,
-                         'z_prior': stacked_prior,
-                         'z_post': stacked_posterior,
-                         'rnn_state': stacked_rnn_state}
+    # if self.rnn_type == 'lstm':
+    #    stacked_rnn_state = (torch.stack([s[0] for s in rnn_state], dim=1),
+    #                         torch.stack([s[1] for s in rnn_state], dim=1))
+    # else:
+    #    stacked_rnn_state = torch.stack(rnn_state, dim=1)
+    #
+    #        stacked_state = {'z': stacked_z,
+    #                         'z_prior': stacked_prior,
+    #                         'z_post': stacked_posterior,
+    #                         'rnn_state': stacked_rnn_state}
 
-        return stacked_state
+    #        return stacked_state
 
-    def detach_state(self,
-                     z: torch.Tensor,
-                     z_prior: Dict[str, torch.Tensor],
-                     z_post: Dict[str, torch.Tensor],
-                     rnn_state: torch.Tensor | Tuple[torch.Tensor],
-                     **kwargs):
-        detached_state = {'z': z.detach(),
-                          'z_prior': {k: v.detach() for k, v in z_prior.items()},
-                          'z_post': {k: v.detach() for k, v in z_post.items()},
-                          'rnn_state': rnn_state.detach()}
+    @staticmethod
+    @torch.jit.ignore
+    def detach_state(z: torch.Tensor,
+                     z_prior: torch.Tensor,  # Dict[str, torch.Tensor],
+                     z_post: torch.Tensor,  # Dict[str, torch.Tensor],
+                     rnn_state: torch.Tensor,
+                     *args):
+        return z.detach(), z_prior.detach(), z_post.detach(), rnn_state.detach()
+        # return {'z': z.detach(),
+        #        'z_prior': z_prior.detach(),
+        #        'z_post': z_post.detach(),
+        #        'rnn_state': rnn_state.detach()}
+        # detached_state = {'z': z.detach(),
+        #                  'z_prior': {k: v.detach() for k, v in z_prior.items()},
+        #                  'z_post': {k: v.detach() for k, v in z_post.items()},
+        #                  'rnn_state': rnn_state.detach()}
+        # return detached_state
+        # return (z.detach(), {k: v.detach() for k, v in z_prior.items()}, {k: v.detach() for k, v in z_post.items()},
+        #        rnn_state.detach())
 
-        return detached_state
-
-    def state_seq_to_batch(self,
-                           z: List[torch.Tensor],
-                           z_prior: List[Dict[str, torch.Tensor]],
-                           z_post: List[Dict[str, torch.Tensor]],
+    @staticmethod
+    @torch.jit.ignore
+    def state_seq_to_batch(z: List[torch.Tensor],
+                           z_prior: List[torch.Tensor],  # List[Dict[str, torch.Tensor]],
+                           z_post: List[torch.Tensor],  # List[Dict[str, torch.Tensor]],
                            rnn_state: List[torch.Tensor],
                            **kwargs):
-        z = torch.concat(z, dim=0)
+        return (torch.concat(z, dim=0), torch.concat(z_prior, dim=0), torch.concat(z_post, dim=0),
+                torch.concat(rnn_state, dim=0))
 
-        if self.rnn_type == 'lstm':
-            rnn_state = torch.concat(rnn_state, dim=1)
-        else:
-            rnn_state = torch.concat(rnn_state, dim=0)
+        # if self.rnn_type == 'lstm':
+        #    rnn_state = torch.concat(rnn_state, dim=1)
+        # else:
+        #    rnn_state = torch.concat(rnn_state, dim=0)
 
-        concat_z_prior = {k: [] for k in z_prior[0]}
-        for dist_params in z_prior:
-            for k, v in dist_params.items():
-                concat_z_prior[k].append(v)
-        concat_z_prior = {k: torch.concat(v, dim=0) for k, v in concat_z_prior.items()}
+        # concat_z_prior = concat_tensor_dicts(z_prior, dim=0)
+        # concat_z_post = concat_tensor_dicts(z_post, dim=0)
+        # concat_z_prior = {k: [] for k in z_prior[0]}
+        # for dist_params in z_prior:
+        #    for k, v in dist_params.items():
+        #        concat_z_prior[k].append(v)
+        # concat_z_prior = {k: torch.concat(v, dim=0) for k, v in concat_z_prior.items()}
 
-        concat_z_post = {k: [] for k in z_post[0]}
-        for dist_params in z_post:
-            for k, v in dist_params.items():
-                concat_z_post[k].append(v)
-        concat_z_post = {k: torch.concat(v, dim=0) for k, v in concat_z_post.items()}
+        # concat_z_post = {k: [] for k in z_post[0]}
+        # for dist_params in z_post:
+        #    for k, v in dist_params.items():
+        #        concat_z_post[k].append(v)
+        # concat_z_post = {k: torch.concat(v, dim=0) for k, v in concat_z_post.items()}
 
         # z_prior = concat_dists(z_prior, dim=0)
         # z_post = concat_dists(z_post, dim=0)
 
-        state = {'z': z, 'z_prior': concat_z_prior, 'z_post': concat_z_post, 'rnn_state': rnn_state}
+        # state = {'z': z, 'z_prior': concat_z_prior, 'z_post': concat_z_post, 'rnn_state': rnn_state}
+        # return state
+        # return z, concat_z_prior, concat_z_post, rnn_state
 
-        return state
+    @staticmethod
+    @torch.jit.ignore
+    def state_keys() -> Tuple[str, str, str, str]:
+        return 'z', 'z_prior', 'z_post', 'rnn_state'
+
+    @staticmethod
+    @torch.jit.ignore
+    def add_labels(seq: Sequence[AnySameType]) -> Dict[str, AnySameType]:
+        keys = RSSMCell.state_keys()
+        assert len(seq) == len(keys)
+        return {k: arg for k, arg in zip(keys, seq)}
+
+    @staticmethod
+    @torch.jit.ignore
+    def remove_labels(state: Dict[str, AnySameType]) -> Tuple[AnySameType, ...]:
+        keys = RSSMCell.state_keys()
+        return tuple([state[k] for k in keys])

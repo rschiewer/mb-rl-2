@@ -1,7 +1,7 @@
 from math import floor
 from typing import Dict
 
-import gym
+import gymnasium as gym
 import gym_nav2d
 import numpy
 import numpy as np

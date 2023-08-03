@@ -13,7 +13,7 @@ from matplotlib.colors import hsv_to_rgb, to_rgba
 from matplotlib.patches import Rectangle
 from matplotlib.colors import to_rgb
 from tqdm import tqdm
-import gym
+import gymnasium as gym
 import moviepy.editor as mp
 
 from mdm.logging.logger import Scope, GlobalLogger
@@ -46,7 +46,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
 
     for i_step in tqdm(range(cfg['trainer']['n_train_steps']), desc='Training Progress'):
         batch = train_driver.interact(cfg['trainer']['d_batch'])
-        batch = to_tensors(batch, model.device, padding='repeat')
+        batch = to_tensors(batch, 'cuda', padding='repeat')
         batch = prepare_data(batch)
 
         if cfg['trainer']['subtrajectory_len'] > 0:
@@ -56,17 +56,17 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
         else:
             model_batch = batch
 
-        #with record_function('model_training'):
-        model.train()
-        agent_eval_mode(r_max_agents + goal_seeking_agents)
-        if i_step < freeze_model:
-            train_losses, pred, targets, states_below = model.train_step(model_batch, opt_model,
-                                                                         model_steps=model_train_steps)
-        else:
-            train_losses, pred, targets, states_below = model.eval_step(model_batch, model_steps=model_train_steps,
-                                                                        force_warmup=[-1 for _ in range(model.levels)])
+        with record_function('model_training'):
+            model.train()
+            agent_eval_mode(r_max_agents + goal_seeking_agents)
+            if i_step < freeze_model:
+                train_losses, pred, targets, states_below = model.train_step(model_batch, opt_model,
+                                                                             model_steps=model_train_steps)
+            else:
+                train_losses, pred, targets, states_below = model.eval_step(model_batch, model_steps=model_train_steps,
+                                                                            force_warmup=[-1 for _ in range(model.levels)])
 
-            print('freezing model')
+                print('freezing model')
         logger.log(to_np(train_losses), Scope.TRAIN(), i_step)
 
         # train model in observation mode
@@ -82,10 +82,9 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
 
                 with record_function(f'prepare_agent_data_{l}'):
                     # use all time steps of teacher forcing rollout from model as starting point
-                    start_state_lvl, start_state_mask = rssm_states_seq_to_batch(pred[l], targets[l]['terminal'],
-                                                                                 model.rssm_modules[l])
+                    start_state_lvl, start_state_mask = rssm_states_seq_to_batch(pred[l], targets[l]['terminal'])
                     # prevent gradient flow into the start state
-                    start_state_lvl = model.rssm_modules[l].detach_state(**start_state_lvl)
+                    start_state_lvl = RSSMCell.detach_state(*start_state_lvl)
 
                 # mask to eliminate training steps that start after an episode has already ended
 
@@ -398,7 +397,8 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 chunk_size = model.strides[1]
                 gsa_env_mem = {}
                 total_steps_remaining = len(batch['o']) - 1  # first step is start state
-                state = {'z': pred[0]['z'][0], 'rnn_state': pred[0]['rnn_state'][0]}
+                state = {k: pred[0][k][0] for k in RSSMCell.state_keys()}
+                state = RSSMCell.remove_labels(state)
                 for i_goal, goal in enumerate(goals):
                     n_steps = np.minimum(total_steps_remaining, chunk_size)
                     simulation = gsa.act_in_sim(env_state=state, sim_env=model, n_steps=n_steps, goal=goal,
