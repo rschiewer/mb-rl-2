@@ -20,6 +20,7 @@ from mdm.utils.torch_tools import disable_torch_compile
 #from tqdm import tqdm
 #tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
 
+
 def main():
     simplefilter(action='ignore', category=DeprecationWarning)  # numpy deprecation warning from outdated gym lib
     parser = argparse.ArgumentParser()
@@ -127,19 +128,19 @@ def main():
     #fig = plot_trajectory_stats(train_mem, 20)
     #plt.show()
 
-    def simple_collect_fn():
+    def simple_collect_fn(explore: bool):
         agent = r_max_agents[0][0]
         agent.eval()
         collect_env.reset()
-        policy = LatentAgentPolicy(agent, model)
-        collected_data_trajectories = collect_data(collect_env, 50, policy)
+        policy = LatentAgentPolicy(agent, model, explore=explore)
+        collected_data_trajectories = collect_data(collect_env, -1, policy)
         train_mem.extend(collected_data_trajectories)
 
-    def collect_fn():
+    def collect_fn(explore: bool):
         collect_env.reset()
         agent_eval_mode(r_max_agents + goal_seeking_agents)
-        policy = HierarchicalLatentAgentPolicy(model)
-        collected_data_trajectories = collect_data(collect_env, 50, policy)
+        policy = HierarchicalLatentAgentPolicy(model, explore=explore)
+        collected_data_trajectories = collect_data(collect_env, -1, policy)
         # visualize_trajectory(collected_data_trajectories[0])
         train_mem.extend(collected_data_trajectories)
 
@@ -149,7 +150,7 @@ def main():
     train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collect_fn, eval_env, test_driver,
                 train_driver, logger, profile=profiling_run)
     if profile:
-        with profile(activities=[ProfilerActivity.CPU], record_shapes=True) as prof:
+        with profile(activities=[ProfilerActivity.CPU], record_shapes=True, profile_memory=True) as prof:
             train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collect_fn, eval_env, test_driver,
                 train_driver, logger, profile=profiling_run)
         print(prof.key_averages(group_by_input_shape=True).table(sort_by="cpu_time_total", row_limit=10))
