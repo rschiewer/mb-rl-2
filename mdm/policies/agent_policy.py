@@ -29,6 +29,7 @@ class LatentAgentPolicy(Policy):
     def __init__(self,
                  agent: ActorCriticAgent,
                  model: HierarchicalRSSM,
+                 explore: bool = False,
                  init_data: Dict[str, torch.Tensor] = None,
                  use_ema_modules: bool = False):
         super().__init__()
@@ -36,6 +37,7 @@ class LatentAgentPolicy(Policy):
 
         self.agent = agent
         self.model = model
+        self.explore = explore
         self._use_ema_modules = use_ema_modules
 
         if init_data is not None:
@@ -89,7 +91,7 @@ class LatentAgentPolicy(Policy):
             raise RuntimeError(f'Invalid inf state in step {env.current_step}: {self._current_env_state[0]}')
 
         agent_o = self.agent.preproc_o(self._current_env_state)
-        a_dist, a, = self.agent(agent_o, sample=True, disable_exploration=True)
+        a_dist, a, = self.agent(agent_o, sample=True, disable_exploration=not self.explore)
 
         if torch.isnan(a).any():
             raise RuntimeError(f'Invalid NAN action: {a}')
@@ -116,10 +118,12 @@ class HierarchicalLatentAgentPolicy(Policy):
 
     def __init__(self,
                  model: HierarchicalRSSM,
+                 explore: bool = False,
                  use_ema_modules: bool = False):
         super().__init__()
 
         self.model = model
+        self.explore = explore
         self._use_ema_modules = use_ema_modules
         self._grounded_env_states = [None for _ in range(model.levels)]
         self._env_data_below_cache = [self._empty_cache() for _ in range(model.levels)]
@@ -206,8 +210,9 @@ class HierarchicalLatentAgentPolicy(Policy):
         # one r_max step on highest level
         state = self._grounded_env_states[i_highest]
         agent = self.model.r_max_agents[i_highest][0]
-        simulation = agent.act_in_sim(env_state=state, sim_env=self.model, n_steps=1, sample_actions=True,
-                                      sample_model=False, disable_exploration=True, reconstruct=i_highest > 0)
+        simulation = agent.act_in_sim(env_start_state=state, sim_env=self.model, n_steps=1, sample_actions=True,
+                                      sample_states=False, disable_exploration=not self.explore,
+                                      reconstruct=i_highest > 0)
         self._act_cache[i_highest] += simulation['agent']['a']
 
         if i_highest > 0:
@@ -218,9 +223,9 @@ class HierarchicalLatentAgentPolicy(Policy):
                 n_steps = self.model.strides[i_lvl + 1]
                 new_goals = []
                 for goal in goals_from_above:
-                    simulation = agent.act_in_sim(env_state=state, sim_env=self.model, n_steps=n_steps, goal=goal,
+                    simulation = agent.act_in_sim(env_start_state=state, sim_env=self.model, n_steps=n_steps, goal=goal,
                                                   sample_actions=True, disable_exploration=True,
-                                                  sample_model=True, reconstruct=i_lvl > 0)
+                                                  sample_states=True, reconstruct=i_lvl > 0)
                     state = simulation['model_state']
                     self._act_cache[i_lvl] += simulation['agent']['a']
                     if i_lvl > 0:

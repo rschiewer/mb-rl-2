@@ -52,7 +52,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
         if cfg['trainer']['subtrajectory_len'] > 0:
             # model_batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
             # model_batch = valid_subtrajectories_unbiased(batch, 15)
-            model_batch = valid_subtrajectories_unbiased(batch, cfg['trainer']['subtrajectory_len'])
+            model_batch = valid_subtrajectories_unbiased_fast(batch, cfg['trainer']['subtrajectory_len'])
         else:
             model_batch = batch
 
@@ -84,7 +84,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                     # use all time steps of teacher forcing rollout from model as starting point
                     start_state_lvl, start_state_mask = rssm_states_seq_to_batch(pred[l], targets[l]['terminal'])
                     # prevent gradient flow into the start state
-                    start_state_lvl = RSSMCell.detach_state(*start_state_lvl)
+                    start_state_lvl = rssm_detach_state(*start_state_lvl)
 
                 # mask to eliminate training steps that start after an episode has already ended
 
@@ -93,7 +93,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                     r_max_agent, r_max_actor_opt, r_max_critic_opt = model.r_max_agents[l]
                     abstract_level = l > 0
                     r_max_simulation = r_max_agent.act_in_sim(start_state_lvl, model, agent_model_steps[l],
-                                                              sample_model=True, sample_actions=True,
+                                                              sample_states=True, sample_actions=True,
                                                               reconstruct=not abstract_level)
                     r_max_simulation['agent']['first_step_mask'] = start_state_mask.unsqueeze(0)
                     r_max_losses = r_max_agent.train_step(r_max_simulation['agent'], actor_optimizer=r_max_actor_opt,
@@ -218,7 +218,6 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                     We start at the same spot as the r_max agent, namely at start_state_lvl. We then use every
                     k-th time step from the r_max agent's simulation as intermediate goal and train goal finding
                     """
-
                     with record_function(f'goal_seeking_agent_training_{l}'):
                         goal_agent, goal_actor_opt, goal_critic_opt = model.goal_seeking_agents[l]
                         goals = model.filter_up(o=r_max_simulation['model']['z'], r=r_max_simulation['model']['r'],
@@ -233,31 +232,30 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                         #       Idea: n_steps has d_batch dim and where n_steps have been done, the terminal flag of the
                         #       env is overwritten with True to invalidate all further efforts of the goal seeking agent
                         #       to reach the goal.
-                        for i_goal, goal in enumerate(goals['o']):
-                            """
-                            Variation B-1:
-                            give one additional step in last chunk
-                            
-                            if i_goal == len(goals['o']) - 1:
-                               n_steps = chunk_size + 1
-                            else:
-                               n_steps = chunk_size
-                            """
-                            n_steps = chunk_size
-                            goal_simulation = goal_agent.act_in_sim(state, model, n_steps, goal, agent_memory=agent_mem,
-                                                                    sample_model=True, sample_actions=True,
+                        for i_goal, goal in enumerate(goals['o'][:1]): # TODO: train only one goal
+                            #Variation B-1:
+                            #give one additional step in last chunk
+                            #
+                            #if i_goal == len(goals['o']) - 1:
+                            #   n_steps = chunk_size + 1
+                            #else:
+                            #   n_steps = chunk_size
+
+                            noisy_goal = goal + torch.rand_like(goal) * 0.1
+                            n_steps = chunk_size + 1
+                            goal_simulation = goal_agent.act_in_sim(state, model, n_steps, noisy_goal, agent_memory=agent_mem,
+                                                                    sample_states=True, sample_actions=True,
                                                                     disable_exploration=False, reconstruct=False)
                             state = goal_simulation['model_state']
-                            """
-                            Variation B-2:
-                            ground goal agent with r_max agent trajectory after every chunk
-                            
-                            state = {'z': r_max_simulation['model']['z'][t].detach(),
-                                    'rnn_state': (r_max_simulation['model']['rnn_state'][t][0].detach(),
-                                                  r_max_simulation['model']['rnn_state'][t][1].detach())}
-                            """
 
-                        """
+                            #Variation B-2:
+                            #ground goal agent with r_max agent trajectory after every chunk
+                            #
+                            #state = {'z': r_max_simulation['model']['z'][t].detach(),
+                            #        'rnn_state': (r_max_simulation['model']['rnn_state'][t][0].detach(),
+                            #                      r_max_simulation['model']['rnn_state'][t][1].detach())}
+
+                            """
                             Version C:
                             goals from current level r_max agent but with half of the goals replaced by noisy trajectories
                             that are freshly generated from the model using noisy versions of the r_mas agent's actions
@@ -358,7 +356,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                     logger.log(to_np(goal_losses), Scope.TRAIN() / f'goal_seeking_agent/{l}/', i_step)
 
         if i_step % cfg['trainer']['collect_interval'] == 0 and i_step < stop_collect:
-            collect_fn()
+            collect_fn(explore=True)
 
         # eval =========================================================================================================
         if not profile and i_step % cfg['trainer']['eval_interval'] == 0:
@@ -397,12 +395,12 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 chunk_size = model.strides[1]
                 gsa_env_mem = {}
                 total_steps_remaining = len(batch['o']) - 1  # first step is start state
-                state = {k: pred[0][k][0] for k in RSSMCell.state_keys()}
-                state = RSSMCell.remove_labels(state)
+                state = {k: pred[0][k][0] for k in rssm_state_keys()}
+                state = rssm_remove_labels(state)
                 for i_goal, goal in enumerate(goals):
                     n_steps = np.minimum(total_steps_remaining, chunk_size)
-                    simulation = gsa.act_in_sim(env_state=state, sim_env=model, n_steps=n_steps, goal=goal,
-                                                sample_actions=False, disable_exploration=True, sample_model=False,
+                    simulation = gsa.act_in_sim(env_start_state=state, sim_env=model, n_steps=n_steps, goal=goal,
+                                                sample_actions=False, disable_exploration=True, sample_states=False,
                                                 env_memory=gsa_env_mem)
                     state = simulation['model_state']
                     total_steps_remaining -= chunk_size
@@ -428,7 +426,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
 
             # hierarchical agent
             eval_env.reset()
-            policy = HierarchicalLatentAgentPolicy(model)
+            policy = HierarchicalLatentAgentPolicy(model, explore=False)
             eval_mem_hierarchical = collect_data(eval_env, cfg['eval']['eval_steps'], policy)
             logger.log(trajectory_statistics(eval_mem_hierarchical), Scope.TEST() / 'hierarchical_agent/', i_step)
 
@@ -458,7 +456,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
 
             # flat agent
             eval_env.reset()
-            policy = LatentAgentPolicy(r_max_agents[0][0], model)
+            policy = LatentAgentPolicy(r_max_agents[0][0], model, explore=False)
             eval_mem_flat = collect_data(eval_env, cfg['eval']['eval_steps'], policy)
             logger.log(trajectory_statistics(eval_mem_flat), Scope.TEST() / 'flat_agent/', i_step)
 

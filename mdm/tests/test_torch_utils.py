@@ -4,6 +4,7 @@ import torch
 import numpy as np
 
 from mdm.utils.torch_tools import bin_every_k_steps
+from mdm.utils.utils import valid_subtrajectories_unbiased
 
 
 class TorchUtilsTest(unittest.TestCase):

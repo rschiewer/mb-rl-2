@@ -25,7 +25,7 @@ def main():
     parser.add_argument('-n_collect', type=int)
     args = parser.parse_args()
 
-    cfg = load_yaml(here() / 'cfg_rssm_train.yaml')
+    cfg = load_yaml(here() / 'cfg_simple_rssm_train.yaml')
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
     if args.d_batch:
@@ -119,18 +119,18 @@ def main():
         collect_driver.interact(cfg['prefill_episodes'] // 6, test_mem)
     test_driver = OfflineRLDriver(test_mem, sampling_type=SamplingType.RANDOM)
 
-    def simple_collect_fn():
+    def simple_collect_fn(explore: bool):
         agent = r_max_agents[0][0]
         agent.eval()
         collect_env.reset()
-        policy = LatentAgentPolicy(agent, model)
+        policy = LatentAgentPolicy(agent, model, explore=explore)
         collected_data_trajectories = collect_data(collect_env, -1, policy)
         train_mem.extend(collected_data_trajectories)
 
-    def collect_fn():
+    def collect_fn(explore: bool):
         collect_env.reset()
         agent_eval_mode(r_max_agents + goal_seeking_agents)
-        policy = HierarchicalLatentAgentPolicy(model)
+        policy = HierarchicalLatentAgentPolicy(model, explore=explore)
         collected_data_trajectories = collect_data(collect_env, -1, policy)
         # visualize_trajectory(collected_data_trajectories[0])
         train_mem.extend(collected_data_trajectories)

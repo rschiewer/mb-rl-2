@@ -1023,8 +1023,8 @@ def rssm_states_seq_to_batch(mem: Dict[str, List[torch.Tensor]],
                              terminal_flags: List[torch.Tensor] | torch.Tensor,
                              i_start: int = 0,
                              i_end: int = sys.maxsize):
-    states = {k: v[i_start: i_end] for k, v in mem.items() if k in RSSMCell.state_keys()}
-    states = RSSMCell.state_seq_to_batch(**states)
+    states = {k: v[i_start: i_end] for k, v in mem.items() if k in rssm_state_keys()}
+    states = rssm_state_seq_to_batch(**states)
 
     # we can inject terminal flags from target data which are already stacked, so we use this convenience wrapper
     terminal = stack_if_list(terminal_flags)
