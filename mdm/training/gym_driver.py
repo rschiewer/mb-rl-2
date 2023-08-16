@@ -56,7 +56,8 @@ class GymEpisodeDriver(Driver):
         return mem
 
 
-def collect_data(env: Union[CacheLastStepEnv, CacheLastStepVecEnv], n_steps: int, policy: callable = None):
+def collect_data(env: Union[CacheLastStepEnv, CacheLastStepVecEnv], n_steps: int, policy: callable = None,
+                 seed: int = None, options: dict = None):
     if not isinstance(env, (CacheLastStepEnv, CacheLastStepVecEnv, CacheLastStepVecEnvPool)):
         print(f'Normal gym envs need to be wrapped in {CacheLastStepEnv.__class__.__name__} and ',
               f'vectorized environments need to be wrapped in {CacheLastStepVecEnv.__class__.__name__}',
@@ -67,9 +68,11 @@ def collect_data(env: Union[CacheLastStepEnv, CacheLastStepVecEnv], n_steps: int
 
     traj_o, traj_a, traj_r, traj_term, traj_trunc, traj_mask = [], [], [], [], [], []
     if isinstance(env, CacheLastStepEnv):
-        act_in_env(env, policy, n_steps, traj_o, traj_a, traj_r, traj_term, traj_trunc, traj_mask)
+        act_in_env(env, policy, n_steps, traj_o, traj_a, traj_r, traj_term, traj_trunc, traj_mask, seed=seed,
+                   options=options)
     elif isinstance(env, (CacheLastStepVecEnv, CacheLastStepVecEnvPool)):
-        act_in_vector_env(env, policy, n_steps, traj_o, traj_a, traj_r, traj_term, traj_trunc, traj_mask)
+        act_in_vector_env(env, policy, n_steps, traj_o, traj_a, traj_r, traj_term, traj_trunc, traj_mask, seed=seed,
+                          options=options)
 
     o = np.stack(traj_o)
     a = np.stack(traj_a)
@@ -97,6 +100,8 @@ def collect_data(env: Union[CacheLastStepEnv, CacheLastStepVecEnv], n_steps: int
                 'terminal': term[:l_traj, i_traj], 'truncated': trunc[:l_traj, i_traj]}
         mem.append(traj)
 
+    #print(f'Collected {len(mem)} trajectories with lengths between {np.min(l_trajs)} and {np.max(l_trajs)} steps')
+
     return mem
 
 
@@ -110,13 +115,14 @@ def act_in_vector_env(env: CacheLastStepVecEnv,
                       traj_trunc: List[DataType],
                       traj_mask: List[DataType],
                       seed: int = None,
+                      options: dict = None,
                       pad_data: bool = True):
     if n_steps == -1:
         n_steps = sys.maxsize.real
 
     if env.current_step == 0:
         n_steps -= 1
-        _, _ = env.reset(seed=seed)
+        _, _ = env.reset(seed=seed, options=options)
         traj_o.append(env.last_o)
         traj_mask.append(env.envs_done.copy())
         if pad_data:  # by convention, make (a_0, r_0, t_0) = 0
@@ -157,6 +163,7 @@ def act_in_env(env: CacheLastStepEnv,
                traj_trunc: List[DataType],
                traj_mask: List[DataType],
                seed: int = None,
+               options: dict = None,
                pad_data: bool = True):
     assert env.current_step == 0 or (len(traj_o) > 0 and len(traj_a) > 0 and len(traj_r) > 0 and len(traj_term) > 0
                                      and len(traj_trunc) > 0), 'env must either be in step 0 or last step info must ' \
@@ -167,7 +174,7 @@ def act_in_env(env: CacheLastStepEnv,
     env_done = False
     if env.current_step == 0:
         n_steps -= 1
-        o, _ = env.reset(seed=seed)
+        _, _ = env.reset(seed=seed, options=options)
         traj_o.append(env.last_o)
         if pad_data:  # by convention, make (a_0, r_0, t_0) = 0
             env_done = env.last_term or env.last_trunc
