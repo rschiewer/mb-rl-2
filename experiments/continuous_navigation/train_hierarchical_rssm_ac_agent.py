@@ -29,7 +29,7 @@ def main():
     parser.add_argument('-n_collect', type=int)
     args = parser.parse_args()
 
-    cfg = load_yaml(here() / 'cfg_rssm_train.yaml')
+    cfg = load_yaml(here() / 'cfg_simple_rssm_train.yaml')
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
     if args.d_batch:
@@ -61,11 +61,6 @@ def main():
     cfg = build_rssms(cfg)
     r_max_agents, goal_seeking_agents = build_agents(cfg, env, 'cuda')
 
-    #for i, agent in enumerate(r_max_agents):
-    #    r_max_agents[i] = torch.jit.script(agent[0]), agent[1], agent[2]
-    #for i, agent in enumerate(goal_seeking_agents):
-    #    goal_seeking_agents[i] = torch.jit.script(agent[0]), agent[1], agent[2]
-
     model = HierarchicalRSSM(**cfg['mdm'], r_max_agents=r_max_agents, goal_seeking_agents=goal_seeking_agents)
 
     # load model if necessary
@@ -81,6 +76,7 @@ def main():
         pretrained_model = torch.load(here() / mdl_path)
         copy_params(pretrained_model, model)
     model = model.to('cuda')
+    #model = torch.jit.script(model)
 
     opt_model = build_model_opt(model, cfg)
 
@@ -95,10 +91,10 @@ def main():
     # temporary hack end
 
     #collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['trainer']['collect_envs'])
-    collect_env = gym.vector.SyncVectorEnv([make_env_fn] * cfg['trainer']['collect_envs'])
+    collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['trainer']['collect_envs'])
     collect_env = CacheLastStepVecEnv(collect_env)
     #eval_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['eval']['eval_envs'])
-    eval_env = gym.vector.SyncVectorEnv([make_env_fn] * cfg['eval']['eval_envs'])
+    eval_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['eval']['eval_envs'])
     eval_env = CacheLastStepVecEnv(eval_env)
 
     train_mem = []
@@ -148,11 +144,11 @@ def main():
     #with torch.autograd.detect_anomaly(check_nan=True):
     profiling_run = False
     train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collect_fn, eval_env, test_driver,
-                train_driver, logger, profile=profiling_run)
+                train_driver, logger, profile=profiling_run, log_videos=False)
     if profile:
         with profile(activities=[ProfilerActivity.CPU], record_shapes=True, profile_memory=True) as prof:
             train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collect_fn, eval_env, test_driver,
-                train_driver, logger, profile=profiling_run)
+                train_driver, logger, profile=profiling_run, log_videos=False)
         print(prof.key_averages(group_by_input_shape=True).table(sort_by="cpu_time_total", row_limit=10))
 
     collect_env.close()

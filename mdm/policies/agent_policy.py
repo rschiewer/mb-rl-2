@@ -51,7 +51,7 @@ class LatentAgentPolicy(Policy):
             self._current_env_state = None
 
     def __call__(self, env: Union[CacheLastStepEnv, CacheLastStepVecEnv]):
-        device = self.agent.device
+        device = self.model.current_device
 
         if env.current_step == 0:
             if isinstance(env, (CacheLastStepVecEnv, CacheLastStepVecEnvPool)):
@@ -211,7 +211,7 @@ class HierarchicalLatentAgentPolicy(Policy):
         state = self._grounded_env_states[i_highest]
         agent = self.model.r_max_agents[i_highest][0]
         simulation = agent.act_in_sim(env_start_state=state, sim_env=self.model, n_steps=1, sample_actions=True,
-                                      sample_states=False, disable_exploration=not self.explore,
+                                      sample_states=True, disable_exploration=not self.explore,
                                       reconstruct=i_highest > 0)
         self._act_cache[i_highest] += simulation['agent']['a']
 

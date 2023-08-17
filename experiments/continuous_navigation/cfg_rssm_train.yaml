@@ -2,7 +2,7 @@
 neptune_cfg: "../neptune_settings.yaml"
 env_name: "gym_nav2d:nav2dEasySparse-v0" #"gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-v0"
 prefill_memory: "random" #"offline-dataset" # "random", False
-prefill_episodes: 100
+prefill_episodes: 200
 train_samples: null #"nav2d_Easy_train.samples" #"nav2d_Easy_train.samples"
 test_samples: "nav2d_EasySparse_expert.samples" #"nav2d_Easy_expert.samples"
 checkpoint_path: "checkpoints"
@@ -13,15 +13,15 @@ repeat_terminal_state: False
 mdm:
    rssm_modules:
       # RSSM no. 1
-      -  d_z: 8
-         d_h: 64
+      -  d_z: 32
+         d_h: 100
          d_a: <infer>
          n_hidden_layers: 1
          hidden_dropout: 0.1
          epsilon: 0.1
          z_prior_lws: [ 64, 64 ]
          z_post_lws: [ 64, 64 ]
-         layer_norm: True
+         layer_norm: False
          activation: "relu"
          rnn_type: "lstm"
          latent_dist: "normal"  #"normal" "categorical" "bernoulli"
@@ -29,54 +29,54 @@ mdm:
             class: "MLPEncoder"
             d_x_encoded: 32
             lws: [ 64, 64 ]
-            layer_norm: True
+            layer_norm: False
             activation: "relu"
          o_decoder:
             class: "GaussianDecoder"
             lws: [ 64, 64 ]
-            layer_norm: True
+            layer_norm: False
             activation: "relu"
             epsilon: 0.1
          r_decoder:
             class: "GaussianDecoder"
             lws: [ 64, 64 ]
-            layer_norm: True
+            layer_norm: False
             activation: "relu"
             epsilon: 0.1
          term_decoder:
             class: "BinomialDecoder"
             lws: [ 64, 64 ]
-            layer_norm: True
+            layer_norm: False
             activation: "relu"
       # RSSM no. 2
-      -  d_z: 10
-         d_h: 128
+      -  d_z: 32
+         d_h: 150
          d_a: 2
          n_hidden_layers: 1
          hidden_dropout: 0.1
          epsilon: 0.1
          z_prior_lws: [ 64, 64, 64 ]
          z_post_lws: [ 64, 64, 64 ]
-         layer_norm: True
+         layer_norm: False
          activation: "relu"
          rnn_type: "lstm"
          latent_dist: "normal"  #"normal" "categorical" "bernoulli"
          o_encoder:
             class: "MLPEncoder"
             lws: [ 64, 64, 64 ]
-            layer_norm: True
+            layer_norm: False
             activation: "relu"
             d_x_encoded: 32
          o_decoder:
             class: "GaussianDecoder"
             lws: [ 64, 64, 64 ]
-            layer_norm: True
+            layer_norm: False
             activation: "relu"
             epsilon: 0.1
          r_decoder:
             class: "GaussianDecoder"
             lws: [ 64, 64, 64 ]
-            layer_norm: True
+            layer_norm: False
             activation: "relu"
             epsilon: 0.1
          term_decoder:
@@ -108,43 +108,45 @@ mdm:
    kl_betas: [ 0.1, 0.1 ]
    kl_reg_betas: [ 0.00, 0.00 ]
    ema_regularization: 0.0
-   ema_coeff: 0.98
-   ema_update_interval: 5
+   ema_coeff: 0.95
+   ema_update_interval: 10
    latent_overshooting: [14, 9] #[14, 9]
    temporal_activation_regularization: 0.0
    kl_balance: 0.8
 
 optim:
    type: 'adam'  # 'adamW' 'adam'
-   lr: 0.001 #0.0002
+   lr: 0.0002 #0.0002
 
 trainer:
-   n_train_steps: 10000
+   n_train_steps: 4000
    freeze_model: False
    stop_collect: False
    eval_interval: 50
    d_batch: 1024
    subtrajectory_len: 25
-   collect_envs: 50
+   collect_envs: 20
    collect_interval: 100
    agent_train_interval: 1
    model_train_steps: [ -1, 10 ]
    agent_model_steps: [ 15, 10 ]
    checkpoint_interval: 100
+   sample_model_during_agent_training: True
 
 agents:
    r_max:
       # level 0
       - eps_exploration_init: 0.9
         eps_exploration_coeff: 0.999
+        eps_exploration_min: 0.3
         act_entropy_exploration_coeff: 0.001
         learn_act_entropy_exploration_coeff: False
-        novelty_exploration_coeff: 0.1
+        novelty_exploration_coeff: 0.01
         tr_policy_kl_coeff: 0.1
         tr_policy_ema_update_coeff: 0.95
         use_ema_world_model: False
-        lr_actor: 0.001
-        lr_critic: 0.004
+        lr_actor: 0.0001
+        lr_critic: 0.0005
         min_a: <infer>
         max_a: <infer>
         actor_lws: [ 64, 64 ]
@@ -159,14 +161,15 @@ agents:
       # level 1
       - eps_exploration_init: 0.9
         eps_exploration_coeff: 0.999
+        eps_exploration_min: 0.3
         act_entropy_exploration_coeff: 0.001
         learn_act_entropy_exploration_coeff: False
-        novelty_exploration_coeff: 0.1
+        novelty_exploration_coeff: 0.01
         tr_policy_kl_coeff: 0.1
         tr_policy_ema_update_coeff: 0.95
         use_ema_world_model: False
-        lr_actor: 0.001
-        lr_critic: 0.004
+        lr_actor: 0.0001
+        lr_critic: 0.0005
         min_a: -1.0
         max_a: 1.0
         actor_lws: [ 64, 64 ]
@@ -182,14 +185,15 @@ agents:
       # level 0
       - eps_exploration_init: 0.9
         eps_exploration_coeff: 0.999
+        eps_exploration_min: 0.3
         act_entropy_exploration_coeff: 0.001
         learn_act_entropy_exploration_coeff: False
-        novelty_exploration_coeff: 0.1
+        novelty_exploration_coeff: 0.0
         tr_policy_kl_coeff: 0.1
         tr_policy_ema_update_coeff: 0.95
         use_ema_world_model: False
-        lr_actor: 0.001
-        lr_critic: 0.004
+        lr_actor: 0.0001
+        lr_critic: 0.0005
         min_a: <infer>
         max_a: <infer>
         actor_lws: [ 64, 64 ]
@@ -199,8 +203,9 @@ agents:
         actor_layer_norm: True
         critic_layer_norm: True
         dynamics_loss: True
-        normalize_observations: False
-        normalize_rewards: False
+        normalize_observations: 'running_average'
+        normalize_rewards: 'running_average'
 eval:
    eval_envs: 20
    eval_steps: 50
+   warmup_steps: [3, 3]

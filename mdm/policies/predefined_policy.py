@@ -6,9 +6,7 @@ from mdm.policies.policy import Policy
 class PredefinedPolicy(Policy):
 
     def __init__(self,
-                 env: gym.Env,
                  action_list: gym.core.ActType):
-        self.env = env
         self.action_list = action_list
         self.current_timestep = 0
         self.max_timestep = action_list.shape[0]

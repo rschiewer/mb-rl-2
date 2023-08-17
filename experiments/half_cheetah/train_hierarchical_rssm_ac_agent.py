@@ -143,7 +143,7 @@ def main():
     if not os.path.exists(p):
         os.makedirs(p)
     model_path = here() / f'{cfg["final_model_path"]}_{logger.run_id}.ptmdl'
-    torch.save(model, model_path)
+    torch.save(model.state_dict(), model_path)
     model_weights = InMemoryFile(model_path, name='final_weights')
     logger.start_session()
     logger.log_file(model_weights, Scope.DATA() / 'weights')

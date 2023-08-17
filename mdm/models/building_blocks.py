@@ -13,6 +13,7 @@ from mdm.utils.torch_tools import (layers_with_activation as lwa, get_dist_param
                                    sample_from_categorical, ManagedStatefulTrainingModule, detach_dist, concat_dists,
                                    disable_torch_compile, stack_tensor_dicts, concat_tensor_dicts)
 from torch.profiler import record_function
+from mdm.models.fastrnns import LayerNormLSTMCell
 
 AnySameType = TypeVar('AnySameType')
 
@@ -546,7 +547,7 @@ class UpwardsFilter(torch.nn.Module):
             assert mask.dtype == torch.bool, 'Need binary mask with bool dtype'
 
         if n_pad > 0:
-            pad_shp = x.shape
+            pad_shp = list(x.shape)
             pad_shp[0] = n_pad
             x_pad = torch.full(pad_shp, pad_value, device=x.device)
             mask_pad = torch.ones(n_pad, x.shape[1], 1, dtype=torch.bool, device=x.device)
@@ -909,6 +910,7 @@ class RSSMCell(torch.nn.Module):
         d_det_core = d_z_smpl + d_a
         # need both to satisfy torch script
         self._lstm = torch.nn.LSTMCell(d_det_core, hidden_size=d_h)
+        #self._lstm = LayerNormLSTMCell(d_det_core, hidden_size=d_h)
         self._gru = torch.nn.GRUCell(d_det_core, hidden_size=d_h)
 
         self._z_prior = torch.nn.Sequential(lwa(z_prior_lws, activation, layer_norm=layer_norm, name=f'{name}_z_prior'))
@@ -946,7 +948,13 @@ class RSSMCell(torch.nn.Module):
     def zero_o(self,
                d_batch: int,
                device: torch.device) -> torch.Tensor:
-        return torch.zeros(d_batch, *self.o_shape, device=device)
+        return torch.zeros(d_batch, self.d_o_encoded, device=device)
+
+    @torch.jit.export
+    def zero_o_dist(self,
+                    d_batch: int,
+                    device: torch.device) -> torch.Tensor:
+        return torch.zeros(d_batch, self.d_z_out, device=device)
 
     @torch.jit.export
     def zero_a(self,
@@ -981,6 +989,7 @@ class RSSMCell(torch.nn.Module):
         h, c = last_rnn_state.unbind(-1)
         h_next, c_next = self._lstm(inp, (h, c))
         next_rnn_state = torch.stack([h_next, c_next], dim=-1)
+        #next_rnn_state = torch.stack(c_next, dim=-1)
         return h_next, next_rnn_state
 
     def _gru_forward(self,
@@ -1051,11 +1060,6 @@ class RSSMCell(torch.nn.Module):
                 use_posterior: bool = True,
                 sample_state: bool = True) -> Tuple[torch.Tensor, RSSMStateType]:
         with record_function('rssm_cell_call'):
-            # if torch.isnan(a).any() or torch.isinf(a).any():
-            #    raise RuntimeError(f'Invalid action in imagine: {a}')
-            # if torch.isnan(last_state['z']).any() or torch.isinf(last_state['z']).any():
-            #    raise RuntimeError(f'Invalid last state in imagine: {last_state["z"]}')
-
             # if o is None and last_state is None:
             #    raise ValueError('Need at least "o" or "last_state"')
             # if o is None and use_posterior:
@@ -1066,6 +1070,11 @@ class RSSMCell(torch.nn.Module):
                 last_state = self.init_state(d_batch, a.device)
             if o_enc is None:
                 o_enc = torch.zeros(d_batch, self.o_encoder.d_x_encoded, device=a.device)
+
+            if torch.isnan(a).any() or torch.isinf(a).any():
+                raise RuntimeError(f'Invalid action in imagine: {a}')
+            if torch.isnan(last_state[0]).any() or torch.isinf(last_state[0]).any():
+                raise RuntimeError(f'Invalid last state in imagine: {last_state[0]}')
 
             if use_posterior:
                 ret = self.observe(a, o_enc, last_state[0], last_state[3], sample_state)
@@ -1172,7 +1181,7 @@ class RSSMCell(torch.nn.Module):
         if reconstruct_observation:
             o_dist, o_smpl = self.o_decoder(s, sample)
         else:
-            o_dist, o_smpl = None, None  # self.zero_o(d_batch, device=s.device)
+            o_dist, o_smpl = self.zero_o_dist(d_batch, s.device), self.zero_o(d_batch, s.device)
         r_dist, r_smpl = self.r_decoder(s, sample)
         term_dist, term_smpl = self.term_decoder(s, sample)
 
@@ -1186,6 +1195,11 @@ def rssm_stack_states(z: List[torch.Tensor],
                       z_post: List[torch.Tensor],
                       rnn_state: List[torch.Tensor]):
     return torch.stack(z), torch.stack(z_prior), torch.stack(z_post), torch.stack(rnn_state)
+
+
+@torch.jit.ignore
+def rssm_stack_state_list(states: List[RSSMStateType]):
+    return [list(x) for x in zip(*states)]
 
 
 @torch.jit.script
@@ -1210,8 +1224,8 @@ def rssm_state_keys() -> Tuple[str, str, str, str]:
     return 'z', 'z_prior', 'z_post', 'rnn_state'
 
 
-@torch.jit.script
-def rssm_add_labels(seq: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]) -> Dict[str, torch.Tensor]:
+@torch.jit.ignore
+def rssm_add_labels(seq: Sequence[Any, Any, Any, Any]) -> Dict[str, Any]:
     keys = rssm_state_keys()
     return {keys[0]: seq[0], keys[1]: seq[1], keys[2]: seq[2], keys[3]: seq[3]}
 

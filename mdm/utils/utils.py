@@ -12,7 +12,6 @@ from inspect import stack
 from pathlib import Path
 from typing import Any
 
-import numba
 import gymnasium as gym
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
@@ -31,7 +30,6 @@ from mdm.utils.torch_tools import compute_mask, unsqueeze_right, stack_if_list
 SliceType = TypeVar("SliceType", bound=Sequence)
 BasicDtype = TypeVar('BasicDtype', int, float, np.single, np.double, bool)
 DataType = TypeVar('DataType', int, float, np.single, np.double, bool, np.ndarray)
-
 
 
 class DistributionType(Enum):
@@ -56,7 +54,7 @@ class InMemoryFile:
                 self.buffer = io.BytesIO(f.read())
         elif isinstance(resource(io.BytesIO, io.FileIO)):
             assert extension is not None, f'File extension required for buffers'
-            self.buffer = copy.copy(resource)
+            self.buffer = resource  # don't copy buffer here
             self.name = name
             self.extension = extension
         else:
@@ -584,26 +582,6 @@ def valid_subtrajectories_unbiased_fast(data: Dict[str, torch.Tensor],
         v_new = torch.gather(v_padded, dim=1, index=i_matr_exp)
         ret_data[k] = v_new.swapaxes(0, 1)
 
-    # i_start = np.clip(i_start, 0, l_trajs)
-    # i_end = np.clip(i_end, 0, l_trajs)
-    # i_start = i_start.astype(int)
-    # i_end = i_end.astype(int)
-    # ret_data_2 = {}
-    # for k, v in data.items():
-    #    v = v.swapaxes(0, 1)
-    #    if k == 'mask':
-    #        v_new = torch.ones(n_trajs, length, *v.shape[2:], device=v.device, dtype=v.dtype)
-    #    else:
-    #        v_new = torch.zeros(n_trajs, length, *v.shape[2:], device=v.device, dtype=v.dtype)
-    #    for i_traj, (i_0, i_1) in enumerate(zip(i_start, i_end)):
-    #        v_new[i_traj, 0: i_1 - i_0] = v[i_traj, i_0: i_1]
-    #    ret_data_2[k] = v_new.swapaxes(0, 1)
-    # for k in ret_data:
-    #    lhs = ret_data[k]
-    #    rhs = ret_data_2[k]
-    #    close = torch.isclose(lhs, rhs).all()
-    #    print(f'{k}: {close}')
-
     return ret_data
 
 
@@ -652,15 +630,23 @@ def valid_subtrajectories_2(data: Dict[str, torch.Tensor],
 
     n_trajs = data['o'].shape[1]
 
-    ret_data = {k: [] for k in data}
+    ret_data = {}
+    for k, v in data.items():
+        if k == 'mask':
+            empty = torch.ones(length, n_trajs, *v.shape[2:], device=v.device, dtype=v.dtype)
+        else:
+            empty = torch.zeros(length, n_trajs, *v.shape[2:], device=v.device, dtype=v.dtype)
+        ret_data[k] = empty
+
     for i_traj in range(n_trajs):
         traj_len = (1 - data['mask'][:, i_traj]).sum().detach().cpu().numpy()
-        i_start = random.randint(0, np.maximum(traj_len - length, 1))
+        i_start = random.randint(- length + 1, traj_len - 1)
         i_end = i_start + length
+        # clamp to obtain only valid trajectories
+        i_start = np.maximum(0, i_start).astype(int)
+        i_end = np.minimum(i_end, traj_len).astype(int)
         for k, v in data.items():
-            ret_data[k].append(v[i_start:i_end, i_traj])
-
-    ret_data = {k: torch.stack(v, dim=1) for k, v in ret_data.items()}
+            ret_data[k][0: i_end - i_start, i_traj] = v[i_start:i_end, i_traj]
 
     return ret_data
 
@@ -910,17 +896,6 @@ def store_memory(mem: List[Dict[str, DataType]],
     return True
 
 
-def compute_returns(mem: TrajectoryMemory, gamma: float = 0.99):
-    s, a, r, term, w = mem.to_np_arrays()
-    disc_mat = np.cumprod(np.full_like(r.data, fill_value=gamma), axis=1)
-    disc_mat = np.roll(disc_mat, 1, axis=1)
-    disc_mat[:, 0] = 1
-    ep_returns = np.sum(r * disc_mat, axis=1)
-    for t, R in zip(mem, ep_returns):
-        t['w'] = R
-    mem.mark_modified()
-
-
 def discrete_stats(module: torch.nn.Module, n_inputs: int, seq_len: int, n_repetitions: int = 1,
                    module_kwargs: dict = None):
     if not module_kwargs:
@@ -1022,9 +997,14 @@ def random_walk_success_rate(env: gym.Env,
 def rssm_states_seq_to_batch(mem: Dict[str, List[torch.Tensor]],
                              terminal_flags: List[torch.Tensor] | torch.Tensor,
                              i_start: int = 0,
-                             i_end: int = sys.maxsize):
+                             i_end: int = None):
+    if i_end is None:
+        i_end = len(mem['z'])
+
     states = {k: v[i_start: i_end] for k, v in mem.items() if k in rssm_state_keys()}
-    states = rssm_state_seq_to_batch(**states)
+    # states = rssm_state_seq_to_batch(**states)
+    states = (torch.concat(states['z'], dim=0), torch.concat(states['z_prior'], dim=0),
+              torch.concat(states['z_post'], dim=0), torch.concat(states['rnn_state'], dim=0))
 
     # we can inject terminal flags from target data which are already stacked, so we use this convenience wrapper
     terminal = stack_if_list(terminal_flags)
@@ -1038,21 +1018,21 @@ def log_params(model: torch.nn.Module,
                logger: Logger,
                scope: Scope,
                time_step: int):
-    async def _log_fn():
-        max_param = sys.float_info.min
-        min_param = sys.float_info.max
-        for name, param in model.named_parameters():
-            full_scope = scope / name
-            param_np = param.detach().cpu().numpy()
-            logger.log({'mean': param_np.mean(), 'std': param_np.std(), 'min': param_np.min(), 'max': param_np.max()},
-                       full_scope, time_step=time_step)
-            if param_np.min() < min_param:
-                min_param = param_np.min()
-            if param_np.max() > max_param:
-                max_param = param_np.max()
-        logger.log({'largest_param': max_param, 'smallest_param': min_param}, scope, time_step=time_step)
+    # async def _log_fn():
+    max_param = sys.float_info.min
+    min_param = sys.float_info.max
+    for name, param in model.named_parameters():
+        full_scope = scope / name
+        param_np = param.detach().cpu().numpy()
+        logger.log({'mean': param_np.mean(), 'std': param_np.std(), 'min': param_np.min(), 'max': param_np.max()},
+                   full_scope, time_step=time_step)
+        if param_np.min() < min_param:
+            min_param = param_np.min()
+        if param_np.max() > max_param:
+            max_param = param_np.max()
+    logger.log({'largest_param': max_param, 'smallest_param': min_param}, scope, time_step=time_step)
 
-    asyncio.run(_log_fn())
+    # asyncio.run(_log_fn())
 
 
 def copy_params(src: 'HierarchicalRSSM',
@@ -1064,10 +1044,21 @@ def copy_params(src: 'HierarchicalRSSM',
         ag_dst[0].load_state_dict(ag_src[0].state_dict())
 
 
-def update_memory(memory: Dict[str, List[Any]],
+@torch.jit.ignore
+def append_memory(memory: Dict[str, List[Any]],
                   **kwitems: Any):
     for k, v in kwitems.items():
         data = memory.get(k, [])
         data.append(v)
+        memory[k] = data
+    return memory
+
+
+@torch.jit.ignore
+def extend_memory(memory: Dict[str, Sequence[Any]],
+                  predictions: Dict[str, Any]):
+    for k, v in predictions.items():
+        data = memory.get(k, [])
+        data.extend(list(v))
         memory[k] = data
     return memory

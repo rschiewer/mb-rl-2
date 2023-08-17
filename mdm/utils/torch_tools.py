@@ -1,4 +1,4 @@
-from typing import Tuple, Union, List, Sequence, TypeVar, Dict, Any
+from typing import Tuple, Union, List, Sequence, TypeVar, Dict, Any, Optional
 from collections import namedtuple, OrderedDict
 from functools import reduce, wraps
 from math import ceil
@@ -21,6 +21,13 @@ else:
     print('Compiling functions with torch.compile')
     #torch.set_float32_matmul_precision('high')
     disable_torch_compile = False
+
+
+def stack_if_list(x: Union[torch.Tensor, List[torch.Tensor]],
+                  dim: int = 0):
+    if isinstance(x, list):
+        x = torch.stack(x, dim=dim)
+    return x
 
 
 class DeviceMixin:
@@ -686,16 +693,18 @@ def to_np(data_dict: Dict[str, Union[torch.Tensor, Dict]]):
             np_data_dict[k] = to_np(v)
         elif isinstance(v, torch.Tensor):
             np_data_dict[k] = v.detach().cpu().numpy()
+        elif np.isscalar(v):
+            np_data_dict[k] = v
         else:
             raise ValueError(f'Unsupported type: {type(k)}')
     return np_data_dict
 
 
-@torch.compile(disable=disable_torch_compile)
-def compute_mask(terminals: List[torch.Tensor] | torch.Tensor,
+@torch.jit.script
+def compute_mask(terminals: Union[List[torch.Tensor], torch.Tensor],
                  mode: str = 'default',
-                 threshold: float | None = None,
-                 first_step_mask: torch.Tensor | None = None,
+                 threshold: Optional[float] = None,
+                 first_step_mask: Optional[torch.Tensor] = None,
                  disable: bool = True):
     with torch.no_grad():
         terminals = stack_if_list(terminals).detach()
@@ -814,12 +823,6 @@ def unsqueeze_right(to_expand: Union[np.ndarray, torch.Tensor], target: Union[np
     dim_diff = target.ndim - to_expand.ndim
     return to_expand.reshape(*to_expand.shape, *[1 for _ in range(dim_diff)])
 
-
-def stack_if_list(x: torch.Tensor | List[torch.Tensor],
-                  dim: int = 0):
-    if isinstance(x, list):
-        x = torch.stack(x, dim=dim)
-    return x
 
 
 def stack_tensor_dicts(x: List[Dict[str, torch.Tensor]]):

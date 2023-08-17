@@ -13,15 +13,15 @@ repeat_terminal_state: False
 mdm:
    rssm_modules:
       # RSSM no. 1
-      -  d_z: 8
-         d_h: 64
+      -  d_z: 32
+         d_h: 100
          d_a: <infer>
          n_hidden_layers: 1
          hidden_dropout: 0.1
          epsilon: 0.1
          z_prior_lws: [ 64, 64 ]
          z_post_lws: [ 64, 64 ]
-         layer_norm: True
+         layer_norm: False
          activation: "relu"
          rnn_type: "lstm"
          latent_dist: "normal"  #"normal" "categorical" "bernoulli"
@@ -29,43 +29,43 @@ mdm:
             class: "MLPEncoder"
             d_x_encoded: 32
             lws: [ 64, 64 ]
-            layer_norm: True
+            layer_norm: False
             activation: "relu"
          o_decoder:
             class: "GaussianDecoder"
             lws: [ 64, 64 ]
-            layer_norm: True
+            layer_norm: False
             activation: "relu"
             epsilon: 0.1
          r_decoder:
             class: "GaussianDecoder"
             lws: [ 64, 64 ]
-            layer_norm: True
+            layer_norm: False
             activation: "relu"
             epsilon: 0.1
          term_decoder:
             class: "BinomialDecoder"
             lws: [ 64, 64 ]
-            layer_norm: True
+            layer_norm: False
             activation: "relu"
    links: []  # Links for observation filters between RSSM levels
    upwards_filters: []
    warmup_steps: [ 'rand' ]
-   kl_betas: [ 0.1 ]
+   kl_betas: [ 1.0 ] #[ 0.1 ]
    kl_reg_betas: [ 0.0 ]
    ema_regularization: 0.0
    ema_coeff: 0.98
    ema_update_interval: 5
-   latent_overshooting: [] # [ 10 ]
+   latent_overshooting: [ 10 ]
    temporal_activation_regularization: 0.0
    kl_balance: 0.8
 
 optim:
    type: 'adam'  # 'adamW' 'adam'
-   lr: 0.001 #0.0002
+   lr: 0.0002 #0.0002
 
 trainer:
-   n_train_steps: 10000
+   n_train_steps: 4000
    freeze_model: False
    stop_collect: False
    eval_interval: 50
@@ -77,28 +77,30 @@ trainer:
    model_train_steps: [-1 ]
    agent_model_steps: [ 15 ]
    checkpoint_interval: 100
+   sample_model_during_agent_training: True
 
 agents:
    r_max:
       # level 0
       - eps_exploration_init: 0.9
         eps_exploration_coeff: 0.999
+        eps_exploration_min: 0.3
         act_entropy_exploration_coeff: 0.001
         learn_act_entropy_exploration_coeff: False
         novelty_exploration_coeff: 0.1
         tr_policy_kl_coeff: 0.1
         tr_policy_ema_update_coeff: 0.98
         use_ema_world_model: False
-        lr_actor: 0.001
-        lr_critic: 0.004
+        lr_actor: 0.0001
+        lr_critic: 0.0005
         min_a: <infer>
         max_a: <infer>
         actor_lws: [ 64, 64 ]
         critic_lws: [ 64, 64 ]
         actor_act_fn: "elu"
         critic_act_fn: "elu"
-        actor_layer_norm: True
-        critic_layer_norm: True
+        actor_layer_norm: False
+        critic_layer_norm: False
         normalize_observations: 'running_average'
         normalize_rewards: 'running_average'
 

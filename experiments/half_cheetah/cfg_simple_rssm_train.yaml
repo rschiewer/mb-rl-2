@@ -14,7 +14,7 @@ mdm:
    rssm_modules:
       # RSSM no. 1
       -  d_z: 20
-         d_h: 128
+         d_h: 200
          d_a: <infer>
          n_hidden_layers: 1
          hidden_dropout: 0.1
@@ -28,35 +28,35 @@ mdm:
          o_encoder:
             class: "MLPEncoder"
             d_x_encoded: 32
-            lws: [ 128, 64 ]
+            lws: [ 128, 128 ]
             layer_norm: True
             activation: "relu"
          o_decoder:
             class: "GaussianDecoder"
-            lws: [ 128, 64 ]
+            lws: [ 128, 128 ]
             layer_norm: True
             activation: "relu"
             epsilon: 0.1
          r_decoder:
             class: "GaussianDecoder"
-            lws: [ 128, 64 ]
+            lws: [ 128, 128 ]
             layer_norm: True
             activation: "relu"
             epsilon: 0.1
          term_decoder:
             class: "BinomialDecoder"
-            lws: [ 128, 64 ]
+            lws: [ 128, 128 ]
             layer_norm: True
             activation: "relu"
    links: []  # Links for observation filters between RSSM levels
    upwards_filters: []
    warmup_steps: [ 'rand' ]
-   kl_betas: [ 0.1 ]
+   kl_betas: [ 1.0 ] # [ 0.1 ]
    kl_reg_betas: [ 0.0 ]
    ema_regularization: 0.0
-   ema_coeff: 0.98
-   ema_update_interval: 5
-   latent_overshooting: [] # [ 10 ]
+   ema_coeff: 0.95
+   ema_update_interval: 10
+   latent_overshooting: [ 5 ]
    temporal_activation_regularization: 0.0
    kl_balance: 0.8
 
@@ -65,16 +65,16 @@ optim:
    lr: 0.0002 #0.0002
 
 trainer:
-   n_train_steps: 100000
+   n_train_steps: 30000
    freeze_model: False
    stop_collect: False
    eval_interval: 100
-   d_batch: 512
+   d_batch: 64
    subtrajectory_len: 50
-   collect_envs: 50
+   collect_envs: 10
    collect_interval: 100
    agent_train_interval: 1
-   model_train_steps: [-1 ]
+   model_train_steps: [ -1 ]
    agent_model_steps: [ 15 ]
    checkpoint_interval: 100
 
@@ -83,18 +83,19 @@ agents:
       # level 0
       - eps_exploration_init: 0.9
         eps_exploration_coeff: 0.999
-        act_entropy_exploration_coeff: 0.001
+        eps_exploration_min: 0.3
+        act_entropy_exploration_coeff: 0.01
         learn_act_entropy_exploration_coeff: False
-        novelty_exploration_coeff: 0.1
-        tr_policy_kl_coeff: 0.1
+        novelty_exploration_coeff: 0.05
+        tr_policy_kl_coeff: 0.05
         tr_policy_ema_update_coeff: 0.98
         use_ema_world_model: False
-        lr_actor: 0.0001
-        lr_critic: 0.0005
+        lr_actor: 0.0002
+        lr_critic: 0.0008
         min_a: <infer>
         max_a: <infer>
-        actor_lws: [ 64, 64, 64 ]
-        critic_lws: [ 64, 64, 64 ]
+        actor_lws: [ 200, 100, 100 ]
+        critic_lws: [ 200, 100, 100 ]
         actor_act_fn: "elu"
         critic_act_fn: "elu"
         actor_layer_norm: True
@@ -103,4 +104,5 @@ agents:
         normalize_rewards: 'running_average'
 
 eval:
+   eval_envs: 20
    eval_steps: 1000
