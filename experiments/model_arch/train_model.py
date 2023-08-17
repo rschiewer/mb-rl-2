@@ -14,7 +14,7 @@ from mdm.logging.not_logger import NotLogger
 from mdm.logging.logger import Scope, GlobalLogger
 from mdm.training.gym_driver import GymEpisodeDriver
 from mdm.policies.agent_policy import *
-from mdm.policies.expert_policies import nav2d_expert_policy
+from mdm.policies.expert_policies import get_expert_policy
 
 
 def main():
@@ -67,8 +67,10 @@ def main():
     train_mem = []
     rand_driver = GymEpisodeDriver(collect_env, lambda *x: collect_env.action_space.sample())
     rand_driver.interact(cfg['random_episodes'], train_mem)
-    expert_driver = GymEpisodeDriver(collect_env, nav2d_expert_policy)
-    expert_driver.interact(cfg['expert_episodes'], train_mem)
+    expert_policy = get_expert_policy(cfg['env_name'])
+    if expert_policy:
+        expert_driver = GymEpisodeDriver(collect_env, expert_policy)
+        expert_driver.interact(cfg['expert_episodes'], train_mem)
 
     # fig, ani = visualize_trajectory(train_mem[0])
     # gif = anim_to_gif(ani)

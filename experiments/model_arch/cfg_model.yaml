@@ -1,8 +1,8 @@
 ---
 neptune_cfg: "../neptune_settings.yaml"
-env_name: "gym_nav2d:nav2dEasySparse-v0" #"gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-v0"
-random_episodes: 10
-expert_episodes: 10
+env_name: "MountainCarContinuous-v0" #"gym_nav2d:nav2dEasySparse-v0" #"gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-v0"
+random_episodes: 1000
+expert_episodes: 1000
 checkpoint_path: "checkpoints"
 final_model_path: "trained_models/model"
 pretrained_model: null #"MBRL-2908"
@@ -18,33 +18,33 @@ mdm:
          epsilon: 0.1
          z_prior_lws: [ 64, 64 ]
          z_post_lws: [ 64, 64 ]
-         layer_norm: True
+         layer_norm: False
          activation: "relu"
          rnn_type: "lstm"
-         latent_dist: "categorical"  #"normal" "categorical" "bernoulli"
+         latent_dist: "normal"  #"normal" "categorical" "bernoulli"
          n_latent_categories: 16
          o_encoder:
             class: "MLPEncoder"
             d_x_encoded: 32
             lws: [ 64, 64 ]
-            layer_norm: True
+            layer_norm: False
             activation: "relu"
          o_decoder:
             class: "GaussianDecoder"
             lws: [ 64, 64 ]
-            layer_norm: True
+            layer_norm: False
             activation: "relu"
             epsilon: 0.1
          r_decoder:
             class: "GaussianDecoder"
             lws: [ 64, 64 ]
-            layer_norm: True
+            layer_norm: False
             activation: "relu"
             epsilon: 0.1
          term_decoder:
             class: "BinomialDecoder"
             lws: [ 64, 64 ]
-            layer_norm: True
+            layer_norm: False
             activation: "relu"
    links: []  # Links for observation filters between RSSM levels
    upwards_filters: []

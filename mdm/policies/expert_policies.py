@@ -92,23 +92,12 @@ def nav2d_expert_policy(env: CacheLastStepEnv | CacheLastStepVecEnv):
     return a
 
 
-"""
-def expert_collect_policy(env: CacheLastStepVecEnv):
-    o = env.last_o
-    agent_pos = o[:, :2]
-    goal_pos = o[:, 2:4]
-    distance = o[:, 4]
-    adjacent = (goal_pos[:, 1] - agent_pos[:, 1])
-    disjacent = (goal_pos[:, 0] - agent_pos[:, 0])
-    angle = np.arctan2(adjacent, disjacent) + math.pi * 1.5
-
-    dist_a = np.where(distance > 0.05, 1.0, 0.1)
-    angle = np.where(angle > 2 * math.pi, angle - 2 * math.pi, angle)
-    angle_a = angle / (2 * math.pi) * 2 - 1
-    angle_a += (np.random.random() - 0.5) * 0.5
-    angle_a = np.clip(angle_a, -1.0, 1.0)
-    a = np.stack([angle_a, dist_a], axis=1).astype(np.float32)
-
-    return a
-"""
+def get_expert_policy(env_name: str):
+    match env_name:
+        case 'gym_nav2d:nav2dEasySparse-v0':
+            return nav2d_expert_policy
+        case 'gym_nav2d:nav2dEasy-v0':
+            return nav2d_expert_policy
+        case _:
+            return None
 
