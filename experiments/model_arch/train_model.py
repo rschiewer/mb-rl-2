@@ -1,11 +1,10 @@
 import argparse
 
-import gym.vector
 import neptune
 from tqdm import tqdm
 
 from mdm.training.train import build_rssms, build_model_opt
-from mdm.utils.gym_nav2d_tools import visualize_overlaid_trajectories
+#from mdm.utils.gym_nav2d_tools import visualize_overlaid_trajectories
 from mdm.utils.utils import *
 from mdm.utils.torch_tools import to_np, to_tensors
 from mdm.training.offline_rl_driver import OfflineRLDriver, SamplingType
@@ -15,6 +14,36 @@ from mdm.logging.logger import Scope, GlobalLogger
 from mdm.training.gym_driver import GymEpisodeDriver
 from mdm.policies.agent_policy import *
 from mdm.policies.expert_policies import get_expert_policy
+
+import gym
+import d4rl_pybullet
+
+
+def convert_offline_env(dataset_env):
+    dataset = dataset_env.get_dataset()
+    total_steps = len(dataset['observations'])
+
+    observations = dataset['observations']
+    actions = dataset['actions']
+    rewards = dataset['rewards']
+    terminals = dataset['terminals']
+
+    mem = []
+    current = {'o': [], 'a': [], 'r': [], 'terminal': [], 'truncated': []}
+    for t in range(total_steps):
+        o_t, a_t, r_t, term_t = observations[t], actions[t], rewards[t], terminals[t]
+        current['o'].append(o_t)
+        current['a'].append(a_t)
+        current['r'].append(r_t)
+        current['terminal'].append(term_t)
+        current['truncated'].append(term_t)
+        if term_t == 1:
+            current = {k: np.stack(v) for k, v in current.items()}
+            current = {k: np.expand_dims(v, -1) if v.ndim == 1 else v for k, v in current.items()}
+            mem.append(current)
+            current = {'o': [], 'a': [], 'r': [], 'terminal': [], 'truncated': []}
+
+    return mem
 
 
 def main():
@@ -31,9 +60,10 @@ def main():
         logger = NeptuneLogger(**neptune_cfg)
     else:
         logger = NotLogger()
-    GlobalLogger.bind(logger, {'mask_model': 25, 'mask_latent_overshooting': 25})  # for debugging
+    GlobalLogger.bind(logger, {'_mask_model': 25, '_mask_latent_overshooting': 25})  # for debugging
 
     env = gym.make(cfg['env_name'])
+    dataset_env = getattr(env, 'get_dataset', False)
     env = CacheLastStepEnv(env)
 
     def make_env_fn():
@@ -61,16 +91,18 @@ def main():
     model = model.to('cuda')
     opt_model = build_model_opt(model, cfg)
 
-    collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['trainer']['collect_envs'])
-    collect_env = CacheLastStepVecEnv(collect_env)
-
-    train_mem = []
-    rand_driver = GymEpisodeDriver(collect_env, lambda *x: collect_env.action_space.sample())
-    rand_driver.interact(cfg['random_episodes'], train_mem)
-    expert_policy = get_expert_policy(cfg['env_name'])
-    if expert_policy:
-        expert_driver = GymEpisodeDriver(collect_env, expert_policy)
-        expert_driver.interact(cfg['expert_episodes'], train_mem)
+    if dataset_env:
+        train_mem = convert_offline_env(gym.make(cfg['env_name']))
+    else:
+        collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['trainer']['collect_envs'])
+        collect_env = CacheLastStepVecEnv(collect_env)
+        train_mem = []
+        rand_driver = GymEpisodeDriver(collect_env, lambda *x: collect_env.action_space.sample())
+        rand_driver.interact(cfg['random_episodes'], train_mem)
+        expert_policy = get_expert_policy(cfg['env_name'])
+        if expert_policy:
+            expert_driver = GymEpisodeDriver(collect_env, expert_policy)
+            expert_driver.interact(cfg['expert_episodes'], train_mem)
 
     # fig, ani = visualize_trajectory(train_mem[0])
     # gif = anim_to_gif(ani)
@@ -84,7 +116,6 @@ def main():
     test_mem = train_mem[:i_split]
 
     train_driver = OfflineRLDriver(train_mem, sampling_type=SamplingType.RANDOM)
-    test_driver = OfflineRLDriver(test_mem, sampling_type=SamplingType.RANDOM)
 
     # start training
     logger.start_session()
@@ -95,7 +126,7 @@ def main():
         batch = prepare_data(batch)
 
         model.train()
-        # model_batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
+        batch = valid_subtrajectories_2(batch, cfg['trainer']['subtrajectory_len'])
         train_losses, pred, targets, states_below = model.train_step(batch, opt_model,
                                                                      model_steps=cfg['trainer']['model_train_steps'])
         logger.log(to_np(train_losses), Scope.TRAIN(), i_step)
@@ -109,6 +140,7 @@ def main():
                                                                               force_warmup=[-1])
             logger.log(to_np(eval_losses), Scope.TEST(), i_step)
 
+            """
             trajs_orig_pad = trajectories_from_simulation(batch)  # do this to get padded versions of orig trajectories
             trajs_sim = trajectories_from_simulation(pred[0])
             fig, anim = visualize_overlaid_trajectories(trajs_sim[0], trajs_orig_pad[0])
@@ -141,6 +173,7 @@ def main():
                 logger.log_plot(fig_to_img(fig), Scope.TEST() / f'model/trajectory_deviation_{l}')
                 plt.close(fig)
                 del fig
+            """
 
     # store model and output run id
     p = here() / cfg['final_model_path'][:cfg['final_model_path'].rindex('/')]
