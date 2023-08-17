@@ -150,6 +150,12 @@ def cfg_infer_missing_values(cfg: dict,
 
     # agents
     for agent_lvl in range(len(cfg['mdm']['rssm_modules'])):
+        try:
+            cfg['agents']
+        except KeyError:
+            print('No agent configuration found, config values for agents won\'t be inferred')
+            continue
+
         cfg_r_max = cfg['agents']['r_max'][agent_lvl]
         if agent_lvl == 0:
             cfg_r_max['min_a'] = tuple(env.action_space.low)
