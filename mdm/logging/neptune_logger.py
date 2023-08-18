@@ -56,14 +56,14 @@ class NeptuneLogger(Logger):
         if not self._run:
             if self._run_id:
                 self._run = neptune.init_run(project=self._project, run=self._run_id, api_token=self.token,
-                                         capture_stdout=False, capture_stderr=False)
+                                             capture_stdout=False, capture_stderr=False)
             else:
                 self._run = neptune.init_run(project=self._project, api_token=self.token, capture_stdout=False,
-                                         capture_stderr=False)
+                                             capture_stderr=False)
                 self._run_id = self._run['sys/id'].fetch()
                 if self._run_id.startswith('https'):
                     i_start = self._run_id.rindex('/')
-                    self._run_id = self._run_id[i_start+1:]
+                    self._run_id = self._run_id[i_start + 1:]
 
     def stop_session(self):
         if self._run:
@@ -75,6 +75,8 @@ class NeptuneLogger(Logger):
             message: Dict[str, Any],
             scope: Scope,
             time_step: int = None):
+        if time_step is not None:
+            time_step = int(time_step)
         for name, value in message.items():
             full_scope = scope / name
             if isinstance(value, np.ndarray):
@@ -90,12 +92,14 @@ class NeptuneLogger(Logger):
                 self.log_plot(value, full_scope, time_step=time_step)
             elif isinstance(value, (Path, InMemoryFile)):
                 self.log_file(value, full_scope, time_step=time_step)
-            #elif isinstance(value, str) and Path(value).exists():
+            # elif isinstance(value, str) and Path(value).exists():
             #    self.log_file(value, full_scope, time_step=time_step)
             else:
                 self._run[str(full_scope)].log(value, step=time_step)
 
     def log_object(self, object: Any, scope: Scope, time_step: int = None):
+        if time_step is not None:
+            time_step = int(time_step)
         if isinstance(object, io.BytesIO):
             timestamp = time.time_ns()
             pid = os.getpid()
@@ -111,6 +115,8 @@ class NeptuneLogger(Logger):
                  path: str | Path | InMemoryFile,
                  scope: Scope,
                  time_step: int = None):
+        if time_step is not None:
+            time_step = int(time_step)
         if isinstance(path, (str, Path)):
             path = InMemoryFile(path)
 
@@ -121,9 +127,9 @@ class NeptuneLogger(Logger):
         stream_file = File.from_stream(path.buffer, extension=path.extension)
         self._run[str(scope)].upload(stream_file, wait=True)
 
-        #self._run[str(scope)].append(str(new_path), wait=True)
+        # self._run[str(scope)].append(str(new_path), wait=True)
 
     def log_plot(self, figure: Image, scope: Union[Scope, str], time_step: int = None):
+        if time_step is not None:
+            time_step = int(time_step)
         self._run[str(scope)].log(figure, step=time_step, wait=True)
-
-
