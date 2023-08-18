@@ -113,28 +113,17 @@ class NeptuneLogger(Logger):
                  time_step: int = None):
         if isinstance(path, (str, Path)):
             path = InMemoryFile(path)
-            #path = str(path)
-            #i_start = path.rindex('/') + 1 if '/' in path else 0
-            #fname = path[i_start:]
-            #if time_step:
-            #    fname = f'{time_step}_{fname}'
-            #self._run[str(scope / fname)].upload(path, wait=True)
-        #elif isinstance(path, InMemoryFile):
-        #    stream_file = File.from_stream(path.buffer, extension=path.extension)
-        #    self._run[str(scope)].upload(stream_file, wait=False)
-        #else:
-        #    raise ValueError(f'Unsupported resource format for upload: {type(path)}')
 
         if time_step is not None:
             path.name += f'_{time_step}'
         scope /= path.name
 
         stream_file = File.from_stream(path.buffer, extension=path.extension)
-        self._run[str(scope)].upload(stream_file, wait=False)
+        self._run[str(scope)].upload(stream_file, wait=True)
 
         #self._run[str(scope)].append(str(new_path), wait=True)
 
     def log_plot(self, figure: Image, scope: Union[Scope, str], time_step: int = None):
-        self._run[str(scope)].log(figure, step=time_step)
+        self._run[str(scope)].log(figure, step=time_step, wait=True)
 
 
