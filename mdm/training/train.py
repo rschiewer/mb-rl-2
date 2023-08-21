@@ -7,7 +7,6 @@ from math import floor, ceil
 
 import torch
 from sklearn.decomposition import PCA
-from torch.profiler import record_function
 import matplotlib.pyplot as plt
 from matplotlib.colors import hsv_to_rgb, to_rgba
 from matplotlib.patches import Rectangle
@@ -32,7 +31,7 @@ from mdm.utils.gym_nav2d_tools import gen_regular_grid_trajectories, visualize_o
 
 
 def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collect_fn, eval_env, test_driver,
-                train_driver, logger, log_videos: bool = True, video_env=None, profile=False):
+                train_driver, logger, log_videos: bool = True, video_env=None):
     model_train_steps = cfg['trainer']['model_train_steps']
     freeze_model = cfg['trainer']['freeze_model'] if cfg['trainer']['freeze_model'] > 0 else sys.maxsize
     stop_collect = cfg['trainer']['stop_collect'] if cfg['trainer']['stop_collect'] > 0 else sys.maxsize
@@ -43,8 +42,6 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
     # grid_trajs = gen_regular_grid_trajectories(eval_env.env_fns[0](), trajs_vert=10, trajs_horiz=10, step_size=1.0)
     # grid_trajs = to_tensors(grid_trajs, model.device, padding='repeat')
     # grid_trajs = prepare_data(grid_trajs)
-    if profile:
-        cfg['trainer']['n_train_steps'] = 1
 
     for i_step in tqdm(range(cfg['trainer']['n_train_steps']), desc='Training Progress'):
         batch = train_driver.interact(cfg['trainer']['d_batch'])
@@ -59,18 +56,17 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
         else:
             model_batch = batch
 
-        with record_function('model_training'):
-            model.train()
-            agent_eval_mode(r_max_agents + goal_seeking_agents)
-            if i_step < freeze_model:
-                train_losses, pred, targets, states_below = model.train_step(model_batch, opt_model,
-                                                                             model_steps=model_train_steps)
-            else:
-                train_losses, pred, targets, states_below = model.eval_step(model_batch, model_steps=model_train_steps,
-                                                                            force_warmup=[-1 for _ in
-                                                                                          range(model.levels)])
+        model.train()
+        agent_eval_mode(r_max_agents + goal_seeking_agents)
+        if i_step < freeze_model:
+            train_losses, pred, targets, states_below = model.train_step(model_batch, opt_model,
+                                                                         model_steps=model_train_steps)
+        else:
+            train_losses, pred, targets, states_below = model.eval_step(model_batch, model_steps=model_train_steps,
+                                                                        force_warmup=[-1 for _ in
+                                                                                      range(model.levels)])
 
-                print('freezing model')
+            print('freezing model')
         logger.log(to_np(train_losses), Scope.TRAIN(), i_step)
 
         # train model in observation mode
@@ -85,27 +81,25 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
 
             for l in range(model.levels):
 
-                with record_function(f'prepare_agent_data_{l}'):
-                    # use all time steps of teacher forcing rollout from model as starting point
-                    start_state_lvl, start_state_mask = rssm_states_seq_to_batch(pred[l], targets[l]['terminal'])
-                    # prevent gradient flow into the start state
-                    start_state_lvl = rssm_detach_state(*start_state_lvl)
+                # use all time steps of teacher forcing rollout from model as starting point
+                start_state_lvl, start_state_mask = rssm_states_seq_to_batch(pred[l], targets[l]['terminal'])
+                # prevent gradient flow into the start state
+                start_state_lvl = rssm_detach_state(*start_state_lvl)
 
                 # mask to eliminate training steps that start after an episode has already ended
 
-                with record_function(f'r_max_agent_training_{l}'):
-                    # r_max agent
-                    r_max_agent, r_max_actor_opt, r_max_critic_opt = model.r_max_agents[l]
-                    abstract_level = l > 0
-                    r_max_simulation = r_max_agent.act_in_sim(start_state_lvl, model, agent_model_steps[l],
-                                                              sample_states=sample_model, sample_actions=True,
-                                                              reconstruct=not abstract_level)
-                    r_max_losses = r_max_agent.train_step(r_max_simulation['agent'],
-                                                          first_step_mask=start_state_mask.unsqueeze(0),
-                                                          actor_optimizer=r_max_actor_opt,
-                                                          critic_optimizer=r_max_critic_opt)
-                    r_max_losses['obtained_reward'] = torch.stack(r_max_simulation['agent']['r']).mean()
-                    logger.log(to_np(r_max_losses), Scope.TRAIN() / f'r_max_agent/{l}/', i_step)
+                # r_max agent
+                r_max_agent, r_max_actor_opt, r_max_critic_opt = model.r_max_agents[l]
+                abstract_level = l > 0
+                r_max_simulation = r_max_agent.act_in_sim(start_state_lvl, model, agent_model_steps[l],
+                                                          sample_states=sample_model, sample_actions=True,
+                                                          reconstruct=not abstract_level)
+                r_max_losses = r_max_agent.train_step(r_max_simulation['agent'],
+                                                      first_step_mask=start_state_mask.unsqueeze(0),
+                                                      actor_optimizer=r_max_actor_opt,
+                                                      critic_optimizer=r_max_critic_opt)
+                r_max_losses['obtained_reward'] = torch.stack(r_max_simulation['agent']['r']).mean()
+                logger.log(to_np(r_max_losses), Scope.TRAIN() / f'r_max_agent/{l}/', i_step)
 
                 if GlobalLogger.can_log('sanity_check_goal_computation', i_step):
                     if l < model.levels - 1:
@@ -380,7 +374,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
             collect_fn(explore=True)
 
         # eval =========================================================================================================
-        if not profile and i_step % cfg['trainer']['eval_interval'] == 0:
+        if i_step % cfg['trainer']['eval_interval'] == 0:
             agent_eval_mode(r_max_agents + goal_seeking_agents)
             model.eval()
 
@@ -419,6 +413,8 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 state = {k: pred[0][k][0] for k in rssm_state_keys()}
                 state = rssm_remove_labels(state)
                 for i_goal, goal in enumerate(goals):
+                    #i_state = i_goal * chunk_size
+                    #state = rssm_remove_labels({k: pred[0][k][i_state] for k in rssm_state_keys()})
                     n_steps = np.minimum(total_steps_remaining, chunk_size)
                     simulation = gsa.act_in_sim(env_start_state=state, sim_env=model, n_steps=n_steps, goal=goal,
                                                 sample_actions=False, disable_exploration=True, sample_states=False,
@@ -431,13 +427,6 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 init_obs = targets[0]['o'][0][0].detach().cpu().numpy()
                 init_obs_unnorm = env.unnormalize_observation(init_obs)
                 env_init_options = {'agent_x': init_obs_unnorm[0], 'agent_y': init_obs_unnorm[1]}
-                # env.reset(options=env_init_options)
-                # env.teleport_agent(init_obs_unnorm[0], init_obs_unnorm[1])
-                # o = env.last_o
-                # plt.scatter(o[0], o[1], label='current agent pos in env', marker='x')
-                # plt.scatter(init_obs[0], init_obs[1], label='desired init pos')
-                # plt.legend()
-                # plt.show()
                 gsa_executed_actions_mem = collect_data(env, a_gsa_sim.shape[0] + 1, PredefinedPolicy(a_gsa_sim),
                                                         options=env_init_options)
 

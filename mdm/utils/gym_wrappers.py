@@ -137,7 +137,6 @@ class CacheLastStepVecEnv(gym.Wrapper):
         else:
             self.current_step += 1
 
-        #return o, r, term, trunc, infos
         return None, None, None, None, None
 
 

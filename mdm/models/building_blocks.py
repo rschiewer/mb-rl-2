@@ -9,13 +9,13 @@ from enum import Enum
 import torch
 import torch.masked as torchm
 import numpy as np
-from mdm.utils.torch_tools import (layers_with_activation as lwa, get_dist_params, RnnStateType,
+from mdm.utils.torch_tools import (layers_with_activation as lwa, get_dist_params,
                                    sample_from_categorical, ManagedStatefulTrainingModule, detach_dist, concat_dists,
                                    disable_torch_compile, stack_tensor_dicts, concat_tensor_dicts)
 from torch.profiler import record_function
 from mdm.models.fastrnns import LayerNormLSTMCell
 
-AnySameType = TypeVar('AnySameType')
+RnnStateType = TypeVar('RnnStateType', torch.Tensor, Tuple[torch.Tensor, torch.Tensor])
 
 
 class DeprecatedRSSM(torch.nn.Module):

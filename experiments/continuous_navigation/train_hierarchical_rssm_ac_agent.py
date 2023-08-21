@@ -29,7 +29,7 @@ def main():
     parser.add_argument('-n_collect', type=int)
     args = parser.parse_args()
 
-    cfg = load_yaml(here() / 'cfg_simple_rssm_train.yaml')
+    cfg = load_yaml(here() / 'cfg_rssm_train.yaml')
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
     if args.d_batch:
@@ -42,11 +42,11 @@ def main():
         logger = NotLogger()
 
     # for debugging
-    GlobalLogger.bind(logger, {'_mask_model': 50,
-                               '_mask_latent_overshooting': 50,
-                               '_mask_agent': 50,
-                               '_simulated_ground_truth_goal_distance': 50,
-                               '_sanity_check_goal_computation': 50})
+    #GlobalLogger.bind(logger, {'_mask_model': 50,
+    #                           '_mask_latent_overshooting': 50,
+    #                           '_mask_agent': 50,
+    #                           '_simulated_ground_truth_goal_distance': 50,
+    #                           '_sanity_check_goal_computation': 50})
 
     env = gym.make(cfg['env_name'])
     env = CacheLastStepEnv(env)
@@ -76,7 +76,6 @@ def main():
         pretrained_model = torch.load(here() / mdl_path)
         copy_params(pretrained_model, model)
     model = model.to('cuda')
-    #model = torch.jit.script(model)
 
     opt_model = build_model_opt(model, cfg)
 
@@ -90,10 +89,8 @@ def main():
     #opt_model = torch.optim.Adam(params, **cfg['optim'])
     # temporary hack end
 
-    #collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['trainer']['collect_envs'])
     collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['trainer']['collect_envs'])
     collect_env = CacheLastStepVecEnv(collect_env)
-    #eval_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['eval']['eval_envs'])
     eval_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['eval']['eval_envs'])
     eval_env = CacheLastStepVecEnv(eval_env)
 
@@ -142,14 +139,12 @@ def main():
 
     print('Starting Training')
     #with torch.autograd.detect_anomaly(check_nan=True):
-    profiling_run = False
     train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collect_fn, eval_env, test_driver,
-                train_driver, logger, profile=profiling_run, log_videos=False)
-    if profile:
-        with profile(activities=[ProfilerActivity.CPU], record_shapes=True, profile_memory=True) as prof:
-            train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collect_fn, eval_env, test_driver,
-                train_driver, logger, profile=profiling_run, log_videos=False)
-        print(prof.key_averages(group_by_input_shape=True).table(sort_by="cpu_time_total", row_limit=10))
+                train_driver, logger, log_videos=True)
+    #with profile(activities=[ProfilerActivity.CPU], record_shapes=True, profile_memory=True) as prof:
+    #    train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collect_fn, eval_env, test_driver,
+    #        train_driver, logger, profile=profiling_run, log_videos=True)
+    #print(prof.key_averages(group_by_input_shape=True).table(sort_by="cpu_time_total", row_limit=10))
 
     collect_env.close()
     eval_env.close()
