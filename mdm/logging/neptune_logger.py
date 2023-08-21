@@ -11,6 +11,7 @@ import neptune
 from matplotlib.figure import Figure
 from neptune import Run
 from neptune.types import File
+from neptune.utils import stringify_unsupported
 import numpy as np
 from PIL import Image
 
@@ -82,21 +83,20 @@ class NeptuneLogger(Logger):
             if isinstance(value, np.ndarray):
                 value = value.flatten()
                 for v in value:
-                    self._run[str(full_scope)].log(v, step=time_step)
+                    self._run[str(full_scope)].append(v)
             elif isinstance(value, dict):
-                self.log(value, full_scope, time_step=time_step)
+                self.log(value, full_scope)
             elif isinstance(value, list):
                 for v in value:
-                    self.log({name: v}, scope, time_step=time_step)
+                    self.log({name: v}, scope, time_step)
             elif isinstance(value, Figure):
-                self.log_plot(value, full_scope, time_step=time_step)
+                self.log_plot(value, full_scope, time_step)
             elif isinstance(value, (Path, InMemoryFile)):
-                self.log_file(value, full_scope, time_step=time_step)
-            # elif isinstance(value, str) and Path(value).exists():
-            #    self.log_file(value, full_scope, time_step=time_step)
+                self.log_file(value, full_scope, time_step)
             else:
-                self._run[str(full_scope)].log(value, step=time_step)
+                self._run[str(full_scope)].append(stringify_unsupported(value))
 
+    """
     def log_object(self, object: Any, scope: Scope, time_step: int = None):
         if time_step is not None:
             time_step = int(time_step)
@@ -106,10 +106,11 @@ class NeptuneLogger(Logger):
             tmp_file_name = f'.{pid}_{timestamp}'
             with open(tmp_file_name, 'wb') as f:
                 f.write(object.read())
-            self._run[str(scope)].log(tmp_file_name, step=time_step)
+            self._run[str(scope)].upload(tmp_file_name)
             os.remove(tmp_file_name)
         else:
             raise ValueError('Unknown type for logging')
+    """
 
     def log_file(self,
                  path: str | Path | InMemoryFile,
@@ -127,9 +128,7 @@ class NeptuneLogger(Logger):
         stream_file = File.from_stream(path.buffer, extension=path.extension)
         self._run[str(scope)].upload(stream_file, wait=True)
 
-        # self._run[str(scope)].append(str(new_path), wait=True)
-
     def log_plot(self, figure: Image, scope: Union[Scope, str], time_step: int = None):
         if time_step is not None:
             time_step = int(time_step)
-        self._run[str(scope)].log(figure, step=time_step, wait=True)
+        self._run[str(scope)].append(figure, wait=True)

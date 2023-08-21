@@ -93,13 +93,6 @@ class Logger(ABC):
         pass
 
     @abstractmethod
-    def log_object(self,
-                   object: Any,
-                   scope: Scope,
-                   time_step: int = None):
-        pass
-
-    @abstractmethod
     def log_file(self,
                  path: Union[str, Path],
                  scope: Scope,
