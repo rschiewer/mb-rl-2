@@ -1,6 +1,6 @@
 import io
 import shutil
-from typing import Dict, Any, Union
+from typing import Dict, Any, Union, List, Sequence
 import os
 from pathlib import Path
 import time
@@ -19,7 +19,31 @@ from mdm.logging.logger import Logger, Scope
 from mdm.utils.utils import InMemoryFile
 
 
+_NUMERIC_KINDS = set('buifc')
+
+
+def _is_primitive_type(x):
+    return (isinstance(x, (int, float, bool, str))
+            or np.asarray(x).dtype.kind in _NUMERIC_KINDS and np.isscalar(x)
+            or x is None)
+
+
+def _contains_primitives(seq: Sequence):
+    elements_primitive = [_is_primitive_type(x) for x in seq]
+    if all(elements_primitive):
+        return True
+    return False
+
+
+def _contains_dicts(seq: Sequence):
+    elements_dicts = [isinstance(x, dict) for x in seq]
+    if all(elements_dicts):
+        return True
+    return False
+
+
 class NeptuneLogger(Logger):
+
 
     def __init__(self,
                  project: str,
@@ -68,8 +92,11 @@ class NeptuneLogger(Logger):
 
     def stop_session(self):
         if self._run:
-            self._run.wait()
-            self._run.stop()
+            try:
+                self._run.wait()
+                self._run.stop()
+            except ValueError:
+                pass
             self._run = None
 
     def log(self,
@@ -80,21 +107,27 @@ class NeptuneLogger(Logger):
             time_step = int(time_step)
         for name, value in message.items():
             full_scope = scope / name
-            if isinstance(value, np.ndarray):
-                value = value.flatten()
-                for v in value:
-                    self._run[str(full_scope)].append(v)
+            if _is_primitive_type(value):
+                self._run[str(full_scope)].append(value, step=time_step)
             elif isinstance(value, dict):
-                self.log(value, full_scope)
-            elif isinstance(value, list):
-                for v in value:
-                    self.log({name: v}, scope, time_step)
+                self.log(value, full_scope, time_step)
+            elif isinstance(value, Sequence):
+                if len(value) == 1:
+                    self.log({name: value[0]}, scope, time_step)
+                elif _contains_primitives(value):
+                    self._run[str(full_scope)].append(str(value), step=time_step)
+                elif _contains_dicts(value):
+                    for i_elem, elem in enumerate(value):
+                        self.log(elem, full_scope / i_elem, time_step)
+                else:
+                    raise ValueError(f'Unsupported logging item {value} in list at scope {full_scope}')
             elif isinstance(value, Figure):
                 self.log_plot(value, full_scope, time_step)
             elif isinstance(value, (Path, InMemoryFile)):
                 self.log_file(value, full_scope, time_step)
             else:
-                self._run[str(full_scope)].append(stringify_unsupported(value))
+                raise ValueError(f'Unsupported logging item {value} at scope {full_scope}')
+                #self._run[str(full_scope)].append(stringify_unsupported(value), step=time_step)
 
     """
     def log_object(self, object: Any, scope: Scope, time_step: int = None):
@@ -126,9 +159,9 @@ class NeptuneLogger(Logger):
         scope /= path.name
 
         stream_file = File.from_stream(path.buffer, extension=path.extension)
-        self._run[str(scope)].upload(stream_file, wait=True)
+        self._run[str(scope)].upload(stream_file)
 
     def log_plot(self, figure: Image, scope: Union[Scope, str], time_step: int = None):
         if time_step is not None:
             time_step = int(time_step)
-        self._run[str(scope)].append(figure, wait=True)
+        self._run[str(scope)].append(figure)
