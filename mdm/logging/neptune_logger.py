@@ -24,8 +24,7 @@ _NUMERIC_KINDS = set('buifc')
 
 def _is_primitive_type(x):
     return (isinstance(x, (int, float, bool, str))
-            or np.asarray(x).dtype.kind in _NUMERIC_KINDS and np.isscalar(x)
-            or x is None)
+            or np.asarray(x).dtype.kind in _NUMERIC_KINDS and np.isscalar(x))
 
 
 def _contains_primitives(seq: Sequence):
@@ -109,6 +108,8 @@ class NeptuneLogger(Logger):
             full_scope = scope / name
             if _is_primitive_type(value):
                 self._run[str(full_scope)].append(value, step=time_step)
+            elif value is None:
+                self._run[str(full_scope)].append(str(value), step=time_step)
             elif isinstance(value, dict):
                 self.log(value, full_scope, time_step)
             elif isinstance(value, Sequence):
@@ -128,22 +129,6 @@ class NeptuneLogger(Logger):
             else:
                 raise ValueError(f'Unsupported logging item {value} at scope {full_scope}')
                 #self._run[str(full_scope)].append(stringify_unsupported(value), step=time_step)
-
-    """
-    def log_object(self, object: Any, scope: Scope, time_step: int = None):
-        if time_step is not None:
-            time_step = int(time_step)
-        if isinstance(object, io.BytesIO):
-            timestamp = time.time_ns()
-            pid = os.getpid()
-            tmp_file_name = f'.{pid}_{timestamp}'
-            with open(tmp_file_name, 'wb') as f:
-                f.write(object.read())
-            self._run[str(scope)].upload(tmp_file_name)
-            os.remove(tmp_file_name)
-        else:
-            raise ValueError('Unknown type for logging')
-    """
 
     def log_file(self,
                  path: str | Path | InMemoryFile,
