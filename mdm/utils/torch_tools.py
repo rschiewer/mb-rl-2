@@ -692,7 +692,7 @@ def to_np(data_dict: Dict[str, Union[torch.Tensor, Dict]]):
         if isinstance(v, dict):
             np_data_dict[k] = to_np(v)
         elif isinstance(v, torch.Tensor):
-            np_data_dict[k] = v.detach().cpu().numpy()
+            np_data_dict[k] = v.detach().cpu().numpy().item()
         elif np.isscalar(v):
             np_data_dict[k] = v
         else:
