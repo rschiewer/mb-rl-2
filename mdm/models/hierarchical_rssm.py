@@ -13,7 +13,6 @@ import torch.distributions as torchd
 from torch.distributions import kl_divergence
 from torch.nn import ModuleList, ModuleDict
 import matplotlib.pyplot as plt
-from torch.profiler import record_function
 
 from mdm.models.building_blocks import *
 from mdm.models.dynamics_model import DynamicsModel
@@ -70,7 +69,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         #    mod.o_decoder = torch.jit.script(mod.o_decoder)
         #    mod.r_decoder = torch.jit.script(mod.r_decoder)
         #    mod.term_decoder = torch.jit.script(mod.term_decoder)
-        #rssm_modules = [torch.jit.script(m) for m in rssm_modules]
+        rssm_modules = [torch.jit.script(m) for m in rssm_modules]
         #upwards_filters = [ModuleDict({k: torch.jit.script(flt) for k, flt in flt_lvl.items()})
         #                   for flt_lvl in upwards_filters]
         #for i, agent in enumerate(r_max_agents):
@@ -261,73 +260,72 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                        sample_output: bool = True,
                        reconstruct: bool = True,
                        use_ema_modules: bool = False):
-        with record_function('forward_static'):
-            mdl = self._ema_rssm_modules[level] if use_ema_modules else self.rssm_modules[level]
-            mdl_other = self.rssm_modules[level] if use_ema_modules else self._ema_rssm_modules[level]
-            memory = {} if memory is None else memory
-            memory_other = {} if memory_other is None else memory_other
-            o, a = trajectory['o'], trajectory['a']
+        mdl = self._ema_rssm_modules[level] if use_ema_modules else self.rssm_modules[level]
+        mdl_other = self.rssm_modules[level] if use_ema_modules else self._ema_rssm_modules[level]
+        memory = {} if memory is None else memory
+        memory_other = {} if memory_other is None else memory_other
+        o, a = trajectory['o'], trajectory['a']
 
-            if n_steps < 0:
-                n_steps = a.shape[0]
-            else:
-                assert n_steps <= a.shape[0], f'Not enough actions available ({a.shape[0]}) to go {n_steps} steps'
+        if n_steps < 0:
+            n_steps = a.shape[0]
+        else:
+            assert n_steps <= a.shape[0], f'Not enough actions available ({a.shape[0]}) to go {n_steps} steps'
 
-            if n_warmup < 0:
-                n_warmup = n_steps
+        if n_warmup < 0:
+            n_warmup = n_steps
 
-            if n_warmup > 0:
-                o = mdl.o_encoder(o)
+        if n_warmup > 0:
+            o = mdl.o_encoder(o)
 
-            s_mem, model_state_mem = mdl.scan(a, o, start_state, n_warmup, sample_state)
-            #_, model_state_mem_other = mdl_other.scan(a, o, start_state, n_warmup, sample_state)
+        s_mem, model_state_mem = mdl.scan(a, o, start_state, n_warmup, sample_state)
+        #_, model_state_mem_other = mdl_other.scan(a, o, start_state, n_warmup, sample_state)
 
-            # sample_output = False
-            # TODO: rework decoders to return tensors instead of distributions so mdl.decode() can be called once
-            #       before this loop to decode all time steps at once
-            # for a_t, s_t, state_t in zip(a, s_mem, model_state_mem):
-            #    pred = mdl.decode(s_t, sample=sample_output, reconstruct_observation=reconstruct)
-            #    append_memory(memory, **pred, **rssm_add_labels(state_t), a=a_t)
-            # for state_t in model_state_mem_other:
-            #    append_memory(memory_other, **pred, **rssm_add_labels(state_t))
+        # sample_output = False
+        # TODO: rework decoders to return tensors instead of distributions so mdl.decode() can be called once
+        #       before this loop to decode all time steps at once
+        # for a_t, s_t, state_t in zip(a, s_mem, model_state_mem):
+        #    pred = mdl.decode(s_t, sample=sample_output, reconstruct_observation=reconstruct)
+        #    append_memory(memory, **pred, **rssm_add_labels(state_t), a=a_t)
+        # for state_t in model_state_mem_other:
+        #    append_memory(memory_other, **pred, **rssm_add_labels(state_t))
 
-            pred = mdl.decode(torch.stack(s_mem), sample=sample_output, reconstruct_observation=reconstruct)
-            pred = {k: v.unbind(0) for k, v in pred.items()}
-            pred.update(rssm_add_labels(rssm_stack_state_list(model_state_mem)))
-            pred['a'] = a.unbind(0)
-            extend_memory(memory, pred)
-            # TODO: hack until proper ema model querying is implemented
-            extend_memory(memory_other, rssm_add_labels(rssm_stack_state_list(model_state_mem)))
-            #extend_memory(memory_other, rssm_add_labels(rssm_stack_state_list(model_state_mem_other)))
+        pred = mdl.decode(torch.stack(s_mem), sample=sample_output, reconstruct_observation=reconstruct)
+        pred = {k: v.unbind(0) for k, v in pred.items()}
+        pred.update(rssm_add_labels(rssm_stack_state_list(model_state_mem)))
+        pred['a'] = a.unbind(0)
+        extend_memory(memory, pred)
+        # TODO: hack until proper ema model querying is implemented
+        extend_memory(memory_other, rssm_add_labels(rssm_stack_state_list(model_state_mem)))
+        #extend_memory(memory_other, rssm_add_labels(rssm_stack_state_list(model_state_mem_other)))
 
-            state = model_state_mem[-1]
+        state = model_state_mem[-1]
 
-            """
-            state = start_state
-            for t in range(n_steps):
-                if t < n_warmup:
-                    o_t = o[t]
-                    use_posterior = True
-                else:
-                    o_t = None
-                    use_posterior = False
-                a_t = a[t]
+        """
+    state = start_state
+    for t in range(n_steps):
+    if t < n_warmup:
+    o_t = o[t]
+    use_posterior = True
+    else:
+    o_t = None
+    use_posterior = False
+    a_t = a[t]
+    
+    s, next_state = mdl(a=a_t, o_enc=o_t, last_state=state, use_posterior=use_posterior,
+    sample_state=sample_state)
+    # pred_other, next_state_other = mdl_other(a=a_t, o_enc=o_t, last_state=state, use_posterior=use_posterior,
+    #                                         sample_state=sample_state, sample_output=sample_output,
+    #                                         reconstruct=reconstruct)
+    
+    pred = mdl.decode(s, sample=sample_output, reconstruct_observation=reconstruct)
+    update_memory(memory, **pred, **add_labels(next_state), a=a_t)
+    # update_memory(memory_other, **pred_other, **next_state_other)
+    update_memory(memory_other, **pred, **add_labels(next_state), a=a_t)
+    
+    state = next_state
+    """
 
-                s, next_state = mdl(a=a_t, o_enc=o_t, last_state=state, use_posterior=use_posterior,
-                                       sample_state=sample_state)
-                # pred_other, next_state_other = mdl_other(a=a_t, o_enc=o_t, last_state=state, use_posterior=use_posterior,
-                #                                         sample_state=sample_state, sample_output=sample_output,
-                #                                         reconstruct=reconstruct)
-
-                pred = mdl.decode(s, sample=sample_output, reconstruct_observation=reconstruct)
-                update_memory(memory, **pred, **add_labels(next_state), a=a_t)
-                # update_memory(memory_other, **pred_other, **next_state_other)
-                update_memory(memory_other, **pred, **add_labels(next_state), a=a_t)
-
-                state = next_state
-            """
-
-            return memory, memory_other, state
+        return memory, memory_other, state
 
     def filter_up(self,
                   o: List[torch.Tensor] | None = None,
@@ -374,40 +372,38 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                      sample_output: bool = True,
                      reconstruct: bool = True,
                      use_ema_modules: bool = False):
-        with record_function('ground_level'):
-            assert level > 0, 'Level 0 grounding is done automatically in forward_static() method'
+        assert level > 0, 'Level 0 grounding is done automatically in forward_static() method'
 
-            memory_targets = {} if memory_targets is None else memory_targets
-            memory_states_below = {} if memory_states_below is None else memory_states_below
-            n_steps = self.strides[level]
-            assert n_steps <= len(trajectory_below['z']), f'Not enough below level time steps to ground level {level}'
-            simulated_ground_truth = self.filter_up(o=trajectory_below['z'], r=trajectory_below['r'],
-                                                    terminal=trajectory_below['terminal'], level=level,
-                                                    respect_terminal_flag=False,
-                                                    n_steps=n_steps)
-            d_batch = trajectory_below['o'][0].shape[0]
-            device = trajectory_below['o'][0].device
-            simulated_ground_truth['a'] = self.rssm_modules[level].zero_a(d_batch, device).unsqueeze(
-                0)  # one dummy action
+        memory_targets = {} if memory_targets is None else memory_targets
+        memory_states_below = {} if memory_states_below is None else memory_states_below
+        n_steps = self.strides[level]
+        assert n_steps <= len(trajectory_below['z']), f'Not enough below level time steps to ground level {level}'
+        simulated_ground_truth = self.filter_up(o=trajectory_below['z'], r=trajectory_below['r'],
+                                                terminal=trajectory_below['terminal'], level=level,
+                                                respect_terminal_flag=False,
+                                                n_steps=n_steps)
+        d_batch = trajectory_below['o'][0].shape[0]
+        device = trajectory_below['o'][0].device
+        simulated_ground_truth['a'] = self.rssm_modules[level].zero_a(d_batch, device).unsqueeze(0)  # dummy action
 
-            for k, v in simulated_ground_truth.items():
-                assert v.shape[0] == 1, f'k is too long: {v.shape[0]}'
+        for k, v in simulated_ground_truth.items():
+            assert v.shape[0] == 1, f'k is too long: {v.shape[0]}'
 
-            mem, mem_other, state = self.forward_static(simulated_ground_truth, start_state=start_state, level=level,
-                                                        n_steps=1, n_warmup=1, memory=memory, memory_other=memory_other,
-                                                        sample_state=sample_state, sample_output=False,
-                                                        reconstruct=reconstruct, use_ema_modules=use_ema_modules)
+        mem, mem_other, state = self.forward_static(simulated_ground_truth, start_state=start_state, level=level,
+                                                    n_steps=1, n_warmup=1, memory=memory, memory_other=memory_other,
+                                                    sample_state=sample_state, sample_output=False,
+                                                    reconstruct=reconstruct, use_ema_modules=use_ema_modules)
 
-            simulated_ground_truth = {k: v.squeeze(0) for k, v in simulated_ground_truth.items()}  # remove time dim
+        simulated_ground_truth = {k: v.squeeze(0) for k, v in simulated_ground_truth.items()}  # remove time dim
 
-            append_memory(memory_targets, **simulated_ground_truth)
+        append_memory(memory_targets, **simulated_ground_truth)
 
-            # reconstruct state of model below at time step that corresponds to one step by current level
-            state_below = {k: trajectory_below[k][n_steps - 1] for k in rssm_state_keys()}
-            append_memory(memory_states_below, **state_below)
-            state_below = rssm_remove_labels(state_below)
+        # reconstruct state of model below at time step that corresponds to one step by current level
+        state_below = {k: trajectory_below[k][n_steps - 1] for k in rssm_state_keys()}
+        append_memory(memory_states_below, **state_below)
+        state_below = rssm_remove_labels(state_below)
 
-            return mem, mem_other, memory_targets, state, state_below, memory_states_below
+        return mem, mem_other, memory_targets, state, state_below, memory_states_below
 
     def forward_all_levels(self,
                            ground_truth_trajectory: Dict[str, torch.Tensor],
@@ -511,59 +507,58 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
     # @torch.compile(disable=disable_torch_compile)
     def _latent_overshooting(self, pred_tf, targets, n_lo):
-        with record_function('latent_overshooting'):
-            losses_lo = {}
-            for l in range(self.levels):
-                offset = n_lo[l]
-                # prepare start states for latent overshooting (we us our own hand-made masks)
-                start_state, _ = rssm_states_seq_to_batch(pred_tf[l], targets[l]['terminal'], i_end=-offset)
-                start_state_detached = rssm_detach_state(*start_state)
+        losses_lo = {}
+        for l in range(self.levels):
+            offset = n_lo[l]
+            # prepare start states for latent overshooting (we us our own hand-made masks)
+            start_state, _ = rssm_states_seq_to_batch(pred_tf[l], targets[l]['terminal'], i_end=-offset)
+            start_state_detached = rssm_detach_state(*start_state)
 
-                # prepare action, posterior and mask windows that contain for every start state the next n_lo time steps
-                actions = torch.stack(pred_tf[l]['a']).detach()  # make tensor (time x batch x d_a)
-                mask = compute_mask(targets[l]['terminal'])  # compute mask from groundtruth sequences
-                z_post_params = torch.stack(pred_tf[l]['z_post'])  # don't take z_post from start_state_detached
+            # prepare action, posterior and mask windows that contain for every start state the next n_lo time steps
+            actions = torch.stack(pred_tf[l]['a']).detach()  # make tensor (time x batch x d_a)
+            mask = compute_mask(targets[l]['terminal'])  # compute mask from groundtruth sequences
+            z_post_params = torch.stack(pred_tf[l]['z_post'])  # don't take z_post from start_state_detached
 
-                # select for every start state the next n_lo actions, mask items and posteriors
-                # since the rssm states are always recorded after an action was applied, correct actions and terminal
-                # flags for a start state at time step t start from t+1
-                action_windows, mask_windows, z_post_windows = [], [], []
-                for t in range(1, actions.shape[0] - offset + 1):
-                    action_windows.append(actions[t: t + offset])
-                    mask_windows.append(mask[t: t + offset])
-                    z_post_windows.append(z_post_params[t: t + offset])
+            # select for every start state the next n_lo actions, mask items and posteriors
+            # since the rssm states are always recorded after an action was applied, correct actions and terminal
+            # flags for a start state at time step t start from t+1
+            action_windows, mask_windows, z_post_windows = [], [], []
+            for t in range(1, actions.shape[0] - offset + 1):
+                action_windows.append(actions[t: t + offset])
+                mask_windows.append(mask[t: t + offset])
+                z_post_windows.append(z_post_params[t: t + offset])
 
-                # concat all windows along the batch dimension for parallel loss calculation
-                actions = torch.concat(action_windows, dim=1)
-                mask = torch.concat(mask_windows, dim=1)
-                z_post_params = torch.concat(z_post_windows, dim=1)
+            # concat all windows along the batch dimension for parallel loss calculation
+            actions = torch.concat(action_windows, dim=1)
+            mask = torch.concat(mask_windows, dim=1)
+            z_post_params = torch.concat(z_post_windows, dim=1)
 
-                # do the model rollout
-                trajectory = {'a': actions, 'o': None, 'r': None, 'terminal': None}
-                pred_lo_lvl, _, _ = self.forward_static(trajectory, start_state=start_state_detached, level=l,
-                                                        n_warmup=0, sample_state=True, reconstruct=False)
-                z_prior_params = torch.stack(pred_lo_lvl['z_prior'])
+            # do the model rollout
+            trajectory = {'a': actions, 'o': None, 'r': None, 'terminal': None}
+            pred_lo_lvl, _, _ = self.forward_static(trajectory, start_state=start_state_detached, level=l,
+                                                    n_warmup=0, sample_state=True, reconstruct=False)
+            z_prior_params = torch.stack(pred_lo_lvl['z_prior'])
 
-                if GlobalLogger.can_log('mask_latent_overshooting', self._current_train_step):
-                    with TempFigure(figsize=(5, 5)) as fig:
-                        plt.matshow(mask.detach().cpu().numpy().squeeze(), fignum=fig, aspect='auto')
-                        plt.colorbar()
-                        GlobalLogger.logger.log_plot(fig_to_img(fig),
-                                                     Scope.TRAIN() / f'model/l{l}_latent_overshooting_mask',
-                                                     time_step=self._current_train_step)
+            if GlobalLogger.can_log('mask_latent_overshooting', self._current_train_step):
+                with TempFigure(figsize=(5, 5)) as fig:
+                    plt.matshow(mask.detach().cpu().numpy().squeeze(), fignum=fig, aspect='auto')
+                    plt.colorbar()
+                    GlobalLogger.logger.log_plot(fig_to_img(fig),
+                                                 Scope.TRAIN() / f'model/l{l}_latent_overshooting_mask',
+                                                 time_step=self._current_train_step)
 
-                if self.kl_balance is not None:
-                    z_prior = self.rssm_modules[l].z_dist(z_prior_params)
-                    z_prior_detached = self.rssm_modules[l].z_dist(z_prior_params.detach())
-                    z_post = self.rssm_modules[l].z_dist(z_post_params)
-                    z_post_detached = self.rssm_modules[l].z_dist(z_post_params.detach())
-                    kl_0 = torch.mean(torch.distributions.kl_divergence(z_post_detached, z_prior) * (1 - mask))
-                    kl_1 = torch.mean(torch.distributions.kl_divergence(z_post, z_prior_detached) * (1 - mask))
-                    kl = (self.kl_balance * kl_0 + (1 - self.kl_balance) * kl_1)
-                else:
-                    kl = torch.mean(torch.distributions.kl_divergence(z_post_detached, z_prior) * (1 - mask))
-                losses_lo[f'kl_latent_overshooting_{l}'] = self.kl_betas[l] * kl / offset
-            return losses_lo
+            if self.kl_balance is not None:
+                z_prior = self.rssm_modules[l].z_dist(z_prior_params)
+                z_prior_detached = self.rssm_modules[l].z_dist(z_prior_params.detach())
+                z_post = self.rssm_modules[l].z_dist(z_post_params)
+                z_post_detached = self.rssm_modules[l].z_dist(z_post_params.detach())
+                kl_0 = torch.mean(torch.distributions.kl_divergence(z_post_detached, z_prior) * (1 - mask))
+                kl_1 = torch.mean(torch.distributions.kl_divergence(z_post, z_prior_detached) * (1 - mask))
+                kl = (self.kl_balance * kl_0 + (1 - self.kl_balance) * kl_1)
+            else:
+                kl = torch.mean(torch.distributions.kl_divergence(z_post_detached, z_prior) * (1 - mask))
+            losses_lo[f'kl_latent_overshooting_{l}'] = self.kl_betas[l] * kl / offset
+        return losses_lo
 
     def _eval_step(self,
                    training_data: Dict[str, torch.Tensor],
@@ -642,78 +637,85 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                   kl_beta: float,
                   kl_reg_beta: float = 0.0,
                   level: int = 0):
-        with record_function('calc_loss'):
-            rssm_cell = self.rssm_modules[level]
-            valid = 1 - mask  # use mask to multiply irrelevant steps with zero
+        rssm_cell = self.rssm_modules[level]
+        valid = 1 - mask  # use mask to multiply irrelevant steps with zero
 
-            assert (valid >= 0.0).all(), 'Negative valid values detected!'
+        assert (valid >= 0.0).all(), 'Negative valid values detected!'
 
-            o_dist = rssm_cell.o_decoder.dist(torch.stack(pred['o_dist']))
-            r_dist = rssm_cell.r_decoder.dist(torch.stack(pred['r_dist']))
-            term_dist = rssm_cell.term_decoder.dist(torch.stack(pred['terminal_dist']))
-            rec_o = self._neg_log_prob_2(o_dist, targets['o'], valid)
-            rec_r = self._neg_log_prob_2(r_dist, targets['r'], valid)
-            rec_term = self._neg_log_prob_2(term_dist, targets['terminal'], valid)
+        o_dist = rssm_cell.o_decoder.dist(torch.stack(pred['o_dist']))
+        r_dist = rssm_cell.r_decoder.dist(torch.stack(pred['r_dist']))
+        term_dist = rssm_cell.term_decoder.dist(torch.stack(pred['terminal_dist']))
+        rec_o = self._neg_log_prob(o_dist, targets['o'], valid)
+        rec_r = self._neg_log_prob(r_dist, targets['r'], valid)
+        rec_term = self._neg_log_prob(term_dist, targets['terminal'], valid)
 
-            states_stacked = rssm_stack_states(pred['z'], pred['z_prior'], pred['z_post'], pred['rnn_state'])
-            states_stacked = rssm_add_labels(states_stacked)
-            z_prior = self.rssm_modules[level].z_dist(states_stacked['z_prior'])
-            z_post = self.rssm_modules[level].z_dist(states_stacked['z_post'])
-            if self.kl_balance is not None:
-                # kl_0 = self._kl_div(pred['z_post'], pred['z_prior'], valid, detach_ps=True)
-                # kl_1 = self._kl_div(pred['z_post'], pred['z_prior'], valid, detach_qs=True)
-                kl_0 = self._kl_div_2(z_post, z_prior, valid, detach_ps=True)
-                kl_1 = self._kl_div_2(z_post, z_prior, valid, detach_qs=True)
-                kl_z = self.kl_balance * kl_0 + (1 - self.kl_balance) * kl_1
-            else:
-                # kl_z = self._kl_div(pred['z_post'], pred['z_prior'], valid)
-                kl_z = self._kl_div_2(z_post, z_prior, valid)
-            # kl_reg_z = self._kl_reg_2(pred['z_post'], valid)
-            kl_reg_z = self._kl_reg_2(z_post, valid)
-            contrastive_z = torch.tensor(0.0, dtype=torch.float32,
-                                         device=self.device)  # 0.05 * self._contrastive_loss(pred['z'], pred['terminal'], valid[:1])
+        states_stacked = rssm_stack_states(pred['z'], pred['z_prior'], pred['z_post'], pred['rnn_state'])
+        states_stacked = rssm_add_labels(states_stacked)
+        z_prior = self.rssm_modules[level].z_dist(states_stacked['z_prior'])
+        z_post = self.rssm_modules[level].z_dist(states_stacked['z_post'])
+        if self.kl_balance is not None:
+            kl_0 = self._kl_div(z_post, z_prior, valid, detach_ps=True)
+            kl_1 = self._kl_div(z_post, z_prior, valid, detach_qs=True)
+            kl_z = self.kl_balance * kl_0 + (1 - self.kl_balance) * kl_1
+        else:
+            kl_z = self._kl_div(z_post, z_prior, valid)
+        #kl_reg_z = self.kl_reg(z_post, valid)
+        assert kl_reg_beta == 0
+        kl_reg_z = torch.tensor(0.0, dtype=torch.float32, device=self.device)
 
-            mae_o = self._mae(pred['o'], targets['o'], valid)
-            mae_r = self._mae(pred['r'], targets['r'], valid)
-            mae_term = self._mae(pred['terminal'], targets['terminal'], valid)
+        contrastive_z = torch.tensor(0.0, dtype=torch.float32, device=self.device)
+        #contrastive_z = 0.05 * self._contrastive_loss(pred['z'], pred['terminal'], valid[:1])
 
-            total = rec_o + rec_r + rec_term + kl_z * kl_beta + kl_reg_z * kl_reg_beta + contrastive_z
-            loss = {'total': total, 'o': rec_o, 'r': rec_r, 'term': rec_term, 'kl_z': kl_z, 'kl_reg_z': kl_reg_z,
-                    'monitoring_o': mae_o, 'monitoring_r': mae_r, 'monitoring_term': mae_term,
-                    'contrastive_z': contrastive_z}
+        mae_o = self._mae(pred['o'], targets['o'], valid)
+        mae_r = self._mae(pred['r'], targets['r'], valid)
+        mae_term = self._mae(pred['terminal'], targets['terminal'], valid)
 
-            if self.ema_regularization:
-                cons_o = self._kl_div(pred['o_dist'], pred_ema['o_dist'], valid, detach_qs=True)
-                cons_r = self._kl_div(pred['r_dist'], pred_ema['r_dist'], valid, detach_qs=True)
-                cons_term = self._kl_div(pred['terminal_dist'], pred_ema['terminal_dist'], valid, detach_qs=True)
-                cons_z_prior = self._kl_div(pred['z_prior'], pred_ema['z_prior'], valid, detach_qs=True)
-                cons_z_post = self._kl_div(pred['z_post'], pred_ema['z_post'], valid, detach_qs=True)
-                loss['ema_reg'] = self.ema_regularization * (cons_o + cons_r + cons_term + cons_z_prior + cons_z_post)
-                loss['total'] += loss['ema_reg']
+        total = rec_o + rec_r + rec_term + kl_z * kl_beta + kl_reg_z * kl_reg_beta + contrastive_z
+        loss = {'total': total, 'o': rec_o, 'r': rec_r, 'term': rec_term, 'kl_z': kl_z, 'kl_reg_z': kl_reg_z,
+                'monitoring_o': mae_o, 'monitoring_r': mae_r, 'monitoring_term': mae_term,
+                'contrastive_z': contrastive_z}
 
-            if self.temporal_activation_regularization > 0:
-                # loss['temporal_act_reg'] = self._mse(pred['h'][:-1], torch.stack(pred['h'][1:]), valid[:-1])
-                # loss['temporal_act_reg'] *= self.temporal_activation_regularization
-                # loss['total'] += loss['temporal_act_reg']
-                loss['temporal_act_reg'] = self._mse(pred['z'][:-1], torch.stack(pred['z'][1:]), valid[:-1])
-                loss['temporal_act_reg'] *= self.temporal_activation_regularization
-                loss['total'] += loss['temporal_act_reg']
+        if level > 0:
+            nom = torch.sum(-o_dist.entropy() * valid)
+            denom = torch.sum(valid).to(torch.float32)
+            denom = torch.where(denom == 0, 1.0, denom)
+            goal_dist_entropy = 0.1 * (nom / denom)
+            loss['monitoring_goal_dist_entropy'] = goal_dist_entropy
+            loss['total'] += goal_dist_entropy
 
-            # if level > 0:
-            #    raise RuntimeError('_avg_z_distance is shared by all levels whereas there should be one per level!')
-            #    with torch.no_grad():
-            #        weights = torch.mean((torch.stack(pred['z'][:-1]) - torch.stack(pred['z'][1:])) ** 2, dim=-1, keepdim=True)
-            #        self._avg_z_distance.copy_(0.95 * self._avg_z_distance + 0.05 * weights.mean())
-            #        # for z with or above average distance, contrastive goal loss weight is 0
-            #        weights = torch.maximum(1 - weights / self._avg_z_distance,
-            #                                torch.tensor(0.0, dtype=torch.float32, device=self.device))
-            #        weighted_valid = valid[:1] * weights
-            #    #weighted_valid = valid[:1]
-            #    loss['monitoring_average_z_distance'] = self._avg_z_distance
-            #    loss['contrastive_goal_loss'] = self._contrastive_loss(pred['o'], pred['terminal'], weighted_valid)
-            #    loss['total'] += loss['contrastive_goal_loss']
+        if self.ema_regularization:
+            raise NotImplementedError('this has been deactivated')
+            #cons_o = self._kl_div(pred['o_dist'], pred_ema['o_dist'], valid, detach_qs=True)
+            #cons_r = self._kl_div(pred['r_dist'], pred_ema['r_dist'], valid, detach_qs=True)
+            #cons_term = self._kl_div(pred['terminal_dist'], pred_ema['terminal_dist'], valid, detach_qs=True)
+            #cons_z_prior = self._kl_div(pred['z_prior'], pred_ema['z_prior'], valid, detach_qs=True)
+            #cons_z_post = self._kl_div(pred['z_post'], pred_ema['z_post'], valid, detach_qs=True)
+            #loss['ema_reg'] = self.ema_regularization * (cons_o + cons_r + cons_term + cons_z_prior + cons_z_post)
+            #loss['total'] += loss['ema_reg']
 
-            return loss
+        if self.temporal_activation_regularization > 0:
+            # loss['temporal_act_reg'] = self._mse(pred['h'][:-1], torch.stack(pred['h'][1:]), valid[:-1])
+            # loss['temporal_act_reg'] *= self.temporal_activation_regularization
+            # loss['total'] += loss['temporal_act_reg']
+            loss['temporal_act_reg'] = self._mse(pred['z'][:-1], torch.stack(pred['z'][1:]), valid[:-1])
+            loss['temporal_act_reg'] *= self.temporal_activation_regularization
+            loss['total'] += loss['temporal_act_reg']
+
+        # if level > 0:
+        #    raise RuntimeError('_avg_z_distance is shared by all levels whereas there should be one per level!')
+        #    with torch.no_grad():
+        #        weights = torch.mean((torch.stack(pred['z'][:-1]) - torch.stack(pred['z'][1:])) ** 2, dim=-1, keepdim=True)
+        #        self._avg_z_distance.copy_(0.95 * self._avg_z_distance + 0.05 * weights.mean())
+        #        # for z with or above average distance, contrastive goal loss weight is 0
+        #        weights = torch.maximum(1 - weights / self._avg_z_distance,
+        #                                torch.tensor(0.0, dtype=torch.float32, device=self.device))
+        #        weighted_valid = valid[:1] * weights
+        #    #weighted_valid = valid[:1]
+        #    loss['monitoring_average_z_distance'] = self._avg_z_distance
+        #    loss['contrastive_goal_loss'] = self._contrastive_loss(pred['o'], pred['terminal'], weighted_valid)
+        #    loss['total'] += loss['contrastive_goal_loss']
+
+        return loss
 
     def _contrastive_loss(self,
                           x: List[torch.Tensor],
@@ -727,84 +729,52 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         cont_loss = 2.0 * torch.mean(torch.maximum(torch.tensor(0.0, device=x.device), (1.0 - diff)) * valid)
         return cont_loss
 
-    def _neg_log_prob_2(self,
-                        distribution: torch.distributions.Distribution,
-                        x_target: torch.Tensor,
-                        valid: torch.Tensor):
+    def _neg_log_prob(self,
+                      distribution: torch.distributions.Distribution,
+                      x_target: torch.Tensor,
+                      valid: torch.Tensor):
         if isinstance(distribution, torch.distributions.RelaxedOneHotCategorical):
             # smooth out targets a bit to avoid inf/nan log probs with RelaxedOneHotCategorical
             x_target = torch.abs(x_target - 1e-5)
             x_target /= x_target.sum(dim=-1, keepdim=True)
         valid = unsqueeze_right(valid, x_target)
 
-        neg_log_prob = -torch.mean(distribution.log_prob(x_target) * valid)
+        #neg_log_prob_2 = -torch.mean(distribution.log_prob(x_target) * valid)
 
-        return neg_log_prob
+        neg_log_prob = -distribution.log_prob(x_target)
 
-    def _neg_log_prob(self,
-                      distributions: List[torch.distributions.Distribution],
-                      x_target: torch.Tensor,
-                      valid: torch.Tensor):
-        if isinstance(distributions[0], torch.distributions.RelaxedOneHotCategorical):
-            # smooth out targets a bit to avoid inf/nan log probs with RelaxedOneHotCategorical
-            x_target = torch.abs(x_target - 1e-5)
-            x_target /= x_target.sum(dim=-1, keepdim=True)
-        valid = unsqueeze_right(valid, x_target)
-        # neg_log_prob = [-d.log_prob(x) * m for d, x, m in zip(distributions, x_target, mask)]
-        # neg_log_prob = torch.stack(neg_log_prob, dim=0).mean()
+        nom = torch.sum(neg_log_prob * valid)
+        denom = torch.sum(valid).to(torch.float32)
+        denom = torch.where(denom == 0, 1.0, denom)
+        x = nom / denom
 
-        d_tmp = stack_dists(distributions)
-        neg_log_prob = -torch.mean(d_tmp.log_prob(x_target) * valid)
-
-        return neg_log_prob
+        return x
 
     # should not be compiled since it causes constant re-compilation for some reason
     def _kl_div(self,
-                ps: List[torch.distributions.Distribution],
-                qs: List[torch.distributions.Distribution],
+                ps: torch.distributions.Distribution,
+                qs: torch.distributions.Distribution,
                 valid: torch.Tensor,
                 detach_ps: bool = False,
                 detach_qs: bool = False):
-        ps_valid, qs_valid = [], []
-        for p, q in zip(ps, qs):
-            # if p or q hold None entries, just use the other on for that time step, prevents gradients in those cases
-            ps_valid.append(p if p is not None else q)
-            qs_valid.append(q if q is not None else p)
-
-        ps = stack_dists(ps_valid)
-        qs = stack_dists(qs_valid)
-
         if detach_ps:
             ps = detach_dist(ps)
         if detach_qs:
             qs = detach_dist(qs)
 
-        kl = torch.sum(torch.distributions.kl.kl_divergence(ps, qs) * valid, dim=-1)
-        kl = kl.mean()
+        kl = torch.sum(torch.distributions.kl.kl_divergence(ps, qs), dim=-1, keepdim=True)
 
-        return kl
+        nom = torch.sum(kl * valid)
+        denom = torch.sum(valid).to(torch.float32)
+        denom = torch.where(denom == 0, 1.0, denom)
+        x = nom / denom
 
-    # should not be compiled since it causes constant re-compilation for some reason
-    def _kl_div_2(self,
-                  ps: torch.distributions.Distribution,
-                  qs: torch.distributions.Distribution,
-                  valid: torch.Tensor,
-                  detach_ps: bool = False,
-                  detach_qs: bool = False):
-        if detach_ps:
-            ps = detach_dist(ps)
-        if detach_qs:
-            qs = detach_dist(qs)
-
-        kl = torch.sum(torch.distributions.kl.kl_divergence(ps, qs) * valid, dim=-1)
-        kl = kl.mean()
-
-        return kl
+        return x
 
     @staticmethod
     # @torch.compile(disable=disable_torch_compile)
-    def _kl_reg_2(ps: torch.distributions.Distribution,
-                  valid: torch.Tensor):
+    def kl_reg(ps: torch.distributions.Distribution,
+               valid: torch.Tensor):
         # two sources of invalidity:
         # 1) ps can contain None elements, they're filled with distributions that have the same parameters as the
         #    regularizing ones to produce zero kl divergence, so they effectively don't count
@@ -827,41 +797,16 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         # kl_reg = torch.stack(kl_reg, dim=0).mean()
         return kl_reg
 
-    def _kl_reg(self,
-                ps: List[torch.distributions.Distribution],
-                valid: torch.Tensor):
-        # two sources of invalidity:
-        # 1) ps can contain None elements, they're filled with distributions that have the same parameters as the
-        #    regularizing ones to produce zero kl divergence, so they effectively don't count
-        # 2) valid tensor can be 0 somewhere, this is filtered out after kl divergence computation
-
-        if isinstance(ps[0], torchd.Normal):  # assume at least first distribution is not None
-            ps_valid = [p if p is not None else torchd.Normal(loc=torch.zeros_like(ps[0].loc),
-                                                              scale=torch.ones_like(ps[0].scale)) for p in ps]
-            ps = stack_dists(ps_valid)
-            reg_dist = torch.distributions.Normal(loc=torch.zeros_like(ps.loc), scale=torch.ones_like(ps.scale))
-
-        # elif isinstance(ps[0], torch.distributions.ContinuousBernoulli):
-        #    reg_dist = torch.distributions.ContinuousBernoulli(probs=torch.full_like(ps.probs, 0.5))
-        elif isinstance(ps[0], torchd.OneHotCategorical):
-            ps_valid = [p if p is not None else torchd.OneHotCategorical(torch.zeros_like(ps[0].probs)) for p in ps]
-            ps = stack_dists(ps_valid)
-            reg_dist = torch.distributions.OneHotCategorical(logits=torch.ones_like(ps.logits))
-        else:
-            raise ValueError(f'No regularization distribution for distribution {ps} found')
-
-        kl_reg = torch.sum(torch.distributions.kl.kl_divergence(ps, reg_dist) * valid, dim=-1)
-        kl_reg = kl_reg.mean()
-
-        # kl_reg = [kl_divergence(p, reg_dist) * m for p, m in zip(ps, mask) if p is not None]
-        # kl_reg = torch.stack(kl_reg, dim=0).mean()
-        return kl_reg
-
     def _mae(self,
              y_hats: List[torch.Tensor], ys: torch.Tensor, valid: torch.Tensor):
         y_hats = torch.stack(y_hats, dim=0)
         valid = valid.reshape(*valid.shape + (1,) * (y_hats.ndim - valid.ndim))  # append size 1 dim for broadcasting
-        return torch.mean(torch.abs(ys - y_hats) * valid)
+        diff = torch.abs(ys - y_hats)
+        nom = torch.sum(diff * valid)
+        denom = torch.sum(valid).to(torch.float32)
+        denom = torch.where(denom == 0, 1.0, denom)
+        x = nom / denom
+        return x
 
     def _mse(self,
              y_hats: List[torch.Tensor],
@@ -869,4 +814,9 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
              valid: torch.Tensor):
         valid = unsqueeze_right(valid, ys)
         y_hats = torch.stack(y_hats)
-        return torch.mean(((y_hats - ys) ** 2) * valid)
+        diff = torch.abs(ys - y_hats) ** 2
+        nom = torch.sum(diff * valid)
+        denom = torch.sum(valid).to(torch.float32)
+        denom = torch.where(denom == 0, 1.0, denom)
+        x = nom / denom
+        return x

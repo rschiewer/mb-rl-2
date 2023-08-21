@@ -355,11 +355,12 @@ class ActorCriticAgent(torch.nn.Module):
         # ppo_loss = valid[:-1] * self.beta * torchd.kl_divergence(detach_dist(ema_a_dist),
         #                                                         a_dist).sum(dim=-1, keepdims=True)
 
-        policy_loss = torch.mean(policy_loss)
-        value_loss = torch.mean(value_loss)
+        denom = torch.sum(valid).to(torch.float32)
+        policy_loss = torch.sum(policy_loss) / denom
+        value_loss = torch.sum(value_loss) / denom
         ppo_loss = torch.zeros_like(value_loss)  # torch.mean(ppo_loss)
-        model_novelty_reward_aug = torch.mean(model_novelty_reward_aug)
-        entropy_reward_aug = torch.mean(act_entropy_reward_aug)
+        model_novelty_reward_aug = torch.sum(model_novelty_reward_aug) / denom
+        entropy_reward_aug = torch.sum(act_entropy_reward_aug) / denom
         loss = policy_loss + value_loss + ppo_loss
 
         if self.normalize_rewards:
