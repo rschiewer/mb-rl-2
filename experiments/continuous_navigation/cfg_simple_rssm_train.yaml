@@ -69,7 +69,7 @@ trainer:
    freeze_model: False
    stop_collect: False
    eval_interval: 50
-   d_batch: 1024
+   d_batch: 512
    subtrajectory_len: 25
    collect_envs: 50
    collect_interval: 100
@@ -101,9 +101,10 @@ agents:
         critic_act_fn: "elu"
         actor_layer_norm: False
         critic_layer_norm: False
-        normalize_observations: 'running_average'
-        normalize_rewards: 'running_average'
+        normalize_observations: False #'running_average'
+        normalize_rewards: False #'running_average'
 
 eval:
    eval_envs: 20
    eval_steps: 50
+   warmup_steps: [3, 3]
