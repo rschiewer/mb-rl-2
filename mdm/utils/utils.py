@@ -89,6 +89,7 @@ class TempFigure:
         return self.fig
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        self.fig.clear()
         plt.close(self.fig)
         del self.fig
 
@@ -631,8 +632,12 @@ def valid_subtrajectories_unbiased(data: Dict[str, torch.Tensor],
 
 
 def valid_subtrajectories_2(data: Dict[str, torch.Tensor],
-                            length: int):
-    assert length < data['o'].shape[0]
+                            length: int,
+                            make_shorter_if_required: bool = True):
+    if not make_shorter_if_required:
+        assert length < data['o'].shape[0]
+    else:
+        length = min(data['o'].shape[0], length)
 
     n_trajs = data['o'].shape[1]
 
@@ -1014,7 +1019,8 @@ def rssm_states_seq_to_batch(mem: Dict[str, List[torch.Tensor]],
 
     # we can inject terminal flags from target data which are already stacked, so we use this convenience wrapper
     terminal = stack_if_list(terminal_flags)
-    mask = compute_mask(terminal[i_start: i_end])
+    mask = compute_mask(terminal)  # take all terminal flags to compute maskt to not miss terminals before i_start
+    mask = mask[i_start:i_end]
     mask = mask.reshape(mask.shape[0] * mask.shape[1], 1)
 
     return states, mask
