@@ -1,4 +1,4 @@
-from typing import Tuple, Union, List, Sequence, TypeVar, Dict, Any, Optional
+from typing import Tuple, Union, List, Sequence, TypeVar, Dict, Any, Optional, Iterable
 from collections import namedtuple, OrderedDict
 from functools import reduce, wraps
 from math import ceil
@@ -19,7 +19,7 @@ if True or gettrace() or 'PYCHARM_HOSTED' in os.environ:
     disable_torch_compile = True
 else:
     print('Compiling functions with torch.compile')
-    #torch.set_float32_matmul_precision('high')
+    # torch.set_float32_matmul_precision('high')
     disable_torch_compile = False
 
 
@@ -171,8 +171,8 @@ class RunningMeanStd(torch.jit.ScriptModule):
         with torch.no_grad():
             """Updates the mean, var and count from a batch of samples."""
             x = torch.flatten(x, start_dim=0, end_dim=-(self.mean.ndim + 1))
-            #batch_mean = torch.mean(x, dim=0, dtype=torch.float64)
-            #batch_var = torch.var(x, dim=0).to(dtype=torch.float64)
+            # batch_mean = torch.mean(x, dim=0, dtype=torch.float64)
+            # batch_var = torch.var(x, dim=0).to(dtype=torch.float64)
             if mask is None:
                 weights = torch.ones_like(x)
             else:
@@ -705,19 +705,28 @@ def compute_mask(terminals: Union[List[torch.Tensor], torch.Tensor],
                  mode: str = 'default',
                  threshold: Optional[float] = None,
                  first_step_mask: Optional[torch.Tensor] = None,
+                 gamma: float = 1.0,
                  disable: bool = True):
     with torch.no_grad():
         terminals = stack_if_list(terminals).detach()
         d_time, d_batch = terminals.shape[:2]
 
+        #return torch.zeros_like(terminals)
+
         # never mask first time step except first_step_mask tells us to
         if first_step_mask is None:
             first_step_mask = torch.zeros(1, d_batch, 1, dtype=terminals.dtype, device=terminals.device)
+
         terminals = torch.concat([first_step_mask, terminals], dim=0)  # this shifts time one to the right
         terminals = terminals[:-1]  # cut last time step since we don't need it
         valid = 1.0 - terminals.to(dtype=torch.float32)  # invert to compute exponentially decreasing validity mask
         valid = torch.cumprod(valid, dim=0)
-        mask = 1.0 - valid
+
+        gamma_mat = torch.cumprod(torch.full_like(valid[:-1], gamma), dim=0)  # constant discount factor on top
+        gamma_mat = torch.concat([torch.ones_like(valid[0:1]), gamma_mat])
+        valid = valid * gamma_mat
+
+        mask = 1.0 - valid  # invert to turn into mask again
 
         if mode == 'deterministic' and threshold is not None:
             mask = torch.where(mask > threshold,
@@ -814,6 +823,33 @@ class SquashedNormal(torch.distributions.transformed_distribution.TransformedDis
         return self.base_dist.entropy()
 
 
+# from https://github.com/ray-project/ray/blob/master/rllib/algorithms/dreamer/utils.py#L48
+class TanhBijector(torch.distributions.Transform):
+    def __init__(self):
+        super().__init__()
+        self.bijective = True
+        self.domain = torch.distributions.constraints.real
+        self.codomain = torch.distributions.constraints.interval(-1.0, 1.0)
+
+    def atanh(self, x):
+        return 0.5 * torch.log((1 + x) / (1 - x))
+
+    def sign(self):
+        return 1.0
+
+    def _call(self, x):
+        return torch.tanh(x)
+
+    def _inverse(self, y):
+        # used torch.clamp before
+        y = torch.where((torch.abs(y) <= 1.0), torch.clamp(y, -0.99999997, 0.99999997), y)
+        y = self.atanh(y)
+        return y
+
+    def log_abs_det_jacobian(self, x, y):
+        return 2.0 * (np.log(2) - x - torch.nn.functional.softplus(-2.0 * x))
+
+
 def unsqueeze_right(to_expand: Union[np.ndarray, torch.Tensor], target: Union[np.ndarray, torch.Tensor]):
     if to_expand.ndim == target.ndim:
         return to_expand
@@ -822,7 +858,6 @@ def unsqueeze_right(to_expand: Union[np.ndarray, torch.Tensor], target: Union[np
 
     dim_diff = target.ndim - to_expand.ndim
     return to_expand.reshape(*to_expand.shape, *[1 for _ in range(dim_diff)])
-
 
 
 def stack_tensor_dicts(x: List[Dict[str, torch.Tensor]]):
@@ -842,3 +877,63 @@ def concat_tensor_dicts(x: List[Dict[str, torch.Tensor]],
             x_concat[k].append(v)
     x_concat = {k: torch.concat(v, dim=dim) for k, v in x_concat.items()}
     return x_concat
+
+
+# from https://github.com/rlworkgroup/garage/blob/master/src/garage/torch/distributions/tanh_normal.py
+def clip_but_pass_gradient(x: torch.Tensor,
+                           lower: float = 0.0,
+                           upper: float = 1.0):
+    """Clipping function that allows for gradients to flow through.
+
+    Args:
+        x (torch.Tensor): value to be clipped
+        lower (float): lower bound of clipping
+        upper (float): upper bound of clipping
+
+    Returns:
+        torch.Tensor: x clipped between lower and upper.
+
+    """
+    clip_up = (x > upper).float()
+    clip_low = (x < lower).float()
+    with torch.no_grad():
+        clip = ((upper - x) * clip_up + (lower - x) * clip_low)
+    return x + clip
+
+
+# from https://github.com/RajGhugare19/dreamerv2/blob/main/dreamerv2/utils/module.py#L1
+def get_parameters(modules: Iterable[torch.nn.Module]):
+    """
+    Given a list of torch modules, returns a list of their parameters.
+    :param modules: iterable of modules
+    :returns: a list of parameters
+    """
+    model_parameters = []
+    for module in modules:
+        model_parameters += list(module.parameters())
+    return model_parameters
+
+
+# from https://github.com/RajGhugare19/dreamerv2/blob/main/dreamerv2/utils/module.py#L15
+class FreezeParameters:
+    def __init__(self, modules: Iterable[torch.nn.Module]):
+        """
+        Context manager to locally freeze gradients.
+        In some cases with can speed up computation because gradients aren't calculated for these listed modules.
+        example:
+        ```
+        with FreezeParameters([module]):
+            output_tensor = module(input_tensor)
+        ```
+        :param modules: iterable of modules. used to call .parameters() to freeze gradients.
+        """
+        self.modules = modules
+        self.param_states = [p.requires_grad for p in get_parameters(self.modules)]
+
+    def __enter__(self):
+        for param in get_parameters(self.modules):
+            param.requires_grad = False
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        for i, param in enumerate(get_parameters(self.modules)):
+            param.requires_grad = self.param_states[i]
