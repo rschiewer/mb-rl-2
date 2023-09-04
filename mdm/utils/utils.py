@@ -157,12 +157,19 @@ def cfg_infer_missing_values(cfg: dict,
             print('No agent configuration found, config values for agents won\'t be inferred')
             continue
 
+        if cfg['mdm']['rssm_modules'][agent_lvl]['latent_dist'] == 'normal':
+            d_z = cfg['mdm']['rssm_modules'][agent_lvl]['d_z']
+        elif cfg['mdm']['rssm_modules'][agent_lvl]['latent_dist'] == 'categorical':
+            d_z = cfg['mdm']['rssm_modules'][agent_lvl]['d_z'] * cfg['mdm']['rssm_modules'][agent_lvl]['n_latent_categories']
+        else:
+            d_z = cfg['mdm']['rssm_modules'][agent_lvl]['d_z']
+
         cfg_r_max = cfg['agents']['r_max'][agent_lvl]
         if agent_lvl == 0:
             cfg_r_max['min_a'] = tuple(env.action_space.low)
             cfg_r_max['max_a'] = tuple(env.action_space.high)
         cfg_r_max['d_a'] = cfg['mdm']['rssm_modules'][agent_lvl]['d_a']
-        cfg_r_max['d_o'] = cfg['mdm']['rssm_modules'][agent_lvl]['d_z']
+        cfg_r_max['d_o'] = d_z
 
         if agent_lvl < len(cfg['mdm']['rssm_modules']) - 1:
             cfg_goal_seeking = cfg['agents']['goal_seeking'][agent_lvl]
@@ -170,7 +177,7 @@ def cfg_infer_missing_values(cfg: dict,
                 cfg_goal_seeking['min_a'] = tuple(env.action_space.low)
                 cfg_goal_seeking['max_a'] = tuple(env.action_space.high)
             cfg_goal_seeking['d_a'] = cfg['mdm']['rssm_modules'][agent_lvl]['d_a']
-            cfg_goal_seeking['d_o'] = cfg['mdm']['rssm_modules'][agent_lvl]['d_z']
+            cfg_goal_seeking['d_o'] = d_z
 
     def _check_complete(name, entry):
         if isinstance(entry, dict):
