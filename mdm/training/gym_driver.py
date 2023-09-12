@@ -91,7 +91,7 @@ def collect_data(env: Union[CacheLastStepEnv, CacheLastStepVecEnv], n_steps: int
         l_trajs = [l_trajs]
         n_trajs = 1
     elif isinstance(env, (CacheLastStepVecEnv, CacheLastStepVecEnvPool)):
-        n_trajs = env.num_envs
+        n_trajs = env.unwrapped.num_envs
 
     mem = []
     for i_traj in range(n_trajs):
