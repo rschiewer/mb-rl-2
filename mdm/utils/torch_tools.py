@@ -9,6 +9,8 @@ import os
 import numpy
 import torch
 import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.pyplot import Line2D
 
 RnnStateType = TypeVar('RnnStateType', torch.Tensor, Tuple[torch.Tensor, torch.Tensor])
 _Placeholder = namedtuple('placeholder', 'device')
@@ -28,6 +30,47 @@ def stack_if_list(x: Union[torch.Tensor, List[torch.Tensor]],
     if isinstance(x, list):
         x = torch.stack(x, dim=dim)
     return x
+
+
+class CustomLinear(torch.nn.Linear):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def reset_parameters(self):
+        torch.nn.init.xavier_uniform_(self.weight)
+        if self.bias is not None:
+            torch.nn.init.zeros_(self.bias)
+
+
+class CustomConv2d(torch.nn.Conv2d):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def reset_parameters(self):
+        torch.nn.init.xavier_uniform_(self.weight)
+        if self.bias is not None:
+            torch.nn.init.zeros_(self.bias)
+
+
+class CustomConvTranspose2d(torch.nn.ConvTranspose2d):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def reset_parameters(self):
+        torch.nn.init.xavier_uniform_(self.weight)
+        if self.bias is not None:
+            torch.nn.init.zeros_(self.bias)
+
+
+class CustomGRUCell(torch.nn.GRUCell):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def reset_parameters(self):
+        torch.nn.init.xavier_uniform_(self.weight_ih)
+        torch.nn.init.orthogonal_(self.weight_hh)
+        torch.nn.init.zeros_(self.bias_ih)
+        torch.nn.init.zeros_(self.bias_hh)
 
 
 class DeviceMixin:
@@ -160,37 +203,49 @@ class RunningMeanStd(torch.jit.ScriptModule):
                  shape: tuple = ()):
         super().__init__()
         """Tracks the mean, variance and count of values."""
-        self.mean = torch.nn.Parameter(torch.zeros(*shape, dtype=torch.float64), requires_grad=False)
-        self.var = torch.nn.Parameter(torch.ones(*shape, dtype=torch.float64), requires_grad=False)
+        self._mean = torch.nn.Parameter(torch.zeros(*shape, dtype=torch.float64), requires_grad=False)
+        self._var = torch.nn.Parameter(torch.ones(*shape, dtype=torch.float64), requires_grad=False)
         self.count = torch.nn.Parameter(torch.tensor(epsilon, dtype=torch.float64), requires_grad=False)
 
+    @property
+    def mean(self):
+        return self._mean.detach()
+
+    @property
+    def var(self):
+        return self._var.detach()
+
+    def forward(self,
+                x: torch.Tensor,
+                mask: Optional[torch.Tensor] = None):
+        self.update(x, mask)
+        return self.mean, self.var
+
     @torch.jit.export
+    @torch.no_grad()
     def update(self,
                x: torch.Tensor,
-               mask: None | torch.Tensor = None):
-        with torch.no_grad():
-            """Updates the mean, var and count from a batch of samples."""
-            x = torch.flatten(x, start_dim=0, end_dim=-(self.mean.ndim + 1))
-            # batch_mean = torch.mean(x, dim=0, dtype=torch.float64)
-            # batch_var = torch.var(x, dim=0).to(dtype=torch.float64)
-            if mask is None:
-                weights = torch.ones_like(x)
-            else:
-                weights = 1 - torch.flatten(mask, start_dim=0, end_dim=-(self.mean.ndim + 1))
-            weights = unsqueeze_right(weights, x)
-            weight_denom = weights.sum(dim=0)
-            weights = torch.where(weight_denom > 0, weights / weight_denom, 0.0)
-            batch_mean = torch.sum(x * weights, dim=0, dtype=torch.float64)
-            batch_var = torch.sum(((x - batch_mean[None, ...]) ** 2) * weights, dim=0, dtype=torch.float64)
-            batch_count = x.shape[0]
-            self.update_from_moments(batch_mean, batch_var, batch_count)
+               mask: Optional[torch.Tensor] = None):
+        x = x.detach()
+        x = torch.flatten(x, start_dim=0, end_dim=-(self._mean.ndim + 1))
+        if mask is None:
+            weights = torch.ones_like(x)
+        else:
+            weights = 1 - torch.flatten(mask, start_dim=0, end_dim=-(self._mean.ndim + 1))
+        weights = unsqueeze_right(weights, x)
+        weight_denom = weights.sum(dim=0)
+        weights = torch.where(weight_denom > 0, weights / weight_denom, 0.0)
+        batch_mean = torch.sum(x * weights, dim=0, dtype=torch.float64)
+        batch_var = torch.sum(((x - batch_mean[None, ...]) ** 2) * weights, dim=0, dtype=torch.float64)
+        batch_count = x.shape[0]
+        self.update_from_moments(batch_mean, batch_var, batch_count)
 
     def update_from_moments(self, batch_mean, batch_var, batch_count):
         """Updates from batch mean, variance and count moments."""
-        new_mean, new_var, new_count = update_mean_var_count_from_moments(self.mean, self.var, self.count,
+        new_mean, new_var, new_count = update_mean_var_count_from_moments(self._mean, self._var, self.count,
                                                                           batch_mean, batch_var, batch_count)
-        self.mean.copy_(new_mean)
-        self.var.copy_(new_var)
+        self._mean.copy_(new_mean)
+        self._var.copy_(new_var)
         self.count.copy_(new_count)
 
 
@@ -367,6 +422,10 @@ def _get_act_fn(descr: str):
     return act_constr
 
 
+_lin_layer_constr = torch.nn.Linear
+_conv_layer_constr = torch.nn.Conv2d
+
+
 def layers_with_activation(lws: Sequence[int], activation: str = 'relu', layer_norm: bool = False, name: str = None,
                            final_activation_function: str = None):
     assert len(lws) >= 2, f'Need at least w_in and w_out for one layer, but lws contains less than 2 elements'
@@ -375,10 +434,10 @@ def layers_with_activation(lws: Sequence[int], activation: str = 'relu', layer_n
     layers = []
     for w_in, w_out in zip(lws[:-1], lws[1:-1]):
         if layer_norm:
-            layers += [torch.nn.Linear(w_in, w_out), torch.nn.LayerNorm(w_out), act_constr()]
+            layers += [_lin_layer_constr(w_in, w_out), torch.nn.LayerNorm(w_out), act_constr()]
         else:
-            layers += [torch.nn.Linear(w_in, w_out), act_constr()]
-    layers.append(torch.nn.Linear(lws[-2], lws[-1]))
+            layers += [_lin_layer_constr(w_in, w_out), act_constr()]
+    layers.append(_lin_layer_constr(lws[-2], lws[-1]))
 
     if final_activation_function:
         final_act_constr = _get_act_fn(final_activation_function)
@@ -399,12 +458,13 @@ def conv_layers_with_activation(channels: Sequence[int], kernel_sizes: Sequence[
     layers = []
     for w_in, w_out, ks, st in zip(channels[:-1], channels[1:-1], kernel_sizes, str):
         if layer_norm:
-            layers += [torch.nn.Conv2d(in_channels=w_in, out_channels=w_out, kernel_size=ks, stride=st),
+            layers += [_conv_layer_constr(in_channels=w_in, out_channels=w_out, kernel_size=ks, stride=st),
                        torch.nn.LayerNorm(w_out), act_constr()]
         else:
-            layers += [torch.nn.Conv2d(in_channels=w_in, out_channels=w_out, kernel_size=ks, stride=st), act_constr()]
-    layers.append(torch.nn.Conv2d(in_channels=channels[-2], out_channels=channels[-1], kernel_size=kernel_sizes[-1],
-                                  stride=strides[-1]))
+            layers += [_conv_layer_constr(in_channels=w_in, out_channels=w_out, kernel_size=ks, stride=st),
+                       act_constr()]
+    layers.append(_conv_layer_constr(in_channels=channels[-2], out_channels=channels[-1], kernel_size=kernel_sizes[-1],
+                                     stride=strides[-1]))
 
     if final_activation_function:
         final_act_constr = _get_act_fn(final_activation_function)
@@ -428,7 +488,6 @@ def get_dist_params(d: torch.distributions.Distribution):
         raise RuntimeError(f'Can\'t extract parameters of the given distribution: {d}')
 
 
-@torch.compile(disable=disable_torch_compile)
 def detach_dist(d: torch.distributions.Distribution):
     if isinstance(d, (torch.distributions.Normal, torch.distributions.Cauchy, torch.distributions.Gumbel,
                       torch.distributions.Laplace, torch.distributions.LogNormal)):
@@ -700,6 +759,44 @@ def to_np(data_dict: Dict[str, Union[torch.Tensor, Dict]]):
     return np_data_dict
 
 
+def masked_mean(x: torch.Tensor,
+                mask: torch.Tensor,
+                dim: int | Tuple[int] | List[int] | None = None,
+                keepdim: bool = False
+                ):
+    assert x.shape[:mask.squeeze().ndim] == mask.squeeze().shape, 'Leading dimensions of x and mask mismatch'
+    valid = 1 - mask
+    valid = unsqueeze_right(valid, x)
+    valid = valid.expand_as(x)
+    num = torch.sum(x * valid, dim=dim, keepdim=keepdim)
+    denom = torch.sum(valid, dim=dim, keepdim=keepdim)
+    denom = torch.where(denom == 0, 1.0, denom)
+    ret = num / denom
+    return ret
+
+
+def masked_var(x: torch.Tensor,
+               mask: torch.Tensor,
+               dim: int | Tuple[int] | List[int] | None = None,
+               keepdim: bool = False
+               ):
+    masked_x_mean = masked_mean(x, mask, dim, keepdim=True)
+
+    repeats = [1 for _ in masked_x_mean.shape]
+    if dim is None:
+        dim = list(range(x.ndim))
+    elif type(dim) == int:
+        dim = [dim]
+    for idx in dim:
+        repeats[idx] = x.shape[idx]
+    masked_x_mean = masked_x_mean.repeat(repeats)
+
+    diff = (x - masked_x_mean) ** 2
+    ret = masked_mean(diff, mask, dim, keepdim=keepdim)
+    return ret
+
+
+
 @torch.jit.script
 def compute_mask(terminals: Union[List[torch.Tensor], torch.Tensor],
                  mode: str = 'default',
@@ -711,7 +808,7 @@ def compute_mask(terminals: Union[List[torch.Tensor], torch.Tensor],
         terminals = stack_if_list(terminals).detach()
         d_time, d_batch = terminals.shape[:2]
 
-        #return torch.zeros_like(terminals)
+        # return torch.zeros_like(terminals)
 
         # never mask first time step except first_step_mask tells us to
         if first_step_mask is None:
@@ -937,3 +1034,48 @@ class FreezeParameters:
     def __exit__(self, exc_type, exc_val, exc_tb):
         for i, param in enumerate(get_parameters(self.modules)):
             param.requires_grad = self.param_states[i]
+
+
+def record_parameters(*modules: torch.nn.Module, reduction_fn: callable = None):
+    if reduction_fn is None:
+        def reduction_fn(x):
+            return x
+
+    params = []
+    for m in modules:
+        params.extend([reduction_fn(p.detach().cpu().numpy()) for p in m.parameters()])
+    return params
+
+
+def plot_grad_flow(named_parameters):
+    '''Plots the gradients flowing through different layers in the net during training.
+    Can be used for checking for possible gradient vanishing / exploding problems.
+
+    Usage: Plug this function in Trainer class after loss.backwards() as
+    "plot_grad_flow(self.model.named_parameters())" to visualize the gradient flow'''
+    ave_grads = []
+    max_grads = []
+    layers = []
+    for n, p in named_parameters:
+        if (p.requires_grad) and ("bias" not in n):
+            layers.append(n)
+            mean = 0 if p.grad is None else p.grad.abs()._mean().item()
+            max = 0 if p.grad is None else p.grad.abs().max().item()
+            ave_grads.append(mean)
+            max_grads.append(max)
+    fig = plt.figure(figsize=(10, 10))
+    plt.bar(np.arange(len(max_grads)), max_grads, alpha=0.1, lw=1, color="c")
+    plt.bar(np.arange(len(max_grads)), ave_grads, alpha=0.1, lw=1, color="b")
+    plt.hlines(0, 0, len(ave_grads) + 1, lw=2, color="k")
+    plt.xticks(range(0, len(ave_grads), 1), layers, rotation="vertical")
+    plt.xlim(left=0, right=len(ave_grads))
+    # plt.ylim(bottom=-0.001, top=0.02)  # zoom in on the lower gradient regions
+    plt.xlabel("Layers")
+    plt.ylabel("average gradient")
+    plt.yscale('log')
+    plt.title("Gradient flow")
+    plt.grid(True)
+    plt.legend([Line2D([0], [0], color="c", lw=4),
+                Line2D([0], [0], color="b", lw=4),
+                Line2D([0], [0], color="k", lw=4)], ['max-gradient', 'mean-gradient', 'zero-gradient'])
+    plt.tight_layout()
