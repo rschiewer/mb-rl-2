@@ -33,8 +33,11 @@ class Scope:
         return self._descr
 
     def __truediv__(self, other):
-        other = str(other)
-        return Scope(self._descr + '/' + other)
+        if self._descr.endswith('/'):
+            descr = self._descr[:-1]
+        else:
+            descr = self._descr
+        return Scope(descr + '/' + str(other))
 
     @staticmethod
     def DEFAULT():
