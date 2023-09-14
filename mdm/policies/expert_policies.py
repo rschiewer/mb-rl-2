@@ -92,12 +92,12 @@ def nav2d_expert_policy(env: CacheLastStepEnv | CacheLastStepVecEnv):
     return a
 
 
-def get_expert_policy(env_name: str):
+def get_expert_policy(env_name: str, fallback_policy: callable):
     match env_name:
         case 'gym_nav2d:nav2dEasySparse-v0':
             return nav2d_expert_policy
         case 'gym_nav2d:nav2dEasy-v0':
             return nav2d_expert_policy
         case _:
-            return None
+            return fallback_policy
 
