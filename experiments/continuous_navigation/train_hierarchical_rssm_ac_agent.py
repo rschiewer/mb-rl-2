@@ -5,6 +5,7 @@ from functools import partialmethod
 
 import gymnasium as gym
 import neptune
+import numpy as np
 from torch.profiler import profile, record_function, ProfilerActivity
 
 from mdm.training.train import train_model, agent_eval_mode, build_rssms, build_agents, build_model_opt
@@ -15,10 +16,13 @@ from mdm.logging.not_logger import NotLogger
 from mdm.logging.logger import Scope, GlobalLogger
 from mdm.training.gym_driver import collect_data, GymEpisodeDriver
 from mdm.policies.agent_policy import *
+from mdm.policies.expert_policies import *
 from mdm.utils.torch_tools import disable_torch_compile
+from sklearn.decomposition import PCA
 
-#from tqdm import tqdm
-#tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
+
+# from tqdm import tqdm
+# tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
 
 
 def main():
@@ -42,24 +46,26 @@ def main():
         logger = NotLogger()
 
     # for debugging
-    #GlobalLogger.bind(logger, {'_mask_model': 50,
-    #                           '_mask_latent_overshooting': 50,
-    #                           '_mask_agent': 50,
-    #                           '_simulated_ground_truth_goal_distance': 50,
-    #                           '_sanity_check_goal_computation': 50})
-
-    env = gym.make(cfg['env_name'])
-    env = CacheLastStepEnv(env)
+    GlobalLogger.bind(logger, {'_mask_model': 50,
+                               '_mask_latent_overshooting': 50,
+                               '_mask_agent': 50,
+                               'simulated_ground_truth_goal_distance': 50,
+                               '_sanity_check_goal_computation': 50})
 
     def make_env_fn():
-        return gym.make(cfg['env_name'])
+        _env = gym.make(cfg['env_name'])
+        _env = gym.wrappers.RescaleAction(_env, min_action=-1.0, max_action=1.0)
+        # if isinstance(_env.observation_space, gym.spaces.dict.Dict):
+        #    _env = gym.wrappers.FlattenObservation(_env)
+        return _env
 
+    env = make_env_fn()
     cfg = cfg_infer_missing_values(cfg, env)  # fill in missing config values
     logger.start_session()
     logger.log(cfg, Scope.HYPERPARAMETERS())  # log complete config
 
     cfg = build_rssms(cfg)
-    r_max_agents, goal_seeking_agents = build_agents(cfg, env, 'cuda')
+    r_max_agents, goal_seeking_agents = build_agents(cfg, env, torch.device('cuda'))
 
     model = HierarchicalRSSM(**cfg['mdm'], r_max_agents=r_max_agents, goal_seeking_agents=goal_seeking_agents)
 
@@ -79,20 +85,25 @@ def main():
 
     opt_model = build_model_opt(model, cfg)
 
-    #model = torch.compile(model, disable=disable_torch_compile)
+    # model = torch.compile(model, disable=disable_torch_compile)
 
     # temporary hack to only train parts of the model
-    #params = chain.from_iterable([model.rssm_modules[0].r_decoder.parameters(),
+    # params = chain.from_iterable([model.rssm_modules[0].r_decoder.parameters(),
     #                              model.rssm_modules[0].term_decoder.parameters(),
     #                              model.rssm_modules[1].r_decoder.parameters(),
     #                              model.rssm_modules[1].term_decoder.parameters()])
-    #opt_model = torch.optim.Adam(params, **cfg['optim'])
+    # opt_model = torch.optim.Adam(params, **cfg['optim'])
     # temporary hack end
 
     collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['trainer']['collect_envs'])
     collect_env = CacheLastStepVecEnv(collect_env)
     eval_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['eval']['eval_envs'])
     eval_env = CacheLastStepVecEnv(eval_env)
+    video_env = gym.make(cfg['env_name'], render_mode='rgb_array')
+    video_env = gym.wrappers.RescaleAction(video_env, min_action=-1.0, max_action=1.0)
+    video_env = gym.wrappers.RecordVideo(video_env, video_folder='videos', name_prefix=f'{os.getpid()}',
+                                         disable_logger=True)
+    video_env = CacheLastStepEnv(video_env)
 
     train_mem = []
     match cfg['prefill_memory']:
@@ -111,15 +122,16 @@ def main():
     if cfg['test_samples']:
         test_mem = load_memory(here() / cfg['test_samples'])
     else:
-        collect_driver = GymEpisodeDriver(collect_env, lambda *x: collect_env.action_space.sample())
-        collect_driver.interact(cfg['prefill_episodes'] // 5, test_mem)
+        policy = get_expert_policy(cfg['env_name'], fallback_policy=lambda *x: collect_env.action_space.sample())
+        collect_driver = GymEpisodeDriver(collect_env, policy)
+        collect_driver.interact(100, test_mem)
     test_driver = OfflineRLDriver(test_mem, sampling_type=SamplingType.RANDOM)
 
-    #fig, ani = visualize_trajectory(train_mem[0])
-    #gif = anim_to_gif(ani)
-    #plt.show()
-    #fig = plot_trajectory_stats(train_mem, 20)
-    #plt.show()
+    # fig, ani = visualize_trajectory(train_mem[0])
+    # gif = anim_to_gif(ani)
+    # plt.show()
+    # fig = plot_trajectory_stats(train_mem, 20)
+    # plt.show()
 
     def simple_collect_fn(explore: bool):
         agent = r_max_agents[0][0]
@@ -135,16 +147,56 @@ def main():
         policy = HierarchicalLatentAgentPolicy(model, explore=explore)
         collected_data_trajectories = collect_data(collect_env, -1, policy)
         # visualize_trajectory(collected_data_trajectories[0])
+
+        """
+        n_plots = model.levels + 1
+        with TempFigure(figsize=(5 * n_plots, 6)) as fig:
+            for l, flight_record_l in enumerate(policy.flight_record):
+                states_lvl = torch.stack(flight_record_l['z_post'])[:, :, :, 0]
+                time_steps_lvl = torch.stack(flight_record_l['time_step'])
+                time_steps_lvl = 1 - (time_steps_lvl / time_steps_lvl.max())
+                d_time, d_batch = states_lvl.shape[:2]
+
+                states_lvl = states_lvl.reshape(d_time * d_batch, -1).detach().cpu().numpy()
+                # time_steps_lvl = time_steps_lvl.reshape(d_time * d_batch, -1).detach().cpu().numpy()
+                time_steps_lvl = time_steps_lvl.detach().cpu().numpy()
+
+                pca = PCA(n_components=3)
+                states_trans = pca.fit_transform(states_lvl)
+                states_trans = states_trans.reshape((d_time, d_batch, -1))
+                colors = np.concatenate([time_steps_lvl, np.zeros((d_time, d_batch, 2))], axis=-1)
+
+                ax = fig.add_subplot(100 + n_plots * 10 + (l + 1), projection='3d')
+                ax.set_title(f'Total explained variance level {l}: {np.sum(pca.explained_variance_ratio_):.3f}')
+                ax.scatter(states_trans[:, 0, 0], states_trans[:, 0, 1], states_trans[:, 0, 2], c=colors[:, 0])
+                ax.set_xlabel(f'PCA 1 ({pca.explained_variance_ratio_[0]:.3f})')
+                ax.set_ylabel(f'PCA 2 ({pca.explained_variance_ratio_[1]:.3f})')
+                ax.set_zlabel(f'PCA 3 ({pca.explained_variance_ratio_[2]:.3f})')
+            obs = torch.stack(policy.flight_record[0]['o']).detach().cpu().numpy()
+            d_time, d_batch = obs.shape[:2]
+            time_steps_lvl = torch.stack(policy.flight_record[0]['time_step']).detach().cpu().numpy()
+            time_steps_lvl = 1 - (time_steps_lvl / time_steps_lvl.max())
+            colors = np.concatenate([time_steps_lvl, np.zeros((d_time, d_batch, 2))], axis=-1)
+            ax = fig.add_subplot(100 + n_plots * 10 + n_plots)
+            ax.scatter(obs[:, 0, 0], obs[:, 0, 1], label='agent position', c=colors[:, 0])
+            ax.scatter(obs[:, 0, 2], obs[:, 0, 3], label='goal position')
+            ax.set_xlim([-1, 1])
+            ax.set_ylim([-1, 1])
+            plt.tight_layout()
+            #plt.show()
+            logger.log_plot(fig_to_img(fig), Scope.TEST() / f'model/latent_state_pca')
+        """
+
         train_mem.extend(collected_data_trajectories)
 
     print('Starting Training')
-    #with torch.autograd.detect_anomaly(check_nan=True):
-    train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collect_fn, eval_env, test_driver,
-                train_driver, logger, log_videos=True)
-    #with profile(activities=[ProfilerActivity.CPU], record_shapes=True, profile_memory=True) as prof:
+    # with torch.autograd.detect_anomaly(check_nan=True):
+    train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, simple_collect_fn, eval_env, test_driver,
+                train_driver, logger, log_videos=False, video_env=video_env)
+    # with profile(activities=[ProfilerActivity.CPU], record_shapes=True, profile_memory=True) as prof:
     #    train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collect_fn, eval_env, test_driver,
     #        train_driver, logger, profile=profiling_run, log_videos=True)
-    #print(prof.key_averages(group_by_input_shape=True).table(sort_by="cpu_time_total", row_limit=10))
+    # print(prof.key_averages(group_by_input_shape=True).table(sort_by="cpu_time_total", row_limit=10))
 
     collect_env.close()
     eval_env.close()

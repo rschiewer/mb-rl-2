@@ -215,11 +215,23 @@ class RunningMeanStd(torch.jit.ScriptModule):
     def var(self):
         return self._var.detach()
 
+    @torch.no_grad()
     def forward(self,
                 x: torch.Tensor,
                 mask: Optional[torch.Tensor] = None):
         self.update(x, mask)
         return self.mean, self.var
+
+    @torch.jit.export
+    def normalize(self,
+                  x: torch.Tensor,
+                  mean: torch.Tensor,
+                  var: torch.Tensor):
+        s_orig = x.shape
+        x_flat = torch.flatten(x, start_dim=0, end_dim=-(self._mean.ndim + 1))
+        x_flat = (x_flat - mean.unsqueeze(0)) / var.unsqueeze(0)
+        x = x_flat.reshape(s_orig)
+        return x
 
     @torch.jit.export
     @torch.no_grad()
@@ -229,15 +241,23 @@ class RunningMeanStd(torch.jit.ScriptModule):
         x = x.detach()
         x = torch.flatten(x, start_dim=0, end_dim=-(self._mean.ndim + 1))
         if mask is None:
-            weights = torch.ones_like(x)
+            mask = torch.zeros_like(x)
         else:
-            weights = 1 - torch.flatten(mask, start_dim=0, end_dim=-(self._mean.ndim + 1))
-        weights = unsqueeze_right(weights, x)
-        weight_denom = weights.sum(dim=0)
-        weights = torch.where(weight_denom > 0, weights / weight_denom, 0.0)
-        batch_mean = torch.sum(x * weights, dim=0, dtype=torch.float64)
-        batch_var = torch.sum(((x - batch_mean[None, ...]) ** 2) * weights, dim=0, dtype=torch.float64)
-        batch_count = x.shape[0]
+            mask = torch.flatten(mask, start_dim=0, end_dim=-(self._mean.ndim + 1))
+        batch_mean = masked_mean(x, mask, dim=0)
+        batch_var = masked_var(x, mask, dim=0)
+
+        # if mask is None:
+        #    weights = torch.ones_like(x)
+        # else:
+        #    weights = 1 - torch.flatten(mask, start_dim=0, end_dim=-(self._mean.ndim + 1))
+
+        # weights = unsqueeze_right(weights, x)
+        # weight_denom = weights.sum(dim=0)
+        # weights = torch.where(weight_denom > 0, weights / weight_denom, 0.0)
+        # batch_mean = torch.sum(x * weights, dim=0, dtype=torch.float64)
+        # batch_var = torch.sum(((x - batch_mean[None, ...]) ** 2) * weights, dim=0, dtype=torch.float64)
+        batch_count = torch.sum(1 - mask.flatten(start_dim=1).mean(dim=1))
         self.update_from_moments(batch_mean, batch_var, batch_count)
 
     def update_from_moments(self, batch_mean, batch_var, batch_count):
@@ -764,7 +784,7 @@ def masked_mean(x: torch.Tensor,
                 dim: int | Tuple[int] | List[int] | None = None,
                 keepdim: bool = False
                 ):
-    assert x.shape[:mask.squeeze().ndim] == mask.squeeze().shape, 'Leading dimensions of x and mask mismatch'
+    #assert x.shape[:mask.squeeze().ndim] == mask.squeeze().shape, 'Leading dimensions of x and mask mismatch'
     valid = 1 - mask
     valid = unsqueeze_right(valid, x)
     valid = valid.expand_as(x)
@@ -794,7 +814,6 @@ def masked_var(x: torch.Tensor,
     diff = (x - masked_x_mean) ** 2
     ret = masked_mean(diff, mask, dim, keepdim=keepdim)
     return ret
-
 
 
 @torch.jit.script

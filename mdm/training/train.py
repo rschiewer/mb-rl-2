@@ -1,3 +1,4 @@
+import math
 import sys
 from typing import List, Dict
 import random
@@ -5,6 +6,8 @@ import os
 import time
 from math import floor, ceil
 
+import gym_nav2d.envs
+import numpy as np
 import torch
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
@@ -14,6 +17,7 @@ from matplotlib.colors import to_rgb
 from tqdm import tqdm
 import gymnasium as gym
 import moviepy.editor as mp
+from torchviz import make_dot
 
 from mdm.logging.logger import Scope, GlobalLogger
 from mdm.policies.agent_policy import HierarchicalLatentAgentPolicy, LatentAgentPolicy
@@ -22,12 +26,12 @@ from mdm.models.building_blocks import *
 from mdm.policies.predefined_policy import PredefinedPolicy
 from mdm.training.gym_driver import collect_data
 from mdm.utils.gym_wrappers import CacheLastStepEnv
-from mdm.utils.torch_tools import to_tensors, to_np, compute_mask
+from mdm.utils.torch_tools import to_tensors, to_np, compute_mask, record_parameters
 from mdm.utils.utils import (prepare_data, TempFigure, trajectory_statistics, trajectories_from_simulation,
                              anim_to_vid, rssm_states_seq_to_batch, log_params, InMemoryFile,
                              fig_to_img, valid_subtrajectories, valid_subtrajectories_unbiased,
                              valid_subtrajectories_unbiased_fast, valid_subtrajectories_2)
-from mdm.utils.gym_nav2d_tools import gen_regular_grid_trajectories, visualize_overlaid_trajectories
+from mdm.utils.gym_nav2d_tools import *
 
 
 def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collect_fn, eval_env, test_driver,
@@ -43,10 +47,19 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
     # grid_trajs = to_tensors(grid_trajs, model.device, padding='repeat')
     # grid_trajs = prepare_data(grid_trajs)
 
+    # actor_params = np.sum(
+    #    record_parameters(model.r_max_agents[0][0].actor_net, reduction_fn=lambda x: x.ravel().mean()))
+    logger.n_log_calls = 0
+
     for i_step in tqdm(range(cfg['trainer']['n_train_steps']), desc='Training Progress'):
         batch = train_driver.interact(cfg['trainer']['d_batch'])
         batch = to_tensors(batch, 'cuda', padding='repeat')
         batch = prepare_data(batch)
+
+        # _new_actor_params = np.sum(
+        #    record_parameters(model.r_max_agents[0][0].actor_net, reduction_fn=lambda x: x.ravel().mean()))
+        # print(actor_params - _new_actor_params)
+        # actor_params = _new_actor_params
 
         if cfg['trainer']['subtrajectory_len'] > 0:
             # model_batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
@@ -58,29 +71,42 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
 
         model.train()
         agent_eval_mode(r_max_agents + goal_seeking_agents)
+        # agent = r_max_agents[0][0]
+        # r_max_agents[0][1].zero_grad(set_to_none=True)
+        # r_max_agents[0][2].zero_grad(set_to_none=True)
         if i_step < freeze_model:
             train_losses, pred, targets, states_below = model.train_step(model_batch, opt_model,
-                                                                         model_steps=model_train_steps)
+                                                                         model_steps=model_train_steps,
+                                                                         logger=logger)
         else:
             train_losses, pred, targets, states_below = model.eval_step(model_batch, model_steps=model_train_steps,
                                                                         force_warmup=[-1 for _ in
                                                                                       range(model.levels)])
-
             print('freezing model')
+
+        # all_losses = torch.stack([v for v in train_losses.values()]).mean()
+        # make_dot(train_losses['o_0'], dict(model.named_parameters())).view()
+        # quit()
+        # make_dot(train_losses['term_0'], dict(model.named_parameters())).view()
+
         logger.log(to_np(train_losses), Scope.TRAIN(), i_step)
 
         # train model in observation mode
         # train_losses = model.train_step(model_batch, opt_model, model_steps=model_train_steps, learn_states=True)
         # logger.log(_to_np(train_losses), Scope.TRAIN() / 'observation_mode', i_step)
 
+        # p0 = torch.sum(torch.stack([p.mean() for p in model.parameters()]))
+        # print(f'Model: {logger.n_log_calls}')
+        logger.n_log_calls = 0
+
         # train agents
         sample_model = cfg['trainer']['sample_model_during_agent_training']
+        sample_agents = cfg['trainer']['sample_agent_during_agent_training']
         if i_step % cfg['trainer']['agent_train_interval'] == 0:
             agent_train_mode(r_max_agents + goal_seeking_agents)
             agent_model_steps = cfg['trainer']['agent_model_steps']
 
             for l in range(model.levels):
-
                 # use all time steps of teacher forcing rollout from model as starting point
                 start_state_lvl, start_state_mask = rssm_states_seq_to_batch(pred[l], targets[l]['terminal'])
                 # prevent gradient flow into the start state
@@ -92,14 +118,22 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 r_max_agent, r_max_actor_opt, r_max_critic_opt = model.r_max_agents[l]
                 abstract_level = l > 0
                 r_max_simulation = r_max_agent.act_in_sim(start_state_lvl, model, agent_model_steps[l],
-                                                          sample_states=sample_model, sample_actions=True,
+                                                          sample_states=sample_model, sample_actions=sample_agents,
                                                           reconstruct=not abstract_level)
-                r_max_losses = r_max_agent.train_step(r_max_simulation['agent'],
-                                                      first_step_mask=start_state_mask.unsqueeze(0),
-                                                      actor_optimizer=r_max_actor_opt,
-                                                      critic_optimizer=r_max_critic_opt)
-                r_max_losses['obtained_reward'] = torch.stack(r_max_simulation['agent']['r']).mean()
+                r_max_losses = r_max_agent.update_step(r_max_simulation['agent'],
+                                                       # first_step_mask=start_state_mask.unsqueeze(0),
+                                                       first_step_mask=None,
+                                                       actor_optimizer=r_max_actor_opt,
+                                                       critic_optimizer=r_max_critic_opt,
+                                                       logger=logger)
+
+                # make_dot(r_max_losses['policy'], dict(r_max_agent.named_parameters())).view()
+                # quit()
+
+                # r_max_losses['obtained_reward'] = torch.stack(r_max_simulation['agent']['r']).sum(dim=0).mean()
                 logger.log(to_np(r_max_losses), Scope.TRAIN() / f'r_max_agent/{l}/', i_step)
+
+                # print(f'Agent: {logger.n_log_calls}')
 
                 if GlobalLogger.can_log('sanity_check_goal_computation', i_step):
                     if l < model.levels - 1:
@@ -154,24 +188,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                                             i_step)
 
                 if l < model.levels - 1:
-                    # update model's stats about how distant goals are on average
-                    chunk_size = model.strides[l + 1]
-                    goals = model.filter_up(o=r_max_simulation['model']['z'], r=r_max_simulation['model']['r'],
-                                            terminal=r_max_simulation['model']['terminal'], level=l + 1,
-                                            respect_terminal_flag=False)
-                    goals_mask = compute_mask(goals['terminal'])
-                    goals_mask = torch.maximum(goals_mask[:-1], goals_mask[1:])  # need valid start _and_ end goal
-                    goals_distance = torch.abs(goals['o'][:-1] - goals['o'][1:])
-                    # partition goal sequence in 3 equal parts if possible, if not make middle part longer
-                    i0 = floor(chunk_size / 3)
-                    i1 = ceil(2 * chunk_size / 3)
-                    model.avg_chunk_dist_early[l].update(goals_distance[:i0], mask=goals_mask[:i0])
-                    model.avg_chunk_dist_mid[l].update(goals_distance[i0:-i1], mask=goals_mask[i0:-i1])
-                    model.avg_chunk_dist_late[l].update(goals_distance[-i1:], mask=goals_mask[-i1:])
-                    chunk_dist_stats = {'early': model.avg_chunk_dist_early[l].mean.mean(),
-                                        'mid': model.avg_chunk_dist_mid[l].mean.mean(),
-                                        'late': model.avg_chunk_dist_late[l].mean.mean()}
-                    logger.log(to_np(chunk_dist_stats), Scope.TRAIN() / f'model/{l}/average_chunk_length/', i_step)
+                    update_model_chunk_distance(i_step, l, logger, model, r_max_simulation)
 
                     """
                     Version A: 
@@ -338,221 +355,225 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                     gsa_start_states = rssm_detach_state(*gsa_start_states)
                     gsa_goal_states, _ = rssm_states_seq_to_batch(pred[l], targets[l]['terminal'],
                                                                   i_start=chunk_size)
-                    n_steps = chunk_size + 1  # one additional step
+                    gsa_goal_states = rssm_detach_state(*gsa_goal_states)
+
+                    #with torch.no_grad():
+                    #    # 10% random perturbation
+                    #    gsa_start_states = [x + 0.1 * (torch.rand_like(x) - 0.5) * x for x in gsa_start_states]
+                    #    gsa_goal_states = [x + 0.1 * (torch.rand_like(x) - 0.5) * x for x in gsa_goal_states]
+
+                    n_steps = chunk_size  # one additional step
                     goal_simulation = goal_agent.act_in_sim(gsa_start_states, model, n_steps, gsa_goal_states[0],
-                                                            sample_states=True, sample_actions=True,
+                                                            sample_states=False, sample_actions=sample_agents,
                                                             disable_exploration=False, reconstruct=False)
 
                     agent_mem = goal_simulation['agent']
+                    agent_mem['o'].append(torch.zeros_like(agent_mem['o'][0]))
+                    agent_mem['r'].append(torch.zeros_like(agent_mem['r'][0]))
+                    agent_mem['terminal'].append(torch.zeros_like(agent_mem['terminal'][0]))
+                    agent_mem['a'].append(torch.zeros_like(agent_mem['a'][0]))
+                    agent_mem['a_dist'].append(torch.zeros_like(agent_mem['a_dist'][0]))
                     # make last reward 0 to avoid goal seeking agent getting reward from beyond goal
-                    agent_mem['r'][-1] = torch.zeros_like(agent_mem['r'][-1])
+                    # agent_mem['r'][-1] = torch.zeros_like(agent_mem['r'][-1])
                     # make last time step terminal to avoid goal seeking agent getting bootstraps from beyond goals
-                    agent_mem['terminal'][-1] = torch.ones_like(agent_mem['terminal'][-1])
-                    agent_mem['terminal'][-2] = torch.ones_like(agent_mem['terminal'][-2])
-                    goal_losses = goal_agent.train_step(agent_mem, first_step_mask=gsa_first_step_mask.unsqueeze(0),
-                                                        actor_optimizer=goal_actor_opt,
-                                                        critic_optimizer=goal_critic_opt)
-                    obtained_step_reward = torch.stack(agent_mem['r'])
-                    goal_losses['obtained_reward'] = obtained_step_reward.mean()
-
-                    if GlobalLogger.can_log('simulated_ground_truth_goal_distance', i_step):
-                        obtained_step_reward = obtained_step_reward.mean(dim=1)
-                        with TempFigure(dpi=60) as fig:
-                            plt.plot(obtained_step_reward.detach().cpu().numpy().squeeze(), marker='o', figure=fig)
-                            plt.scatter(np.arange(chunk_size - 1, agent_model_steps[l] + chunk_size - 1, chunk_size),
-                                        obtained_step_reward.detach().cpu().numpy().squeeze()[
-                                        chunk_size - 1::chunk_size],
-                                        marker='o', s=100)
-                            plt.suptitle(f'L{l} Goal Seeking Agent Step Rewards')
-                            plt.tight_layout()
-                            logger.log_plot(fig_to_img(fig), Scope.TRAIN() / f'goal_seeking_agent/{l}/step_reward',
-                                            i_step)
+                    # agent_mem['terminal'][-1] = torch.ones_like(agent_mem['terminal'][-1])
+                    # agent_mem['terminal'][-2] = torch.ones_like(agent_mem['terminal'][-2])
+                    goal_losses = goal_agent.update_step(agent_mem,
+                                                         # first_step_mask=gsa_first_step_mask.unsqueeze(0),
+                                                         first_step_mask=None,
+                                                         actor_optimizer=goal_actor_opt,
+                                                         critic_optimizer=goal_critic_opt)
 
                     logger.log(to_np(goal_losses), Scope.TRAIN() / f'goal_seeking_agent/{l}/', i_step)
+
+        # p1 = torch.sum(torch.stack([p.mean() for p in model.parameters()]))
+        # assert np.isclose((p0 - p1).detach().cpu().numpy(), 0), 'Model parameters changed during agent training!'
 
         if i_step % cfg['trainer']['collect_interval'] == 0 and i_step < stop_collect:
             collect_fn(explore=True)
 
         # eval =========================================================================================================
         if i_step % cfg['trainer']['eval_interval'] == 0:
-            agent_eval_mode(r_max_agents + goal_seeking_agents)
-            model.eval()
+            with torch.no_grad():
+                agent_eval_mode(r_max_agents + goal_seeking_agents)
+                model.eval()
 
-            # model
-            trajs_orig = test_driver.interact(cfg['trainer']['d_batch'])
-            batch = to_tensors(trajs_orig, model.device, padding='repeat')
-            batch = prepare_data(batch)
-            eval_steps = [-1] + cfg['trainer']['model_train_steps'][1:]
-            eval_losses, pred, targets, _ = model.eval_step(batch, model_steps=eval_steps, sample_state=False,
-                                                            sample_output=False,
-                                                            force_warmup=[-1 for _ in range(model.levels)])
-            logger.log(to_np(eval_losses), Scope.TEST(), i_step)
+                # model
+                trajs_orig = test_driver.interact(cfg['trainer']['d_batch'])
+                batch = to_tensors(trajs_orig, model.device, padding='repeat')
+                batch = prepare_data(batch)
+                eval_steps = [-1] + cfg['trainer']['model_train_steps'][1:]
+                eval_losses, pred, targets, _ = model.eval_step(batch, model_steps=eval_steps, sample_state=False,
+                                                                sample_output=False,
+                                                                force_warmup=[-1 for _ in range(model.levels)])
+                logger.log(to_np(eval_losses), Scope.TEST(), i_step)
 
-            for l, pred_l in enumerate(pred):
-                o_predicted = torch.stack(pred_l['o']).detach().cpu().numpy()
-                r_predicted = torch.stack(pred_l['r']).detach().cpu().numpy()
-                term_predicted = torch.stack(pred_l['terminal']).detach().cpu().numpy()
-                # with TempFigure() as fig:
-                #    plt.plot(o_predicted[:, 0], marker='o', label='observation')
-                #    plt.plot(r_predicted[:, 0], marker='+', label='reward')
-                #    plt.plot(term_predicted[:, 0], marker='x', label='terminal')
-                #    plt.legend()
-                #    plt.suptitle(f'Observations and terminal flags level {l}')
-                #    logger.log_plot(fig_to_img(fig), Scope.TEST() / f'model/predicted_o_{l}', i_step)
+                # test various model prediction lengths
+                log_prediction_error_plot(batch, cfg, i_step, logger, model, pred, targets)
 
-            # probe L0 goal seeking agent
-            if len(model.goal_seeking_agents) > 0:
-                gsa = model.goal_seeking_agents[0][0]
-                goals = model.filter_up(o=pred[0]['z'][1:], terminal=targets[0]['terminal'][1:], level=1)['o']
-                goal_obs = model.filter_up(o=targets[0]['o'][1:], terminal=targets[0]['terminal'][1:], level=1)['o']
-                goal_terminals = model.filter_up(o=targets[0]['terminal'][1:], terminal=targets[0]['terminal'][1:],
-                                                 level=1)['o']
-                chunk_size = model.strides[1]
-                gsa_agent_mem = {}
-                total_steps_remaining = len(batch['o']) - 1  # first step is start state
-                state = {k: pred[0][k][0] for k in rssm_state_keys()}
-                state = rssm_remove_labels(state)
-                for i_goal, goal in enumerate(goals):
-                    #i_state = i_goal * chunk_size
-                    #state = rssm_remove_labels({k: pred[0][k][i_state] for k in rssm_state_keys()})
-                    n_steps = np.minimum(total_steps_remaining, chunk_size)
-                    simulation = gsa.act_in_sim(env_start_state=state, sim_env=model, n_steps=n_steps, goal=goal,
-                                                sample_actions=False, disable_exploration=True, sample_states=False,
-                                                agent_memory=gsa_agent_mem)
-                    state = simulation['model_state']
-                    total_steps_remaining -= chunk_size
+                # probe L0 goal seeking agent
+                if len(model.goal_seeking_agents) > 0 and isinstance(eval_env.env_fns[0]().unwrapped,
+                                                                     gym_nav2d.envs.Nav2dEnv):
+                    gsa = model.goal_seeking_agents[0][0]
+                    goals = model.filter_up(o=pred[0]['z'][1:], terminal=targets[0]['terminal'][1:], level=1)['o']
+                    goal_obs = model.filter_up(o=targets[0]['o'][1:], terminal=targets[0]['terminal'][1:], level=1)['o']
+                    goal_terminals = model.filter_up(o=targets[0]['terminal'][1:], terminal=targets[0]['terminal'][1:],
+                                                     level=1)['o']
+                    chunk_size = model.strides[1]
+                    gsa_agent_mem = {}
+                    total_steps_remaining = len(batch['o']) - 1  # first step is start state
+                    state = {k: pred[0][k][0] for k in rssm_state_keys()}
+                    state = rssm_remove_labels(state)
+                    for i_goal, goal in enumerate(goals):
+                        # i_state = i_goal * chunk_size
+                        # state = rssm_remove_labels({k: pred[0][k][i_state] for k in rssm_state_keys()})
+                        n_steps = np.minimum(total_steps_remaining, chunk_size)
+                        simulation = gsa.act_in_sim(env_start_state=state, sim_env=model, n_steps=n_steps, goal=goal,
+                                                    sample_actions=False, disable_exploration=True, sample_states=False,
+                                                    agent_memory=gsa_agent_mem)
+                        state = simulation['model_state']
+                        total_steps_remaining -= chunk_size
 
-                a_gsa_sim = torch.stack(gsa_agent_mem['a'])[:, 0].detach().cpu().numpy()
-                env = CacheLastStepEnv(eval_env.env_fns[0]())
-                init_obs = targets[0]['o'][0][0].detach().cpu().numpy()
-                init_obs_unnorm = env.unnormalize_observation(init_obs)
-                env_init_options = {'agent_x': init_obs_unnorm[0], 'agent_y': init_obs_unnorm[1]}
-                gsa_executed_actions_mem = collect_data(env, a_gsa_sim.shape[0] + 1, PredefinedPolicy(a_gsa_sim),
-                                                        options=env_init_options)
+                    a_gsa_sim = torch.stack(gsa_agent_mem['a'])[:, 0].detach().cpu().numpy()
+                    env = CacheLastStepEnv(eval_env.env_fns[0]())
+                    init_obs = targets[0]['o'][0][0].detach().cpu().numpy()
+                    init_obs_unnorm = env.unnormalize_observation(init_obs)
+                    env_init_options = {'agent_x': init_obs_unnorm[0], 'agent_y': init_obs_unnorm[1]}
+                    gsa_executed_actions_mem = collect_data(env, a_gsa_sim.shape[0] + 1, PredefinedPolicy(a_gsa_sim),
+                                                            options=env_init_options)
 
-                orig_obs = targets[0]['o'][1:].detach().cpu().numpy()
-                valid_steps = 1 - compute_mask(targets[0]['terminal'][1:]).detach().cpu().numpy()
-                agent_obs = gsa_executed_actions_mem[0]['o'][1:]
-                goal_obs = goal_obs.detach().cpu().numpy()
-                valid_goals = 1 - compute_mask(goal_terminals).detach().cpu().numpy()
-                hsv_values = np.linspace(0.9, 0.2, num=np.maximum(len(agent_obs), len(orig_obs)))
-                with TempFigure() as fig:
-                    c = [to_rgba(hsv_to_rgb((0.05, 1.0, hsv_values[t])), valid_goals[t, 0, 0]) for t in
-                         range(len(goal_obs))]
-                    plt.scatter(goal_obs[:, 0, 0], goal_obs[:, 0, 1], label='goal pos', figure=fig, c=c, s=100)
-                    c = [to_rgba(hsv_to_rgb((0.15, 1.0, hsv_values[t])), valid_steps[t, 0, 0]) for t in
-                         range(len(orig_obs))]
-                    plt.scatter(orig_obs[:, 0, 0], orig_obs[:, 0, 1], label='original pos', figure=fig, c=c, s=60)
-                    c = [to_rgba(hsv_to_rgb((0.55, 1.0, hsv_values[t])), valid_steps[t, 0, 0]) for t in
-                         range(len(agent_obs))]
-                    plt.scatter(agent_obs[:, 0], agent_obs[:, 1], label='agent pos', figure=fig, c=c, marker="P")
-                    plt.suptitle(f'{valid_steps[:, 0, 0].sum().astype(int)} steps')
-                    plt.scatter(init_obs[0], init_obs[1], marker='p', label='start pos', c='green')
-                    plt.legend()
-                    fig.axes[0].add_patch(Rectangle((-1, -1), 2, 2, fill=False, edgecolor='grey', linestyle='--'))
-                    # plt.show()
-                    logger.log_plot(fig_to_img(fig), Scope.TEST() / f'goal_seeking_agent/{0}/goal_seeking_plot', i_step)
+                    orig_obs = targets[0]['o'][1:].detach().cpu().numpy()
+                    valid_steps = 1 - compute_mask(targets[0]['terminal'][1:]).detach().cpu().numpy()
+                    agent_obs = gsa_executed_actions_mem[0]['o'][1:]
+                    goal_obs = goal_obs.detach().cpu().numpy()
+                    valid_goals = 1 - compute_mask(goal_terminals).detach().cpu().numpy()
+                    hsv_values = np.linspace(0.9, 0.2, num=np.maximum(len(agent_obs), len(orig_obs)))
+                    with TempFigure() as fig:
+                        c = [to_rgba(hsv_to_rgb((0.05, 1.0, hsv_values[t])), valid_goals[t, 0, 0]) for t in
+                             range(len(goal_obs))]
+                        plt.scatter(goal_obs[:, 0, 0], goal_obs[:, 0, 1], label='goal pos', figure=fig, c=c, s=100)
+                        c = [to_rgba(hsv_to_rgb((0.15, 1.0, hsv_values[t])), valid_steps[t, 0, 0]) for t in
+                             range(len(orig_obs))]
+                        plt.scatter(orig_obs[:, 0, 0], orig_obs[:, 0, 1], label='original pos', figure=fig, c=c, s=60)
+                        c = [to_rgba(hsv_to_rgb((0.55, 1.0, hsv_values[t])), valid_steps[t, 0, 0]) for t in
+                             range(len(agent_obs))]
+                        plt.scatter(agent_obs[:, 0], agent_obs[:, 1], label='agent pos', figure=fig, c=c, marker="P")
+                        plt.suptitle(f'{valid_steps[:, 0, 0].sum().astype(int)} steps')
+                        plt.scatter(init_obs[0], init_obs[1], marker='p', label='start pos', c='green')
+                        plt.legend()
+                        fig.axes[0].add_patch(Rectangle((-1, -1), 2, 2, fill=False, edgecolor='grey', linestyle='--'))
+                        # plt.show()
+                        logger.log_plot(fig_to_img(fig), Scope.TEST() / f'goal_seeking_agent/{0}/goal_seeking_plot',
+                                        i_step)
 
-            # hierarchical agent
-            eval_env.reset()
-            policy = HierarchicalLatentAgentPolicy(model, explore=False)
-            eval_mem_hierarchical = collect_data(eval_env, cfg['eval']['eval_steps'], policy)
-            logger.log(trajectory_statistics(eval_mem_hierarchical), Scope.TEST() / 'hierarchical_agent/', i_step)
+                # hierarchical agent
+                eval_env.reset()
+                policy = HierarchicalLatentAgentPolicy(model, explore=False)
+                eval_mem_hierarchical = collect_data(eval_env, cfg['eval']['eval_steps'], policy)
+                logger.log(trajectory_statistics(eval_mem_hierarchical), Scope.TEST() / 'hierarchical_agent/', i_step)
 
-            # record video with hierarchical policy
-            if video_env:
-                # record an episode
-                video_env.reset()
-                video_env.start_video_recorder()
-                _ = collect_data(video_env, cfg['eval']['eval_steps'], policy)
-                video_env.close_video_recorder()
+                # record video with hierarchical policy
+                if video_env:
+                    # record an episode
+                    video_env.reset()
+                    video_env.get_wrapper_attr('start_video_recorder')()
+                    policy = HierarchicalLatentAgentPolicy(model, explore=False)
+                    _ = collect_data(video_env, cfg['eval']['eval_steps'], policy)
+                    video_env.get_wrapper_attr('close_video_recorder')()
 
-                # make video smaller
-                video_name = f'{video_env.name_prefix}-episode-{video_env.episode_id}.mp4'
-                video_path = os.path.join(video_env.video_folder, video_name)
+                    # make video smaller
+                    # video_name = f'{video_env.name_prefix}-episode-{video_env.episode_id-1}.mp4'
+                    # video_path = os.path.join(video_env.video_folder, video_name)
+                    video_path = video_env.env.video_recorder.path
+                    metadata_path = video_path[:video_path.rindex('.')] + '.meta.json'
 
-                timestamp = time.time_ns()
-                pid = os.getpid()
-                tmp_file_name = f'.{pid}_{timestamp}_agent_video.mp4'
+                    timestamp = time.time_ns()
+                    pid = os.getpid()
+                    tmp_file_name = f'.{pid}_{timestamp}_agent_video.mp4'
 
-                clip = mp.VideoFileClip(video_path)
-                clip = clip.resize(width=64)
-                clip.write_videofile(tmp_file_name, preset='veryslow', verbose=False, logger=None)
+                    clip = mp.VideoFileClip(video_path)
+                    clip = clip.resize(width=64)
+                    clip.write_videofile(tmp_file_name, preset='veryslow', verbose=False, logger=None)
+                    try:
+                        os.remove(video_path)  # delete original video file
+                        os.remove(metadata_path)
+                    except FileNotFoundError:
+                        print('Failed to delete original video data')
 
-                # upload
-                video = InMemoryFile.consume_file(tmp_file_name)
-                logger.log({'hierarchical_agent': video}, Scope.TEST() / 'agent_action_videos/', i_step)
+                    # upload
+                    video = InMemoryFile.consume_file(tmp_file_name)
+                    logger.log({'hierarchical_agent': video}, Scope.TEST() / 'agent_action_videos/', i_step)
 
-            # flat agent
-            eval_env.reset()
-            policy = LatentAgentPolicy(r_max_agents[0][0], model, explore=False)
-            eval_mem_flat = collect_data(eval_env, cfg['eval']['eval_steps'], policy)
-            logger.log(trajectory_statistics(eval_mem_flat), Scope.TEST() / 'flat_agent/', i_step)
+                # flat agent
+                eval_env.reset()
+                policy = LatentAgentPolicy(r_max_agents[0][0], model, explore=False)
+                eval_mem_flat = collect_data(eval_env, cfg['eval']['eval_steps'], policy)
+                logger.log(trajectory_statistics(eval_mem_flat), Scope.TEST() / 'flat_agent/', i_step)
 
-            if log_videos:
-                # print trajectories, works only for nav2d env
-                with TempFigure() as fig:
-                    fig, anim = visualize_overlaid_trajectories(eval_mem_flat[0], figure=fig)
-                    vid_flat = anim_to_vid(anim)
-                    vid_flat.name = 'flat_agent_acting'
-                with TempFigure() as fig:
-                    fig, anim = visualize_overlaid_trajectories(eval_mem_hierarchical[0], figure=fig)
-                    vid_hierarchical = anim_to_vid(anim)
-                    vid_hierarchical.name = 'hierarchical_agent_acting'
-                logger.log({'flat_agent': vid_flat, 'hierarchical_agent': vid_hierarchical},
-                           Scope.TEST() / 'agent_action_videos/', i_step)
+                if log_videos:
+                    # print trajectories, works only for nav2d env
+                    with TempFigure() as fig:
+                        fig, anim = visualize_overlaid_trajectories(eval_mem_flat[0], figure=fig)
+                        vid_flat = anim_to_vid(anim)
+                        vid_flat.name = 'flat_agent_acting'
+                    with TempFigure() as fig:
+                        fig, anim = visualize_overlaid_trajectories(eval_mem_hierarchical[0], figure=fig)
+                        vid_hierarchical = anim_to_vid(anim)
+                        vid_hierarchical.name = 'hierarchical_agent_acting'
+                    logger.log({'flat_agent': vid_flat, 'hierarchical_agent': vid_hierarchical},
+                               Scope.TEST() / 'agent_action_videos/', i_step)
 
-                # model l0 simulation plot, works only for nav2d env
-                warmup_steps = model.maybe_sample_warmup_steps(training_data=batch, model_steps=model_train_steps,
-                                                               warmup_steps=cfg['eval']['warmup_steps'])
-                pred, pred_ema, _, _ = model.forward_all_levels(ground_truth_trajectory=batch,
-                                                                warmup_steps=warmup_steps,
-                                                                model_steps=model_train_steps,
-                                                                sample_state=True,
-                                                                sample_output=False)
-                trajs_orig_pad = trajectories_from_simulation(batch)  # to get padded version of orig trajectories
-                trajs_sim = trajectories_from_simulation(pred[0])
-                with TempFigure() as fig:
-                    fig, anim = visualize_overlaid_trajectories(trajs_sim[0], trajs_orig_pad[0], figure=fig)
-                    vid = anim_to_vid(anim)
-                    vid.name = 'model_sim'
-                logger.log({'live_model': vid}, Scope.TEST() / 'model_prediction_video/', i_step)
+                    # model l0 simulation plot, works only for nav2d env
+                    warmup_steps = model.maybe_sample_warmup_steps(training_data=batch, model_steps=model_train_steps,
+                                                                   warmup_steps=cfg['eval']['warmup_steps'])
+                    pred, pred_ema, _, _ = model.forward_all_levels(ground_truth_trajectory=batch,
+                                                                    warmup_steps=warmup_steps,
+                                                                    model_steps=model_train_steps,
+                                                                    sample_state=True,
+                                                                    sample_output=False)
+                    trajs_orig_pad = trajectories_from_simulation(batch)  # to get padded version of orig trajectories
+                    trajs_sim = trajectories_from_simulation(pred[0])
+                    with TempFigure() as fig:
+                        fig, anim = visualize_overlaid_trajectories(trajs_sim[0], trajs_orig_pad[0], figure=fig)
+                        vid = anim_to_vid(anim)
+                        vid.name = 'model_sim'
+                    logger.log({'live_model': vid}, Scope.TEST() / 'model_prediction_video/', i_step)
 
-            # log model and agent params
-            log_params(model, logger, Scope.PARAMETERS() / 'model', time_step=i_step)
-            for i_ag, ag in enumerate(r_max_agents):
-                if ag is None: continue
-                log_params(ag[0], logger, Scope.PARAMETERS() / f'agent/r_max_agent_{i_ag}', time_step=i_step)
-            for i_ag, ag in enumerate(goal_seeking_agents):
-                if ag is None: continue
-                log_params(ag[0], logger, Scope.PARAMETERS() / f'agent/goal_seeking_agent_{i_ag}', time_step=i_step)
+                # log model and agent params
+                # log_params(model, logger, Scope.PARAMETERS() / 'model', time_step=i_step)
+                # for i_ag, ag in enumerate(r_max_agents):
+                #    if ag is None: continue
+                #    log_params(ag[0], logger, Scope.PARAMETERS() / f'agent/r_max_agent_{i_ag}', time_step=i_step)
+                # for i_ag, ag in enumerate(goal_seeking_agents):
+                #    if ag is None: continue
+                #    log_params(ag[0], logger, Scope.PARAMETERS() / f'agent/goal_seeking_agent_{i_ag}', time_step=i_step)
 
-            """
-                _, pred_grid, _, _ = model.eval_step(grid_trajs, model_steps=eval_steps, sample_state=False,
-                sample_output=False,
-                force_warmup=[-1 for _ in range(model.levels)])
-                
-                # latent sate PCA 3d plot
-                states = torch.stack(pred_grid[0]['z'])
-                states = states.detach().cpu().numpy()
-                d_time, d_batch, d_z = states.shape
-                pca = PCA(n_components=3)
-                states_trans = pca.fit_transform(states.reshape(d_time * d_batch, d_z))
-                xy_positions = (grid_trajs['o'].detach().cpu().numpy()[:, :, :2].reshape(d_time * d_batch, 2) + 1.0) / 2.0
-                colors = np.concatenate([xy_positions, np.zeros((d_time * d_batch, 1), dtype=float)], axis=-1)
-                with TempFigure() as fig:
-                ax = fig.add_subplot(projection='3d')
-                ax.set_title(f'Total explained variance: {np.sum(pca.explained_variance_ratio_):.3f}')
-                ax.scatter(states_trans[:, 0], states_trans[:, 1], states_trans[:, 2], c=colors)
-                ax.set_xlabel(f'PCA 1 ({pca.explained_variance_ratio_[0]:.3f})')
-                ax.set_ylabel(f'PCA 2 ({pca.explained_variance_ratio_[1]:.3f})')
-                ax.set_zlabel(f'PCA 3 ({pca.explained_variance_ratio_[2]:.3f})')
-                plt.tight_layout()
-                logger.log_plot(fig_to_img(fig), Scope.TEST() / f'model/{0}/latent_state_pca', i_step)
-                # sanity check to confirm that coloring based on xy positions makes sense
-                # plt.scatter(xy_positions[:, 0], xy_positions[:, 1], c=colors)
-                # plt.show()
                 """
+                    _, pred_pca, _, _ = model.eval_step(model_batch, model_steps=eval_steps, sample_state=False,
+                    sample_output=False,
+                    force_warmup=[-1 for _ in range(model.levels)])
+                    # latent sate PCA 3d plot
+                    for l in range(model.levels):
+                    states = torch.stack(pred_pca[0]['z'])
+                    states = states.detach().cpu().numpy()
+                    d_time, d_batch, d_z = states.shape
+                    pca = PCA(n_components=3)
+                    states_trans = pca.fit_transform(states.reshape(d_time * d_batch, d_z))
+                    xy_positions = (model_batch['o'].detach().cpu().numpy()[:, :, :2].reshape(d_time * d_batch, 2) + 1.0) / 2.0
+                    colors = np.concatenate([xy_positions, np.zeros((d_time * d_batch, 1), dtype=float)], axis=-1)
+                    with TempFigure() as fig:
+                    ax = fig.add_subplot(projection='3d')
+                    ax.set_title(f'Total explained variance: {np.sum(pca.explained_variance_ratio_):.3f}')
+                    ax.scatter(states_trans[:, 0], states_trans[:, 1], states_trans[:, 2], c=colors)
+                    ax.set_xlabel(f'PCA 1 ({pca.explained_variance_ratio_[0]:.3f})')
+                    ax.set_ylabel(f'PCA 2 ({pca.explained_variance_ratio_[1]:.3f})')
+                    ax.set_zlabel(f'PCA 3 ({pca.explained_variance_ratio_[2]:.3f})')
+                    plt.tight_layout()
+                    logger.log_plot(fig_to_img(fig), Scope.TEST() / f'model/{0}/latent_state_pca', i_step)
+                    # sanity check to confirm that coloring based on xy positions makes sense
+                    # plt.scatter(xy_positions[:, 0], xy_positions[:, 1], c=colors)
+                    # plt.show()
+                    """
 
         if i_step % cfg['trainer']['checkpoint_interval'] == 0:
             timestamp = time.time_ns()
@@ -561,6 +582,85 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
             torch.save(model.state_dict(), model_path)
             cpt_file = InMemoryFile.consume_file(model_path, new_name='checkpoint')
             logger.log_file(cpt_file, Scope.DATA() / 'weights')
+
+
+def update_model_chunk_distance(i_step, l, logger, model, r_max_simulation):
+    # update model's stats about how distant goals are on average
+    with torch.no_grad():
+        chunk_size = model.strides[l + 1]
+        goals = model.filter_up(o=r_max_simulation['model']['z'], r=r_max_simulation['model']['r'],
+                                terminal=r_max_simulation['model']['terminal'], level=l + 1,
+                                respect_terminal_flag=True)
+        goals_mask = compute_mask(goals['terminal'])
+        goals_mask = torch.maximum(goals_mask[:-1], goals_mask[1:])  # need valid start _and_ end goal
+        goals_distance = torch.abs(goals['o'][:-1] - goals['o'][1:])
+        # partition goal sequence in 3 equal parts if possible, if not make middle part longer
+        i0 = floor(chunk_size / 3)
+        i1 = ceil(2 * chunk_size / 3)
+        model.avg_chunk_dist_early[l].update(goals_distance[:i0], mask=goals_mask[:i0])
+        model.avg_chunk_dist_mid[l].update(goals_distance[i0:-i1], mask=goals_mask[i0:-i1])
+        model.avg_chunk_dist_late[l].update(goals_distance[-i1:], mask=goals_mask[-i1:])
+        chunk_dist_stats = {'early': model.avg_chunk_dist_early[l].mean.mean(),
+                            'mid': model.avg_chunk_dist_mid[l].mean.mean(),
+                            'late': model.avg_chunk_dist_late[l].mean.mean()}
+        # logger.log(to_np(chunk_dist_stats), Scope.TRAIN() / f'model/{l}/average_chunk_length/', i_step)
+
+
+def log_prediction_error_plot(batch, cfg, i_step, logger, model, pred, targets):
+    traj_len = 20
+    trunc_test_batch = valid_subtrajectories_2(batch, traj_len)
+    eval_steps = [-1] + cfg['trainer']['model_train_steps'][1:]
+    measurements = [{'o': [], 'r': [], 'terminal': [], 'n_warmup': []} for _ in range(model.levels)]
+    for n_wu in range(1, traj_len, 3):
+        eval_losses, pred, targets, _ = model.eval_step(trunc_test_batch, model_steps=eval_steps,
+                                                        sample_state=False, sample_output=False,
+                                                        force_warmup=[n_wu for _ in range(model.levels)])
+        for l in range(model.levels):
+            valid = 1 - compute_mask(targets[l]['terminal'])
+            denom = torch.sum(valid, dim=[1, 2]).to(torch.float32)
+            denom = torch.where(denom == 0, 1.0, denom)
+
+            o_diff = torch.abs(torch.stack(pred[l]['o']) - targets[l]['o'])
+            o_diff = (o_diff * valid).sum(dim=[1, 2]) / denom
+            r_diff = torch.abs(torch.stack(pred[l]['r']) - targets[l]['r'])
+            r_diff = (r_diff * valid).sum(dim=[1, 2]) / denom
+            term_diff = torch.abs(torch.stack(pred[l]['terminal']) - targets[l]['terminal'])
+            term_diff = (term_diff * valid).sum(dim=[1, 2]) / denom
+
+            measurements[l]['n_warmup'].append(n_wu)
+            measurements[l]['o'].append(o_diff.detach().cpu().numpy())
+            measurements[l]['r'].append(r_diff.detach().cpu().numpy())
+            measurements[l]['terminal'].append(term_diff.detach().cpu().numpy())
+
+    for l in range(model.levels):
+        warmup_steps = measurements[l]['n_warmup']
+        o_diff = measurements[l]['o']
+        r_diff = measurements[l]['r']
+        term_diff = measurements[l]['terminal']
+        with TempFigure(figsize=(13, 4)) as fig:
+            for diff, title, pos in zip([o_diff, r_diff, term_diff], ('o', 'r', 'terminal'), (1, 2, 3)):
+                time_steps = list(range(len(diff[0])))
+                ax = fig.add_subplot(1, 3, pos, projection='3d')
+                ax.set_title(f'Prediction MAE {title}')
+                ax.set_xlabel('Time')
+                ax.set_ylabel('Warmup Steps')
+                ax.set_zlabel('Prediction MAE')
+                ax.set_xticks(time_steps[::2])
+                ax.set_yticks(warmup_steps)
+                ax.invert_yaxis()
+                for i_run, n_wu in enumerate(warmup_steps):
+                    y_coord = [n_wu for _ in time_steps]
+                    z_coord = diff[i_run]
+                    ax.plot(time_steps, y_coord, np.zeros_like(z_coord), c=(0.9, 0.9, 0.9, 0.6), linewidth=5)
+                    ax.plot(time_steps, y_coord, np.zeros_like(z_coord), c=(0.8, 0.8, 0.8, 0.5), linewidth=3)
+                    ax.plot(time_steps, y_coord, np.zeros_like(z_coord), c=(0.6, 0.6, 0.6, 0.6), linewidth=1)
+                for i_run, n_wu in enumerate(warmup_steps):
+                    y_coord = [n_wu for _ in time_steps]
+                    z_coord = diff[i_run]
+                    ax.plot(time_steps, y_coord, z_coord, linewidth=2)
+            plt.tight_layout()
+            # plt.show()
+            logger.log_plot(fig_to_img(fig), Scope.TEST() / f'model/{l}/prediction_error', i_step)
 
 
 # print(torch.cuda.memory_allocated() / torch.cuda.max_memory_allocated())

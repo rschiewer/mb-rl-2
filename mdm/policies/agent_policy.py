@@ -1,3 +1,4 @@
+import itertools
 from typing import Dict, Union, Sequence
 
 import torch
@@ -30,28 +31,27 @@ class LatentAgentPolicy(Policy):
                  agent: ActorCriticAgent,
                  model: HierarchicalRSSM,
                  explore: bool = False,
-                 init_data: Dict[str, torch.Tensor] = None,
-                 use_ema_modules: bool = False):
+                 init_data: Dict[str, torch.Tensor] = None):
         super().__init__()
-        assert np.prod(agent.d_o) == model.rssm_modules[agent.level].d_z
+        assert np.prod(agent.d_o) == model.rssm_modules[agent.level].d_z_smpl
 
         self.agent = agent
         self.model = model
         self.explore = explore
-        self._use_ema_modules = use_ema_modules
 
         if init_data is not None:
             mem, env_state = model.observe(o=init_data['o'], a=init_data['a'], r=init_data['r'],
                                            terminal=init_data['terminal'], level=agent.level,
-                                           use_ema_modules=use_ema_modules)
-            # mem, env_state = model(o=init_data['o'], a=init_data['a'], r=init_data['r'], terminal=init_data['terminal'],
-            #                       level=agent.level, use_ema_modules=use_ema_modules)
+                                           use_ema_modules=agent.use_slow_world_model)
             self._current_env_state = env_state
         else:
             self._current_env_state = None
 
+    @torch.no_grad()
     def __call__(self, env: Union[CacheLastStepEnv, CacheLastStepVecEnv]):
         device = self.model.current_device
+        self.model.eval()
+        self.agent.eval()
 
         if env.current_step == 0:
             if isinstance(env, (CacheLastStepVecEnv, CacheLastStepVecEnvPool)):
@@ -82,8 +82,8 @@ class LatentAgentPolicy(Policy):
         _, _, self._current_env_state = self.model.forward_static(trajectory=env_data,
                                                                   start_state=self._current_env_state,
                                                                   level=self.agent.level, n_steps=1, n_warmup=1,
-                                                                  sample_state=True, sample_output=False,
-                                                                  use_ema_modules=self._use_ema_modules)
+                                                                  sample_state=False, sample_output=False,
+                                                                  use_ema_modules=self.agent.use_slow_world_model)
 
         if torch.isnan(self._current_env_state[0]).any():
             raise RuntimeError(f'Invalid NAN state in step {env.current_step}: {self._current_env_state[0]}')
@@ -91,7 +91,7 @@ class LatentAgentPolicy(Policy):
             raise RuntimeError(f'Invalid inf state in step {env.current_step}: {self._current_env_state[0]}')
 
         agent_o = self.agent.preproc_o(self._current_env_state)
-        a_dist, a, = self.agent(agent_o, sample=True, disable_exploration=not self.explore)
+        a_dist, a, = self.agent(agent_o, sample=self.explore, disable_exploration=not self.explore)
 
         if torch.isnan(a).any():
             raise RuntimeError(f'Invalid NAN action: {a}')
@@ -118,18 +118,27 @@ class HierarchicalLatentAgentPolicy(Policy):
 
     def __init__(self,
                  model: HierarchicalRSSM,
-                 explore: bool = False,
-                 use_ema_modules: bool = False):
+                 explore: bool = False):
         super().__init__()
 
         self.model = model
         self.explore = explore
-        self._use_ema_modules = use_ema_modules
         self._grounded_env_states = [None for _ in range(model.levels)]
         self._env_data_below_cache = [self._empty_cache() for _ in range(model.levels)]
         self._act_cache = [[] for _ in range(model.levels)]
         self._action_queue = []
         self._next_state_update = model.strides
+        self.flight_record = [{'z': [], 'o': [], 'a': [], 'r': [], 'terminal': [], 'time_step': [], 'z_post': []}
+                              for _ in range(model.levels)]
+
+        use_slow_world_model = []
+        for agent in itertools.chain.from_iterable([model.r_max_agents, model.goal_seeking_agents]):
+            if agent is not None:
+                use_slow_world_model.append(agent[0].use_slow_world_model)
+
+        use_slow_world_model = set(use_slow_world_model)
+        assert len(use_slow_world_model) == 1, "all agents should either use the slow world model or the fast one"
+        self._use_ema_modules = use_slow_world_model.pop()
 
     @staticmethod
     def _empty_cache():
@@ -142,6 +151,7 @@ class HierarchicalLatentAgentPolicy(Policy):
         self._act_cache = [[] for _ in range(self.model.levels)]
         self._next_state_update = self.model.strides
 
+    @torch.no_grad()
     def _prep_step(self,
                    env: Union[CacheLastStepEnv, CacheLastStepVecEnv]):
         device = self.model.device
@@ -158,7 +168,9 @@ class HierarchicalLatentAgentPolicy(Policy):
         env_data = {k: list(v.unbind(0)) for k, v in env_data.items()}
         return env_data
 
-    def _check_state_update(self):
+    @torch.no_grad()
+    def _check_state_update(self,
+                            env: Union[CacheLastStepEnv, CacheLastStepVecEnv]):
         for i_lvl in range(self.model.levels):
             self._next_state_update[i_lvl] -= 1
             if self._next_state_update[i_lvl] > 0:
@@ -182,9 +194,21 @@ class HierarchicalLatentAgentPolicy(Policy):
                                                           use_ema_modules=self._use_ema_modules)
             self._grounded_env_states[i_lvl] = new_state
 
+            # bookkeeping
+            self.flight_record[i_lvl]['o'].append(data_filtered['o'][0])
+            self.flight_record[i_lvl]['z'].append(new_state[0])
+            self.flight_record[i_lvl]['z_post'].append(mem['z_post'][0])
+            self.flight_record[i_lvl]['a'].append(data_filtered['a'][0])
+            self.flight_record[i_lvl]['r'].append(mem['r'][0])
+            self.flight_record[i_lvl]['terminal'].append(mem['terminal'][0])
+            timestep = torch.tensor(env.current_step, dtype=torch.float32, device=state[0].device)
+            if isinstance(env, CacheLastStepVecEnv):
+                timestep = torch.tile(timestep[None, ...], [env.unwrapped.num_envs, 1])
+            self.flight_record[i_lvl]['time_step'].append(timestep)
+
             # store updated state in cache for upper level
             if i_lvl < self.model.i_top:
-                self._env_data_below_cache[i_lvl + 1]['o'] += mem[self.model.links[i_lvl]]
+                self._env_data_below_cache[i_lvl + 1]['o'] += mem['z']
                 self._env_data_below_cache[i_lvl + 1]['r'] += mem['r']
                 self._env_data_below_cache[i_lvl + 1]['terminal'] += mem['terminal']
 
@@ -192,6 +216,7 @@ class HierarchicalLatentAgentPolicy(Policy):
             self._next_state_update[i_lvl] = self.model.strides[i_lvl]
             self._env_data_below_cache[i_lvl] = self._empty_cache()
 
+    @torch.no_grad()
     def _replan(self):
         # find highest planning level
         i_highest = sum([state is not None for state in self._grounded_env_states]) - 1
@@ -210,7 +235,7 @@ class HierarchicalLatentAgentPolicy(Policy):
         # one r_max step on highest level
         state = self._grounded_env_states[i_highest]
         agent = self.model.r_max_agents[i_highest][0]
-        simulation = agent.act_in_sim(env_start_state=state, sim_env=self.model, n_steps=1, sample_actions=True,
+        simulation = agent.act_in_sim(env_start_state=state, sim_env=self.model, n_steps=1, sample_actions=self.explore,
                                       sample_states=True, disable_exploration=not self.explore,
                                       reconstruct=i_highest > 0)
         self._act_cache[i_highest] += simulation['agent']['a']
@@ -224,7 +249,7 @@ class HierarchicalLatentAgentPolicy(Policy):
                 new_goals = []
                 for goal in goals_from_above:
                     simulation = agent.act_in_sim(env_start_state=state, sim_env=self.model, n_steps=n_steps, goal=goal,
-                                                  sample_actions=True, disable_exploration=True,
+                                                  sample_actions=False, disable_exploration=True,  # never explore here
                                                   sample_states=True, reconstruct=i_lvl > 0)
                     state = simulation['model_state']
                     self._act_cache[i_lvl] += simulation['agent']['a']
@@ -275,8 +300,14 @@ class HierarchicalLatentAgentPolicy(Policy):
         self._action_queue += self._act_cache[0]
         """
 
+    @torch.no_grad()
     def __call__(self,
                  env: Union[CacheLastStepEnv, CacheLastStepVecEnv]):
+        self.model.eval()
+        for agent in self.model.r_max_agents + self.model.goal_seeking_agents:
+            if agent is not None:
+                agent[0].eval()
+
         if isinstance(env, (CacheLastStepVecEnv, CacheLastStepVecEnvPool)):
             d_batch = env.last_o.shape[0]
         else:
@@ -289,15 +320,17 @@ class HierarchicalLatentAgentPolicy(Policy):
 
         # TODO: are the correct state time steps recorded?
 
-        # first step: store current env ground truth data to cache
-        self._env_data_below_cache[0] = self._prep_step(env)
-        self._check_state_update()  # update individual level's states if necessary
+        with torch.no_grad():
+            # first step: store current env ground truth data to cache
+            self._env_data_below_cache[0] = self._prep_step(env)
+            self._check_state_update(env)  # update individual level's states if necessary
 
-        # check if re-planning is needed
-        if len(self._action_queue) == 0:
-            self._replan()
+            # check if re-planning is needed
+            if len(self._action_queue) == 0:
+                self._replan()
 
-        action = self._action_queue.pop(0)
+            action = self._action_queue.pop(0)
+
         if isinstance(env, CacheLastStepEnv):  # remove batch dimension if it's not a vector env
             action = action[0]
         return action.detach().cpu().numpy()

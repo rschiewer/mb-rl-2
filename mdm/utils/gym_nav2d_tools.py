@@ -1,4 +1,4 @@
-from math import floor
+from math import floor, pi, sin, cos
 from typing import Dict
 
 import gymnasium as gym
@@ -7,6 +7,15 @@ import numpy
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import pyplot as plt, animation as animation
+
+
+def gen_star_trajectories(env: gym.Env, n_trajs: int):
+    goal_pos = np.array([env.goal_x, env.goal_y])
+    r = env.eps + 1
+    t = np.linspace(0, 2*np.pi, n_trajs, endpoint=False)
+    x = r * np.cos(t)
+    y = r * np.sin(t)
+    start_points = np.c_[x, y] + goal_pos
 
 
 def gen_regular_grid_trajectories(env: gym.Env, trajs_vert: int, trajs_horiz: int, step_size: float, move_dir: int = 0):

@@ -80,7 +80,7 @@ class CacheLastStepVecEnv(gym.Wrapper):
     def __init__(self,
                  env: gym.vector.VectorEnv):
         super(CacheLastStepVecEnv, self).__init__(env)
-        self.envs_done = np.full((self.env.num_envs,), False)
+        self.envs_done = np.full((self.unwrapped.num_envs,), False)
         self.last_o = None
         self.last_a = None
         self.last_r = None
@@ -101,9 +101,9 @@ class CacheLastStepVecEnv(gym.Wrapper):
         o, infos = self.env.reset(seed=seed, options=options)
         self.last_o = o
         self.last_a = np.zeros_like(self.env.action_space.sample())
-        self.last_r = np.full((self.env.num_envs,), 0.0)
-        self.last_term = np.full((self.env.num_envs,), False)
-        self.last_trunc = np.full((self.env.num_envs,), False)
+        self.last_r = np.full((self.unwrapped.num_envs,), 0.0)
+        self.last_term = np.full((self.unwrapped.num_envs,), False)
+        self.last_trunc = np.full((self.unwrapped.num_envs,), False)
         self.last_info = infos
         self.current_step = 0
         return o, infos
@@ -127,9 +127,9 @@ class CacheLastStepVecEnv(gym.Wrapper):
             for i_env, final_obs_available in enumerate(infos['_final_observation']):
                 if final_obs_available:
                     self.last_o[i_env] = infos['final_observation'][i_env]
-            #mask = np.bitwise_and(infos['_final_observation'], self.envs_done)
-            #mask = expand_shape_right(mask, o)
-            #self.last_o = np.where(~mask, expand_shape_right(infos['final_observation'], o), o)  # TODO: check this
+            # mask = np.bitwise_and(infos['_final_observation'], self.envs_done)
+            # mask = expand_shape_right(mask, o)
+            # self.last_o = np.where(~mask, expand_shape_right(infos['final_observation'], o), o)  # TODO: check this
         self.envs_done = np.bitwise_or(self.envs_done, done_now)
 
         if self.envs_done.all():
@@ -145,7 +145,7 @@ class CacheLastStepVecEnvPool:
     def __init__(self,
                  env: GymEnvPoolMeta):
         self.unwrapped = env
-        self.envs_done = np.full((len(env.all_env_ids), ), False)
+        self.envs_done = np.full((len(env.all_env_ids),), False)
         self.last_o = None
         self.last_a = None
         self.last_r = None
@@ -210,5 +210,5 @@ class CacheLastStepVecEnvPool:
         else:
             self.current_step += 1
 
-        #return o, r, term, trunc, infos
+        # return o, r, term, trunc, infos
         return None, None, None, None, None
