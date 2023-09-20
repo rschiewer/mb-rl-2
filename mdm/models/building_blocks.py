@@ -323,6 +323,7 @@ class MLPEncoder(InputEncoder):
 
     def forward(self,
                 o: torch.Tensor):
+        o = torch.flatten(o, start_dim=-len(self.s_x_orig))
         return self._mdl(o)
 
 
@@ -460,42 +461,53 @@ class BinomialDecoder(OutputDecoder):
         params = self._mdl(x_enc)
         s_new = params.shape[:-1] + self.s_x_orig
         params = params.reshape(s_new)
-        probs = torch.nn.functional.sigmoid(params)
-        d = probs
-        # d = torch.distributions.ContinuousBernoulli(probs=probs)
-        # d = torch.distributions.Bernoulli(probs=probs)
+        # params = torch.nn.functional.sigmoid(params)
+        d = params
+        # d = torch.distributions.ContinuousBernoulli(params=params)
+        # d = torch.distributions.Bernoulli(params=params)
         # d = torch.distributions.Independent(d, 1)
         # temp = torch.tensor(0.1, dtype=x_enc.dtype, device=x_enc.device)
-        # d = torch.distributions.RelaxedBernoulli(temperature=temp, probs=probs)
+        # d = torch.distributions.RelaxedBernoulli(temperature=temp, params=params)
         if sample:
-            s = self.sample(probs)
+            s = self.sample(params)
             # s = d.sample()
-            # s = d.sample() + probs - probs.detach()
+            # s = d.sample() + params - params.detach()
         else:
             # s = d.mean
-            s = probs
-            # s = d.probs.round().to(torch.float32) + d.probs - d.probs.detach()
+            s = self.mean(params)
+            # s = d.params.round().to(torch.float32) + d.params - d.params.detach()
         return d, s
         # d = torch.distributions.Bernoulli(logits=params)
         # if sample:
-        #    s = d.sample() + d.probs - d.probs.detach()
+        #    s = d.sample() + d.params - d.params.detach()
         # else:
-        #    s = torch.argmax(d.probs).round().to(torch.float32) + d.probs - d.probs.detach()
+        #    s = torch.argmax(d.params).round().to(torch.float32) + d.params - d.params.detach()
         # return d, s
 
     @torch.jit.ignore
     def dist(self,
              parameters: torch.Tensor) -> torch.distributions.Distribution:
-        d = torch.distributions.ContinuousBernoulli(probs=parameters)
+        d = torch.distributions.ContinuousBernoulli(logits=parameters)
+        # d = torch.distributions.Bernoulli(logits=parameters)
         d = torch.distributions.Independent(d, 1)
         return d
 
     @torch.jit.ignore
     def sample(self,
                parameters):
-        d = torch.distributions.ContinuousBernoulli(probs=parameters)
+        d = torch.distributions.ContinuousBernoulli(logits=parameters)
         d = torch.distributions.Independent(d, 1)
         s = d.rsample()
+        # s = d.sample() + parameters - parameters.detach()
+        return s
+
+    @torch.jit.ignore
+    def mean(self,
+             parameters):
+        d = torch.distributions.ContinuousBernoulli(logits=parameters)
+        d = torch.distributions.Independent(d, 1)
+        s = d.mean
+        # s = d.sample() + parameters - parameters.detach()
         return s
 
 
@@ -609,14 +621,14 @@ class MaxUpwardsFilter(UpwardsFilter):
                 mask: Optional[torch.Tensor] = None,
                 context: Optional[torch.Tensor] = None,
                 window_size: Optional[int] = None) -> torch.Tensor:
-        x, mask, n_pad = self._preproc(x, mask, 0.0, window_size)
-        x = torch.where(mask, -torch.inf, x)
-        x = torch.max(x, dim=1).values
-        x = torch.where(x == -torch.inf, 0.0, x)
+        x_rs, mask_rs, n_pad = self._preproc(x, mask, 0.0, window_size)
+        x_rs = torch.where(mask_rs, -torch.inf, x_rs)
+        x_rs = torch.max(x_rs, dim=1).values
+        x_rs = torch.where(x_rs == -torch.inf, 0.0, x_rs)
         # if n_pad:
         #    n_valid = self.window_size - n_pad
         #    x[-1] = torch.max(x[-1, :n_valid], dim=0).values
-        return x
+        return x_rs
 
 
 class MinUpwardsFilter(UpwardsFilter):
@@ -841,7 +853,7 @@ class ConstUpwardsFilter(UpwardsFilter):
         return torch.zeros_like(x)
 
 
-RSSMStateType = Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+RSSMStateType = Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
 
 
 class RSSMCell(torch.nn.Module):
@@ -867,7 +879,7 @@ class RSSMCell(torch.nn.Module):
                  name: str = 'rssm_cell'):
         super().__init__()
 
-        #if latent_dist != 'normal':
+        # if latent_dist != 'normal':
         #    raise NotImplementedError('Check z_dist, z_dist_params, z_sample and z_mode methods first!')
 
         if latent_dist == 'normal':
@@ -914,7 +926,7 @@ class RSSMCell(torch.nn.Module):
         d_det_core = d_z_smpl + d_a
         # need both to satisfy torch script
         self._lstm = ModuleList([torch.nn.LSTMCell(d_det_core, hidden_size=d_h) for _ in range(n_hidden_layers)])
-        #self._lstm = LayerNormLSTMCell(d_det_core, hidden_size=d_h)
+        # self._lstm = LayerNormLSTMCell(d_det_core, hidden_size=d_h)
         self._gru = ModuleList([torch.nn.GRUCell(d_det_core, hidden_size=d_h) for _ in range(n_hidden_layers)])
 
         if self.rnn_type == 'lstm':
@@ -941,12 +953,13 @@ class RSSMCell(torch.nn.Module):
                    d_batch: int,
                    device: torch.device) -> RSSMStateType:
         z = self.zero_z(d_batch, device)
+        h = self.zero_h(d_batch, device)
         rnn_state = self.zero_rnn_state(d_batch, device)
         mock = torch.zeros(d_batch, self.d_z_out, device=device)
         z_prior_params = self.z_dist_params(mock)
         z_post_params = self.z_dist_params(mock)
-        #return z, z_prior_params, z_post_params, rnn_state[:, 0, :]  # for gru
-        return z, z_prior_params, z_post_params, rnn_state
+        # return z, z_prior_params, z_post_params, rnn_state[:, 0, :]  # for gru
+        return h, z, z_prior_params, z_post_params, rnn_state
 
     @torch.jit.export
     @torch.no_grad()
@@ -954,6 +967,13 @@ class RSSMCell(torch.nn.Module):
                d_batch: int,
                device: torch.device) -> torch.Tensor:
         return torch.zeros(d_batch, self.d_z_smpl, device=device)
+
+    @torch.jit.export
+    @torch.no_grad()
+    def zero_h(self,
+               d_batch: int,
+               device: torch.device) -> torch.Tensor:
+        return torch.zeros(d_batch, self.d_h, device=device)
 
     @torch.jit.export
     @torch.no_grad()
@@ -1096,17 +1116,17 @@ class RSSMCell(torch.nn.Module):
 
         if torch.isnan(a).any() or torch.isinf(a).any():
             raise RuntimeError(f'Invalid action in imagine: {a}')
-        if torch.isnan(last_state[0]).any() or torch.isinf(last_state[0]).any():
-            raise RuntimeError(f'Invalid last state in imagine: {last_state[0]}')
+        if torch.isnan(last_state[1]).any() or torch.isinf(last_state[1]).any():
+            raise RuntimeError(f'Invalid last state in imagine: {last_state[1]}')
 
         if use_posterior:
-            ret = self.observe(a, o_enc, last_state[0], last_state[3], sample_state)
+            ret = self.observe(a, o_enc, last_state[1], last_state[4], sample_state)
         else:
-            ret = self.imagine(a, last_state[0], last_state[3], sample_state)
+            ret = self.imagine(a, last_state[1], last_state[4], sample_state)
         h, z_smpl, z_prior_params, z_post_params, next_rnn_state = ret
 
-        s = torch.concat([h, z_smpl], dim=-1)
-        return s, (z_smpl, z_prior_params, z_post_params, next_rnn_state)
+        s = rssm_state_repr(ret)
+        return s, (h, z_smpl, z_prior_params, z_post_params, next_rnn_state)
 
     @torch.jit.export
     def scan(self,
@@ -1212,7 +1232,7 @@ class RSSMCell(torch.nn.Module):
         else:
             o_dist, o_smpl = self.zero_o_dist(d_batch, s.device), self.zero_o(d_batch, s.device)
         r_dist, r_smpl = self.r_decoder(s, sample)
-        #r_smpl = torch.nn.functional.tanh(r_smpl)
+        # r_smpl = torch.nn.functional.tanh(r_smpl)
         term_dist, term_smpl = self.term_decoder(s, sample)
 
         return {'o': o_smpl, 'o_dist': o_dist, 'r': r_smpl, 'r_dist': r_dist, 'terminal': term_smpl,
@@ -1220,11 +1240,13 @@ class RSSMCell(torch.nn.Module):
 
 
 @torch.jit.script
-def rssm_stack_states(z: List[torch.Tensor],
+def rssm_stack_states(h: List[torch.Tensor],
+                      z: List[torch.Tensor],
                       z_prior: List[torch.Tensor],
                       z_post: List[torch.Tensor],
                       rnn_state: List[torch.Tensor]):
-    return (torch.stack(z).contiguous(),
+    return (torch.stack(h).contiguous(),
+            torch.stack(z).contiguous(),
             torch.stack(z_prior).contiguous(),
             torch.stack(z_post).contiguous(),
             torch.stack(rnn_state).contiguous())
@@ -1236,36 +1258,45 @@ def rssm_stack_state_list(states: List[RSSMStateType]):
 
 
 @torch.jit.script
-def rssm_detach_state(z: torch.Tensor,
+def rssm_detach_state(h: torch.Tensor,
+                      z: torch.Tensor,
                       z_prior: torch.Tensor,
                       z_post: torch.Tensor,
                       rnn_state: torch.Tensor):
-    return z.detach(), z_prior.detach(), z_post.detach(), rnn_state.detach()
+    return h.detach(), z.detach(), z_prior.detach(), z_post.detach(), rnn_state.detach()
 
 
 @torch.jit.script
-def rssm_state_seq_to_batch(z: List[torch.Tensor],
+def rssm_state_seq_to_batch(h: List[torch.Tensor],
+                            z: List[torch.Tensor],
                             z_prior: List[torch.Tensor],
                             z_post: List[torch.Tensor],
                             rnn_state: List[torch.Tensor]):
-    return (torch.concat(z, dim=0).contiguous(),
+    return (torch.concat(h, dim=0).contiguous(),
+            torch.concat(z, dim=0).contiguous(),
             torch.concat(z_prior, dim=0).contiguous(),
             torch.concat(z_post, dim=0).contiguous(),
             torch.concat(rnn_state, dim=0).contiguous())
 
 
 @torch.jit.script
-def rssm_state_keys() -> Tuple[str, str, str, str]:
-    return 'z', 'z_prior', 'z_post', 'rnn_state'
+def rssm_state_keys() -> Tuple[str, str, str, str, str]:
+    return 'h', 'z', 'z_prior', 'z_post', 'rnn_state'
 
 
 @torch.jit.ignore
-def rssm_add_labels(seq: Sequence[Any, Any, Any, Any]) -> Dict[str, Any]:
+def rssm_add_labels(seq: Sequence[Any, Any, Any, Any, Any]) -> Dict[str, Any]:
     keys = rssm_state_keys()
-    return {keys[0]: seq[0], keys[1]: seq[1], keys[2]: seq[2], keys[3]: seq[3]}
+    return {keys[0]: seq[0], keys[1]: seq[1], keys[2]: seq[2], keys[3]: seq[3], keys[4]: seq[4]}
 
 
 @torch.jit.script
-def rssm_remove_labels(state: Dict[str, Any]) -> Tuple[Any, Any, Any, Any]:
+def rssm_remove_labels(state: Dict[str, Any]) -> Tuple[Any, Any, Any, Any, Any]:
     keys = rssm_state_keys()
-    return state[keys[0]], state[keys[1]], state[keys[2]], state[keys[3]]
+    return state[keys[0]], state[keys[1]], state[keys[2]], state[keys[3]], state[keys[4]]
+
+
+@torch.jit.script
+def rssm_state_repr(state: RSSMStateType):
+    s = torch.concat([state[0], state[1]], dim=-1)
+    return s
