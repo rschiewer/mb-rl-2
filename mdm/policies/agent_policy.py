@@ -33,7 +33,7 @@ class LatentAgentPolicy(Policy):
                  explore: bool = False,
                  init_data: Dict[str, torch.Tensor] = None):
         super().__init__()
-        assert np.prod(agent.d_o) == model.rssm_modules[agent.level].d_z_smpl
+        #assert np.prod(agent.d_o) == model.rssm_modules[agent.level].d_z_smpl
 
         self.agent = agent
         self.model = model
@@ -90,7 +90,7 @@ class LatentAgentPolicy(Policy):
         if torch.isinf(self._current_env_state[0]).any():
             raise RuntimeError(f'Invalid inf state in step {env.current_step}: {self._current_env_state[0]}')
 
-        agent_o = self.agent.preproc_o(self._current_env_state)
+        agent_o = self.agent.fuse_obs_with_goal(self._current_env_state)
         a_dist, a, = self.agent(agent_o, sample=self.explore, disable_exploration=not self.explore)
 
         if torch.isnan(a).any():
@@ -132,17 +132,21 @@ class HierarchicalLatentAgentPolicy(Policy):
                               for _ in range(model.levels)]
 
         use_slow_world_model = []
+        o_key = []
         for agent in itertools.chain.from_iterable([model.r_max_agents, model.goal_seeking_agents]):
             if agent is not None:
                 use_slow_world_model.append(agent[0].use_slow_world_model)
+                o_key.append(agent[0].observation_type)
 
         use_slow_world_model = set(use_slow_world_model)
+        o_key = set(o_key)
         assert len(use_slow_world_model) == 1, "all agents should either use the slow world model or the fast one"
+        assert len(o_key) == 1, "all agents should use the same observation key"
         self._use_ema_modules = use_slow_world_model.pop()
 
     @staticmethod
     def _empty_cache():
-        return {'o': [], 'r': [], 'terminal': []}
+        return {'o': [], 'r': [], 'terminal': [], 'time_step': []}
 
     def _reset(self,
                d_batch: int):
@@ -183,14 +187,17 @@ class HierarchicalLatentAgentPolicy(Policy):
             # data_filtered['a'] = actions  # we don't want filtered actions from lower level, but original ones from this
 
             n_steps = self.model.strides[i_lvl]
-            data_filtered = self.model.filter_up(**self._env_data_below_cache[i_lvl], level=i_lvl, n_steps=n_steps,
+            data_filtered = self.model.filter_up(o=self._env_data_below_cache[i_lvl]['o'],
+                                                 r=self._env_data_below_cache[i_lvl]['r'],
+                                                 terminal=self._env_data_below_cache[i_lvl]['terminal'],
+                                                 level=i_lvl, n_steps=n_steps,
                                                  respect_terminal_flag=True)
             data_filtered['a'] = self._act_cache[i_lvl].pop(0).unsqueeze(0)  # take oldest action from cache
 
             # memorize the latest inputs the model has seen as they are needed for the agent during planning
             state = self._grounded_env_states[i_lvl]
             mem, _, new_state = self.model.forward_static(data_filtered, start_state=state, level=i_lvl, n_steps=-1,
-                                                          n_warmup=-1, sample_state=True, sample_output=False,
+                                                          n_warmup=-1, sample_state=False, sample_output=False,
                                                           use_ema_modules=self._use_ema_modules)
             self._grounded_env_states[i_lvl] = new_state
 
@@ -202,15 +209,18 @@ class HierarchicalLatentAgentPolicy(Policy):
             self.flight_record[i_lvl]['r'].append(mem['r'][0])
             self.flight_record[i_lvl]['terminal'].append(mem['terminal'][0])
             timestep = torch.tensor(env.current_step, dtype=torch.float32, device=state[0].device)
+
             if isinstance(env, CacheLastStepVecEnv):
                 timestep = torch.tile(timestep[None, ...], [env.unwrapped.num_envs, 1])
             self.flight_record[i_lvl]['time_step'].append(timestep)
 
             # store updated state in cache for upper level
             if i_lvl < self.model.i_top:
-                self._env_data_below_cache[i_lvl + 1]['o'] += mem['z']
+                o_key = self.model.r_max_agents[i_lvl + 1][0].observation_type
+                self._env_data_below_cache[i_lvl + 1]['o'] += mem[o_key]
                 self._env_data_below_cache[i_lvl + 1]['r'] += mem['r']
                 self._env_data_below_cache[i_lvl + 1]['terminal'] += mem['terminal']
+                self._env_data_below_cache[i_lvl + 1]['time_step'].append(timestep)
 
             # reset counter and clear caches
             self._next_state_update[i_lvl] = self.model.strides[i_lvl]
@@ -236,7 +246,7 @@ class HierarchicalLatentAgentPolicy(Policy):
         state = self._grounded_env_states[i_highest]
         agent = self.model.r_max_agents[i_highest][0]
         simulation = agent.act_in_sim(env_start_state=state, sim_env=self.model, n_steps=1, sample_actions=self.explore,
-                                      sample_states=True, disable_exploration=not self.explore,
+                                      sample_states=False, disable_exploration=not self.explore,
                                       reconstruct=i_highest > 0)
         self._act_cache[i_highest] += simulation['agent']['a']
 
@@ -250,7 +260,7 @@ class HierarchicalLatentAgentPolicy(Policy):
                 for goal in goals_from_above:
                     simulation = agent.act_in_sim(env_start_state=state, sim_env=self.model, n_steps=n_steps, goal=goal,
                                                   sample_actions=False, disable_exploration=True,  # never explore here
-                                                  sample_states=True, reconstruct=i_lvl > 0)
+                                                  sample_states=False, reconstruct=i_lvl > 0)
                     state = simulation['model_state']
                     self._act_cache[i_lvl] += simulation['agent']['a']
                     if i_lvl > 0:

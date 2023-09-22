@@ -785,7 +785,7 @@ def masked_mean(x: torch.Tensor,
                 keepdim: bool = False
                 ):
     #assert x.shape[:mask.squeeze().ndim] == mask.squeeze().shape, 'Leading dimensions of x and mask mismatch'
-    valid = 1 - mask
+    valid = 1 - mask.to(dtype=torch.float32)
     valid = unsqueeze_right(valid, x)
     valid = valid.expand_as(x)
     num = torch.sum(x * valid, dim=dim, keepdim=keepdim)
@@ -832,6 +832,8 @@ def compute_mask(terminals: Union[List[torch.Tensor], torch.Tensor],
         # never mask first time step except first_step_mask tells us to
         if first_step_mask is None:
             first_step_mask = torch.zeros(1, d_batch, 1, dtype=terminals.dtype, device=terminals.device)
+        elif first_step_mask.ndim == 2:
+            first_step_mask = first_step_mask.unsqueeze(0)  # add time dimension
 
         terminals = torch.concat([first_step_mask, terminals], dim=0)  # this shifts time one to the right
         terminals = terminals[:-1]  # cut last time step since we don't need it
@@ -854,6 +856,9 @@ def compute_mask(terminals: Union[List[torch.Tensor], torch.Tensor],
         # mask = torch.where(mask > 0.95,
         #                   torch.tensor(1.0, device=terminals.device, dtype=terminals.dtype),
         #                   torch.tensor(0.0, device=terminals.device, dtype=terminals.dtype))
+
+        #if disable:
+        #    mask = torch.zeros_like(mask)
 
         return mask.detach()
 
@@ -970,7 +975,8 @@ def unsqueeze_right(to_expand: Union[np.ndarray, torch.Tensor], target: Union[np
     if to_expand.ndim == target.ndim:
         return to_expand
     elif to_expand.ndim > target.ndim:
-        raise ValueError('Expansion can only be done if to_expand has fewer dimensions than target')
+        raise ValueError('Expansion can only be done if to_expand has fewer dimensions than target, but got ',
+                         f'{to_expand.shape}({to_expand.ndim}) vs {target.shape}({target.ndim})')
 
     dim_diff = target.ndim - to_expand.ndim
     return to_expand.reshape(*to_expand.shape, *[1 for _ in range(dim_diff)])

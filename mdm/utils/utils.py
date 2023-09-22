@@ -118,10 +118,21 @@ def cfg_infer_missing_values(cfg: dict,
                              env: gym.Env):
     # infer missing config values for RSSMs
     for i_module, module_args in enumerate(cfg['mdm']['rssm_modules']):
-        if module_args['latent_dist'] == 'normal':
-            d_state = module_args['d_z'] + module_args['d_h']
-        elif module_args['latent_dist'] == 'categorical':
-            d_state = module_args['d_z'] * module_args['n_latent_categories'] + module_args['d_h']
+        # calculate z sample size
+        if module_args['d_s_embedding'] is None:
+            if module_args['latent_dist'] == 'normal':
+                d_state = module_args['d_z'] + module_args['d_h']
+            elif module_args['latent_dist'] == 'categorical':
+                d_state = module_args['d_z'] * module_args['n_latent_categories'] + module_args['d_h']
+            else:
+                raise ValueError(f'Unknown latent distribution')
+            module_args['d_s_embedding'] = d_state
+        else:
+            d_state = module_args['d_s_embedding']
+
+        # calculate state embedding size if necessary and store it explicitly in config for later
+
+        # calculate observation dimension for RSSM encoders/decoders
         if i_module == 0:
             module_args['d_a'] = env.action_space.shape[0]
             s_o = env.observation_space.shape
@@ -130,8 +141,8 @@ def cfg_infer_missing_values(cfg: dict,
                 s_o = cfg['mdm']['rssm_modules'][i_module - 1]['d_z']
             elif cfg['mdm']['links'][i_module - 1] == 'h':
                 s_o = cfg['mdm']['rssm_modules'][i_module - 1]['d_h']
-            elif cfg['mdm']['links'][i_module - 1] == 's':
-                s_o = cfg['mdm']['rssm_modules'][i_module - 1]['d_z'] + cfg['mdm']['rssm_modules'][i_module - 1]['d_h']
+            elif cfg['mdm']['links'][i_module - 1] == 's_embedding':
+                s_o = cfg['mdm']['rssm_modules'][i_module - 1]['d_s_embedding']
             elif cfg['mdm']['links'][i_module - 1] == 'o':
                 s_o = cfg['mdm']['rssm_modules'][i_module - 1]['o_decoder']['s_x_orig']
             else:
@@ -160,16 +171,23 @@ def cfg_infer_missing_values(cfg: dict,
         if cfg['mdm']['rssm_modules'][agent_lvl]['latent_dist'] == 'normal':
             d_z = cfg['mdm']['rssm_modules'][agent_lvl]['d_z']
         elif cfg['mdm']['rssm_modules'][agent_lvl]['latent_dist'] == 'categorical':
-            d_z = cfg['mdm']['rssm_modules'][agent_lvl]['d_z'] * cfg['mdm']['rssm_modules'][agent_lvl]['n_latent_categories']
+            d_z = cfg['mdm']['rssm_modules'][agent_lvl]['d_z'] * cfg['mdm']['rssm_modules'][agent_lvl][
+                'n_latent_categories']
         else:
             d_z = cfg['mdm']['rssm_modules'][agent_lvl]['d_z']
+        d_h = cfg['mdm']['rssm_modules'][agent_lvl]['d_h']
 
         cfg_r_max = cfg['agents']['r_max'][agent_lvl]
         if agent_lvl == 0:
             cfg_r_max['min_a'] = tuple(env.action_space.low)
             cfg_r_max['max_a'] = tuple(env.action_space.high)
         cfg_r_max['d_a'] = cfg['mdm']['rssm_modules'][agent_lvl]['d_a']
-        cfg_r_max['d_o'] = d_z
+        if cfg_r_max['observation_type'] == 'z':
+            cfg_r_max['d_o'] = d_z
+        elif cfg_r_max['observation_type'] == 'h':
+            cfg_r_max['d_o'] = d_h
+        elif cfg_r_max['observation_type'] == 's_embedding':
+            cfg_r_max['d_o'] = cfg['mdm']['rssm_modules'][agent_lvl]['d_s_embedding']
 
         if agent_lvl < len(cfg['mdm']['rssm_modules']) - 1:
             cfg_goal_seeking = cfg['agents']['goal_seeking'][agent_lvl]
@@ -177,7 +195,12 @@ def cfg_infer_missing_values(cfg: dict,
                 cfg_goal_seeking['min_a'] = tuple(env.action_space.low)
                 cfg_goal_seeking['max_a'] = tuple(env.action_space.high)
             cfg_goal_seeking['d_a'] = cfg['mdm']['rssm_modules'][agent_lvl]['d_a']
-            cfg_goal_seeking['d_o'] = d_z
+            if cfg_goal_seeking['observation_type'] == 'z':
+                cfg_goal_seeking['d_o'] = d_z
+            elif cfg_goal_seeking['observation_type'] == 'h':
+                cfg_goal_seeking['d_o'] = d_h
+            elif cfg_goal_seeking['observation_type'] == 's_embedding':
+                cfg_goal_seeking['d_o'] = cfg['mdm']['rssm_modules'][agent_lvl]['d_s_embedding']
 
     def _check_complete(name, entry):
         if isinstance(entry, dict):
@@ -1020,9 +1043,9 @@ def rssm_states_seq_to_batch(mem: Dict[str, List[torch.Tensor]],
         i_end = len(mem['z'])
 
     states = {k: v[i_start: i_end] for k, v in mem.items() if k in rssm_state_keys()}
-    # states = rssm_state_seq_to_batch(**states)
-    states = (torch.concat(states['z'], dim=0), torch.concat(states['z_prior'], dim=0),
-              torch.concat(states['z_post'], dim=0), torch.concat(states['rnn_state'], dim=0))
+    states = rssm_state_seq_to_batch(**states)
+    # states = (torch.concat(states['z'], dim=0), torch.concat(states['z_prior'], dim=0),
+    #          torch.concat(states['z_post'], dim=0), torch.concat(states['rnn_state'], dim=0))
 
     # we can inject terminal flags from target data which are already stacked, so we use this convenience wrapper
     terminal = stack_if_list(terminal_flags)

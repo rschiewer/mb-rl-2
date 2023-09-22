@@ -1,18 +1,21 @@
 from math import floor, pi, sin, cos
-from typing import Dict
+from typing import Dict, List
 
 import gymnasium as gym
 import gym_nav2d
 import numpy
 import numpy as np
 import matplotlib.pyplot as plt
+import torch
 from matplotlib import pyplot as plt, animation as animation
+
+from mdm.utils.torch_tools import stack_if_list
 
 
 def gen_star_trajectories(env: gym.Env, n_trajs: int):
     goal_pos = np.array([env.goal_x, env.goal_y])
     r = env.eps + 1
-    t = np.linspace(0, 2*np.pi, n_trajs, endpoint=False)
+    t = np.linspace(0, 2 * np.pi, n_trajs, endpoint=False)
     x = r * np.cos(t)
     y = r * np.sin(t)
     start_points = np.c_[x, y] + goal_pos
@@ -26,18 +29,20 @@ def gen_regular_grid_trajectories(env: gym.Env, trajs_vert: int, trajs_horiz: in
     traj_vert_margin = env_height / (trajs_vert + 1)
     goal_pos = [env.goal_x, env.goal_y]
 
-    start_pos_bot_to_top = [[i * traj_horiz_margin, 0.0] for i in range(1, trajs_horiz + 1)]  # start pos for bottom to top trajectories
+    start_pos_bot_to_top = [[i * traj_horiz_margin, 0.0] for i in
+                            range(1, trajs_horiz + 1)]  # start pos for bottom to top trajectories
     n_actions_bot_to_top = floor(env_height // step_width)
     action_bot_to_top = np.array([0.0, 1.0], dtype=env.action_space.dtype)
-    start_pos_left_to_right = [[0.0, i * traj_vert_margin] for i in range(1, trajs_vert + 1)]  # start pos for left to right trajectories
+    start_pos_left_to_right = [[0.0, i * traj_vert_margin] for i in
+                               range(1, trajs_vert + 1)]  # start pos for left to right trajectories
     n_actions_left_to_right = floor(env_width // step_width)
     action_left_to_right = np.array([1.0, 0.0], dtype=env.action_space.dtype)
 
-    #plt.scatter(np.array(start_pos_bot_to_top)[:, 0], np.array(start_pos_bot_to_top)[:, 1])
-    #plt.scatter(np.array(start_pos_left_to_right)[:, 0], np.array(start_pos_left_to_right)[:, 1])
-    #plt.xlim(-5, 260)
-    #plt.ylim(-5, 260)
-    #plt.show()
+    # plt.scatter(np.array(start_pos_bot_to_top)[:, 0], np.array(start_pos_bot_to_top)[:, 1])
+    # plt.scatter(np.array(start_pos_left_to_right)[:, 0], np.array(start_pos_left_to_right)[:, 1])
+    # plt.xlim(-5, 260)
+    # plt.ylim(-5, 260)
+    # plt.show()
 
     trajectories = []
     for start_pos in start_pos_bot_to_top:
@@ -164,3 +169,26 @@ def visualize_trajectory(trajectory: Dict[str, np.ndarray]):
 
     ani = animation.FuncAnimation(fig, animate_r, frames=n_steps, interval=100, blit=True)
     return fig, ani
+
+
+def render_goals(mem: List[Dict[str, torch.Tensor]],
+                 level: int,
+                 model: 'HierarchicalRSSM'):
+    assert model.links[level - 1] == 's'
+    original_traj = stack_if_list(mem[level - 1]['s'])
+    decoded_obs = model.rssm_modules[level - 1].decode(original_traj, sample=False, reconstruct_observation=True)
+    o = decoded_obs['o'].detach().cpu().numpy()
+
+    goals = stack_if_list(mem[level]['o'])
+    decoded_goal_obs = model.rssm_modules[level - 1].decode(goals, sample=False, reconstruct_observation=True)
+    o_goals = decoded_goal_obs['o'].detach().cpu().numpy()
+
+    plt.ylim([-1.1, 1.1])
+    plt.xlim([-1.1, 1.1])
+    plt.scatter(o[:, 0, 0], o[:, 0, 1], label='original observations')
+    plt.scatter(o_goals[:, 0, 0], o_goals[:, 0, 1], label='goals')
+    plt.scatter(o_goals[0, 0, 2], o_goals[0, 0, 3], label='reward')
+    for t in range(o_goals.shape[0]):
+        plt.text(o_goals[t, 0, 0], o_goals[t, 0, 1], str(t+1))
+    plt.legend()
+    plt.show()

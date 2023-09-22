@@ -7,6 +7,8 @@ from gymnasium.core import ObsType, ActType
 import envpool
 from envpool.python.gym_envpool import GymEnvPoolMeta
 from envpool.python.gymnasium_envpool import GymnasiumEnvPoolMeta
+from gymnasium.vector.utils import write_to_shared_memory
+import sys
 
 from mdm.utils.torch_tools import unsqueeze_right
 
@@ -123,13 +125,13 @@ class CacheLastStepVecEnv(gym.Wrapper):
         self.last_info = infos
 
         done_now = np.bitwise_or(term, trunc)
-        if done_now.any():
-            for i_env, final_obs_available in enumerate(infos['_final_observation']):
-                if final_obs_available:
-                    self.last_o[i_env] = infos['final_observation'][i_env]
-            # mask = np.bitwise_and(infos['_final_observation'], self.envs_done)
-            # mask = expand_shape_right(mask, o)
-            # self.last_o = np.where(~mask, expand_shape_right(infos['final_observation'], o), o)  # TODO: check this
+        #if done_now.any():
+        #    for i_env, final_obs_available in enumerate(infos['_final_observation']):
+        #        if final_obs_available:
+        #            self.last_o[i_env] = infos['final_observation'][i_env]
+        #    # mask = np.bitwise_and(infos['_final_observation'], self.envs_done)
+        #    # mask = expand_shape_right(mask, o)
+        #    # self.last_o = np.where(~mask, expand_shape_right(infos['final_observation'], o), o)  # TODO: check this
         self.envs_done = np.bitwise_or(self.envs_done, done_now)
 
         if self.envs_done.all():
@@ -212,3 +214,76 @@ class CacheLastStepVecEnvPool:
 
         # return o, r, term, trunc, infos
         return None, None, None, None, None
+
+
+def vec_env_worker_no_auto_reset(index, env_fn, pipe, parent_pipe, shared_memory, error_queue):
+    assert shared_memory is not None
+    env = env_fn()
+    observation_space = env.observation_space
+    parent_pipe.close()
+    try:
+        episode_terminated = True
+        episode_truncated = True
+        while True:
+            command, data = pipe.recv()
+            if command == "reset":
+                observation, info = env.reset(**data)
+                episode_terminated = False
+                episode_truncated = False
+                write_to_shared_memory(observation_space, index, observation, shared_memory)
+                pipe.send(((None, info), True))
+            elif command == "step":
+                if episode_terminated or episode_truncated:  # give zero o, r and repeat final term, trunc flags
+                    observation = np.zeros(env.observation_space.shape, dtype=env.observation_space.dtype)
+                    reward = 0
+                    terminated = episode_terminated
+                    truncated = episode_truncated
+                    info = {'padding': True}
+                else:
+                    observation, reward, terminated, truncated, info = env.step(data)
+
+                if terminated or truncated:
+                    info["final_observation"] = observation
+                    info["final_info"] = info
+                    episode_terminated = terminated
+                    episode_truncated = truncated
+
+                write_to_shared_memory(observation_space, index, observation, shared_memory)
+                pipe.send(((None, reward, terminated, truncated, info), True))
+            elif command == "seed":
+                env.seed(data)
+                pipe.send((None, True))
+            elif command == "close":
+                pipe.send((None, True))
+                break
+            elif command == "_call":
+                name, args, kwargs = data
+                if name in ["reset", "step", "seed", "close"]:
+                    raise ValueError(
+                        f"Trying to call function `{name}` with "
+                        f"`_call`. Use `{name}` directly instead."
+                    )
+                function = getattr(env, name)
+                if callable(function):
+                    pipe.send((function(*args, **kwargs), True))
+                else:
+                    pipe.send((function, True))
+            elif command == "_setattr":
+                name, value = data
+                setattr(env, name, value)
+                pipe.send((None, True))
+            elif command == "_check_spaces":
+                pipe.send(
+                    ((data[0] == observation_space, data[1] == env.action_space), True)
+                )
+            else:
+                raise RuntimeError(
+                    f"Received unknown command `{command}`. Must "
+                    "be one of {`reset`, `step`, `seed`, `close`, `_call`, "
+                    "`_setattr`, `_check_spaces`}."
+                )
+    except (KeyboardInterrupt, Exception):
+        error_queue.put((index,) + sys.exc_info()[:2])
+        pipe.send((None, False))
+    finally:
+        env.close()

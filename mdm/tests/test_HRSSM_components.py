@@ -6,7 +6,7 @@ import torch
 from mdm.models.hierarchical_rssm import HierarchicalRSSM
 from mdm.models.building_blocks import *
 from mdm.utils.utils import rssm_states_seq_to_batch
-from mdm.utils.torch_tools import stack_dists
+from mdm.utils.torch_tools import stack_dists, masked_mean
 
 
 class RSSMTest(unittest.TestCase):
@@ -153,6 +153,60 @@ class RSSMTest(unittest.TestCase):
         #fig = plt.figure(figsize=(16, 8))
         #plt.matshow(subsequences.mean(-1).detach().cpu().numpy(), fignum=fig, aspect='auto')
         #plt.show()
+
+    def test_avg_upwards_filter_no_padding(self):
+        seq_len = 12
+        batch_size = 32
+        data_size = 1
+        window_size = 4
+        flt = AvgUpwardsFilter(window_size=window_size)
+
+        seq = torch.randint(0, 10, (seq_len, batch_size, data_size), dtype=torch.float32)
+        seq[0] = 2
+        seq[-1] = 5
+        mask = torch.zeros_like(seq)
+        mask[-1] = 1
+
+        seq_filtered_control = torch.zeros(seq_len // window_size, batch_size, data_size, dtype=torch.float32)
+        for i_b in range(batch_size):
+            for t in range(0, seq_len, window_size):
+                i_chunk = t // window_size
+                chunk = seq[t: t+window_size, i_b]
+                m = mask[t: t+window_size, i_b]
+                seq_filtered_control[i_chunk, i_b] = masked_mean(chunk, m)
+
+        seq_filtered = flt(seq, mask=mask.to(dtype=torch.bool))
+        self.assertTrue(np.isclose(torch.abs(seq_filtered - seq_filtered_control).sum().detach().cpu().numpy(), 0))
+
+
+    def test_avg_upwards_filter_with_padding(self):
+        seq_len = 11
+        batch_size = 32
+        data_size = 1
+        window_size = 4
+        flt = AvgUpwardsFilter(window_size=window_size)
+
+        seq = torch.randint(0, 10, (seq_len, batch_size, data_size), dtype=torch.float32)
+        seq[0] = 2
+        seq[-1] = 5
+        mask = torch.zeros_like(seq)
+        mask[-1] = 1
+
+        n_pad = window_size - seq_len % window_size
+        seq_padded = torch.concat([seq, torch.zeros(n_pad, batch_size, data_size)])
+        mask_padded = torch.concat([mask, torch.ones(n_pad, batch_size, data_size)])
+        padded_seq_len = seq_padded.shape[0]
+        seq_filtered_control = torch.zeros(padded_seq_len // window_size, batch_size, data_size, dtype=torch.float32)
+        for i_b in range(batch_size):
+            for t in range(0, padded_seq_len, window_size):
+                i_chunk = t // window_size
+                chunk = seq_padded[t: t+window_size, i_b]
+                m = mask_padded[t: t+window_size, i_b]
+                seq_filtered_control[i_chunk, i_b] = masked_mean(chunk, m)
+
+        seq_filtered = flt(seq, mask=mask.to(dtype=torch.bool))
+        self.assertTrue(np.isclose(torch.abs(seq_filtered - seq_filtered_control).sum().detach().cpu().numpy(), 0))
+
 
 if __name__ == '__main__':
     unittest.main()

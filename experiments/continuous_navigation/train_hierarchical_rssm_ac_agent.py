@@ -17,6 +17,7 @@ from mdm.logging.logger import Scope, GlobalLogger
 from mdm.training.gym_driver import collect_data, GymEpisodeDriver
 from mdm.policies.agent_policy import *
 from mdm.policies.expert_policies import *
+from mdm.utils.gym_wrappers import vec_env_worker_no_auto_reset
 from mdm.utils.torch_tools import disable_torch_compile
 from sklearn.decomposition import PCA
 
@@ -33,7 +34,7 @@ def main():
     parser.add_argument('-n_collect', type=int)
     args = parser.parse_args()
 
-    cfg = load_yaml(here() / 'cfg_rssm_train.yaml')
+    cfg = load_yaml(here() / 'cfg_simple_rssm_train.yaml')
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
     if args.d_batch:
@@ -95,12 +96,20 @@ def main():
     # opt_model = torch.optim.Adam(params, **cfg['optim'])
     # temporary hack end
 
-    collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['trainer']['collect_envs'])
+    collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['trainer']['collect_envs'],
+                                            worker=vec_env_worker_no_auto_reset)
     collect_env = CacheLastStepVecEnv(collect_env)
-    eval_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['eval']['eval_envs'])
+    eval_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['eval']['eval_envs'],
+                                         worker=vec_env_worker_no_auto_reset)
     eval_env = CacheLastStepVecEnv(eval_env)
     video_env = gym.make(cfg['env_name'], render_mode='rgb_array')
     video_env = gym.wrappers.RescaleAction(video_env, min_action=-1.0, max_action=1.0)
+
+    #def make_video_env_fn():
+    #    _env = gym.make(cfg['env_name'], render_mode='rgb_array')
+    #    _env = gym.wrappers.RescaleAction(_env, min_action=-1.0, max_action=1.0)
+    #    return _env
+    #video_env = gym.vector.AsyncVectorEnv([make_video_env_fn] * cfg['eval']['eval_envs'])
     video_env = gym.wrappers.RecordVideo(video_env, video_folder='videos', name_prefix=f'{os.getpid()}',
                                          disable_logger=True)
     video_env = CacheLastStepEnv(video_env)
@@ -142,6 +151,13 @@ def main():
         train_mem.extend(collected_data_trajectories)
 
     def collect_fn(explore: bool):
+        agent = r_max_agents[0][0]
+        agent.eval()
+        collect_env.reset()
+        policy = LatentAgentPolicy(agent, model, explore=explore)
+        collected_data_trajectories = collect_data(collect_env, -1, policy)
+        train_mem.extend(collected_data_trajectories)
+
         collect_env.reset()
         agent_eval_mode(r_max_agents + goal_seeking_agents)
         policy = HierarchicalLatentAgentPolicy(model, explore=explore)
@@ -191,7 +207,7 @@ def main():
 
     print('Starting Training')
     # with torch.autograd.detect_anomaly(check_nan=True):
-    train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, simple_collect_fn, eval_env, test_driver,
+    train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collect_fn, eval_env, test_driver,
                 train_driver, logger, log_videos=False, video_env=video_env)
     # with profile(activities=[ProfilerActivity.CPU], record_shapes=True, profile_memory=True) as prof:
     #    train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collect_fn, eval_env, test_driver,

@@ -16,6 +16,8 @@ mdm:
       -  d_z: 30
          d_h: 200
          d_a: <infer>
+         d_s_embedding: 20
+         s_embedding_lws: [128, 64, 32]
          n_hidden_layers: 1
          hidden_dropout: 0.1
          epsilon: 0.1
@@ -29,24 +31,24 @@ mdm:
          o_encoder:
             class: "MLPEncoder"
             d_x_encoded: 64
-            lws: [100, 100, 100]
+            lws: [ 100, 100, 100 ]
             layer_norm: True
             activation: "relu"
          o_decoder:
             class: "GaussianDecoder"
-            lws: [100, 100, 100]
+            lws: [ 100, 100, 100 ]
             layer_norm: True
             activation: "relu"
             epsilon: 0.1
          r_decoder:
             class: "GaussianDecoder"
-            lws: [100, 100, 100]
+            lws: [ 100, 100, 100 ]
             layer_norm: True
             activation: "relu"
             epsilon: 0.1
          term_decoder:
             class: "BinomialDecoder"
-            lws: [100, 100, 100]
+            lws: [ 100, 100, 100 ]
             layer_norm: True
             activation: "relu"
    links: [ ]  # Links for observation filters between RSSM levels
@@ -57,7 +59,7 @@ mdm:
    ema_regularization: 0.0
    ema_coeff: 0.98
    ema_update_interval: 5
-   latent_overshooting: [  ]
+   latent_overshooting: [ ]
    temporal_activation_regularization: 0.0
    kl_balance: 0.8
 
@@ -70,7 +72,7 @@ trainer:
    freeze_model: False
    stop_collect: False
    eval_interval: 50
-   d_batch: 450
+   d_batch: 256
    subtrajectory_len: 50
    collect_envs: 10
    collect_interval: 100
@@ -78,16 +80,17 @@ trainer:
    model_train_steps: [ -1 ]
    agent_model_steps: [ 20 ]
    checkpoint_interval: 100
-   sample_model_during_agent_training: False
+   sample_model_during_agent_training: True
    sample_agent_during_agent_training: True
 
 agents:
    r_max:
       # level 0
-      -  eps_exploration_init: 0.9
+      -  observation_type: 's_embedding'
+         eps_exploration_init: 0.9
          eps_exploration_coeff: 0.999
          eps_exploration_min: 0.3
-         act_entropy_exploration_coeff: 0.001
+         act_entropy_exploration_coeff: 0.01
          learn_act_entropy_exploration_coeff: False
          novelty_exploration_coeff: 0.0
          tr_policy_kl_coeff: 0.1
