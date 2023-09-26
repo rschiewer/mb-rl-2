@@ -161,7 +161,7 @@ class ActorCriticAgent(torch.nn.Module):
         env_state = env_start_state  # note: first observation is not added to agent memory
         with FreezeParameters([world, other_world]):
             for t in range(n_steps):
-                agent_o = self.fuse_obs_with_goal(env_state, goal)
+                agent_o = self.fuse_o_with_goal(env_state, goal)
                 a_dist, a = self(agent_o, sample=sample_actions, disable_exploration=disable_exploration)
                 # ema_a_dist, _, ema_v = self(agent_o, use_ema_modules=True, sample=sample_actions,
                 #                            disable_exploration=disable_exploration)
@@ -187,7 +187,7 @@ class ActorCriticAgent(torch.nn.Module):
                 # TODO: check if correct time step's z is used for calc rewards and if correct time step's z is stored
                 # r = self.build_step_reward(mem['z_dist'][-1], mem['r'][-1], goal)
                 r = self.build_step_reward(next_env_state, pred['r'], goal, self.goal_seeking)
-                #terminal = self.build_step_terminal(agent_o, goal, pred['terminal'])
+                terminal = self.build_step_terminal(next_env_state, goal, pred['terminal'])
 
                 timestep = {  # 'o_env': env_state[0],
                     # 'o_env_next': next_env_state[0],
@@ -196,7 +196,7 @@ class ActorCriticAgent(torch.nn.Module):
                     'a': a,
                     'r': r,
                     # 'r_raw': pred['r'],
-                    'terminal': pred['terminal'],
+                    'terminal': terminal,
                     'a_dist': a_dist,
                     'ema_a_dist': ema_a_dist,
                     'model_novelty': novelty
@@ -342,6 +342,11 @@ class ActorCriticAgent(torch.nn.Module):
         terminal = torch.stack(terminal)
         r = torch.stack(r)
 
+        #if self.goal_seeking:
+        #    with torch.no_grad():
+        #        terminal = torch.zeros_like(terminal)
+        #        first_step_mask = torch.zeros_like(first_step_mask)
+
         # use compute_mask to produce validity matrix that honors first_step_mask, which might mean to make a complete
         # trajectory invalid if the first time step is already after a terminal step.
         mask = compute_mask(terminal, first_step_mask=first_step_mask, disable=False, gamma=0.99)
@@ -389,7 +394,7 @@ class ActorCriticAgent(torch.nn.Module):
             # we only train a single chunk, no bootstrapping needed beyond that
             # CAUTION: we don't train the last step and should get one step more than chunk size
             #bootstrap = (1 - mask)[-1] * r[-1]  # (1 - mask[-1]) * v_actor[-1]
-            gamma = 0.9
+            gamma = 0.98
             #lambda_returns = calc_returns_simple(r[:-1], terminal[:-1], bootstrap, gamma=gamma)
             #bootstrap = torch.zeros_like(r[-1])  # (1 - mask[-1]) * v_actor[-1]
             #lambda_returns = calc_lambda_returns(r, terminal, v_actor, bootstrap, gamma, 0.95)
@@ -398,11 +403,11 @@ class ActorCriticAgent(torch.nn.Module):
             gamma = 0.99
             #bootstrap = (1 - mask)[-1] * v_actor[-1]
             #bootstrap = (1 - mask)[-1] * v_actor[-1]  # (1 - mask[-1]) * v_actor[-1]
-        bootstrap = v_actor[-1] #(1 - mask)[-1] * v_actor[-1]
-        lambda_returns = calc_lambda_returns(r[:-1], terminal[:-1], v_actor[:-1], bootstrap, gamma, 0.99)
+        bootstrap = (1 - mask)[-1] * v_actor[-1]
+        lambda_returns, mask = calc_lambda_returns(r[:-1], terminal[:-1], v_actor[:-1], bootstrap, gamma, 0.99)
         #bootstrap = (1 - mask)[-1] * v_actor[-1]  # (1 - mask[-1]) * v_actor[-1]
         #bootstrap = (1 - mask)[-1] * (((1 - terminal) * v_actor + terminal * r))[-1]
-        mask = mask[:-1]
+        #mask = mask[:-1]
         v_actor = v_actor[:-1]
         o = o[:-1]
         a = a[:-1]
@@ -593,7 +598,7 @@ class ActorCriticAgent(torch.nn.Module):
         #    return torch.mean(o.log_prob(goal), dim=-1, keepdim=True)
         # else:
         #    return - torch.mean(torchd.kl_divergence(goal, o) + torchd.kl_divergence(o, goal), dim=-1, keepdim=True)
-        # similarity = torch.pow(0.2, torch.mean(torch.abs(o - goal) ** 2, dim=-1, keepdim=True))
+        #similarity = torch.pow(0.99, torch.mean(torch.abs(o - goal) ** 2, dim=-1, keepdim=True))
         similarity = - torch.mean(torch.abs(o - goal) ** 2, dim=-1, keepdim=True)
         return similarity
 
@@ -611,9 +616,9 @@ class ActorCriticAgent(torch.nn.Module):
         return o
 
     @torch.jit.export
-    def fuse_obs_with_goal(self,
-                           step: RSSMStateType,
-                           goal: Optional[torch.Tensor] = None):
+    def fuse_o_with_goal(self,
+                         step: RSSMStateType,
+                         goal: Optional[torch.Tensor] = None):
         o = self.o_from_state(step)
         if self.goal_seeking:
             # detach goal to avoid propagating gradients to upper level model into other agents
@@ -637,13 +642,16 @@ class ActorCriticAgent(torch.nn.Module):
 
     @torch.jit.export
     def build_step_terminal(self,
-                            o: torch.Tensor,
+                            step: RSSMStateType,
                             goal: torch.Tensor,
                             terminal: torch.Tensor):
+        term_prob = terminal
         if self.goal_seeking:
-            term_prob = torch.exp(-1000 * torch.mean(torch.abs(o - goal) ** 2, dim=-1, keepdim=True))
-        else:
-            term_prob = terminal
+            o = self.o_from_state(step)
+            similarity = torch.exp(10000 * self.goal_similarity(o, goal))
+            term_prob = torch.maximum(similarity, terminal)
+        assert torch.all(term_prob >= 0)
+        assert torch.all(term_prob <= 1)
         return term_prob
 
     @property
@@ -675,14 +683,17 @@ def calc_lambda_returns(
     target = rewards + disc_mat * discount * next_values * (1 - lambda_)
     timesteps = list(range(rewards.shape[0] - 1, -1, -1))
     outputs = []
+    discounts = []
     accumulated_reward = bootstrap
     for t in timesteps:
         inp = target[t]
         final_discount = disc_mat[t] * discount
         accumulated_reward = inp + final_discount * lambda_ * accumulated_reward
         outputs.append(accumulated_reward)
+        discounts.append(final_discount)
     returns = torch.flip(torch.stack(outputs), [0])
-    return returns
+    discounts = torch.flip(torch.stack(discounts), [0])
+    return returns, discounts
 
 
 def calc_returns_simple(rewards: torch.Tensor,
