@@ -3,6 +3,7 @@ from typing import Dict, List
 
 import gymnasium as gym
 import gym_nav2d
+from gym_nav2d.envs import Nav2dEnv
 import numpy
 import numpy as np
 import matplotlib.pyplot as plt
@@ -22,12 +23,14 @@ def gen_star_trajectories(env: gym.Env, n_trajs: int):
 
 
 def gen_regular_grid_trajectories(env: gym.Env, trajs_vert: int, trajs_horiz: int, step_size: float, move_dir: int = 0):
-    env_width = env.len_court_x
-    env_height = env.len_court_y
-    step_width = env.max_step_size * step_size
+    assert isinstance(env.unwrapped, Nav2dEnv), f'Invalid environment class: {env.unwrapped}'
+
+    env_width = env.unwrapped.len_court_x
+    env_height = env.unwrapped.len_court_y
+    step_width = env.unwrapped.max_step_size * step_size
     traj_horiz_margin = env_width / (trajs_horiz + 1)
     traj_vert_margin = env_height / (trajs_vert + 1)
-    goal_pos = [env.goal_x, env.goal_y]
+    goal_pos = [env.unwrapped.goal_x, env.unwrapped.goal_y]
 
     start_pos_bot_to_top = [[i * traj_horiz_margin, 0.0] for i in
                             range(1, trajs_horiz + 1)]  # start pos for bottom to top trajectories
@@ -47,8 +50,8 @@ def gen_regular_grid_trajectories(env: gym.Env, trajs_vert: int, trajs_horiz: in
     trajectories = []
     for start_pos in start_pos_bot_to_top:
         env.reset()
-        env.teleport_agent(*start_pos)
-        o_init = env.get_current_obs()
+        env.unwrapped.teleport_agent(*start_pos)
+        o_init = env.unwrapped.get_current_obs()
         a_init = np.zeros_like(env.action_space.sample())
         trajectory = {'o': [o_init], 'a': [a_init], 'r': [0.0], 'terminal': [0.0], 'truncated': [0.0]}
         a = action_bot_to_top
@@ -62,8 +65,8 @@ def gen_regular_grid_trajectories(env: gym.Env, trajs_vert: int, trajs_horiz: in
         trajectories.append(trajectory)
     for start_pos in start_pos_left_to_right:
         env.reset()
-        env.teleport_agent(*start_pos)
-        o_init = env.get_current_obs()
+        env.unwrapped.teleport_agent(*start_pos)
+        o_init = env.unwrapped.get_current_obs()
         a_init = np.zeros_like(env.action_space.sample())
         trajectory = {'o': [o_init], 'a': [a_init], 'r': [0.0], 'terminal': [0.0], 'truncated': [0.0]}
         a = action_left_to_right

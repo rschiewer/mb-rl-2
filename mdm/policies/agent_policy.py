@@ -90,7 +90,7 @@ class LatentAgentPolicy(Policy):
         if torch.isinf(self._current_env_state[0]).any():
             raise RuntimeError(f'Invalid inf state in step {env.current_step}: {self._current_env_state[0]}')
 
-        agent_o = self.agent.fuse_obs_with_goal(self._current_env_state)
+        agent_o = self.agent.fuse_o_with_goal(self._current_env_state)
         a_dist, a, = self.agent(agent_o, sample=self.explore, disable_exploration=not self.explore)
 
         if torch.isnan(a).any():

@@ -183,8 +183,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                                                                                    sim_env=self,
                                                                                    n_steps=lower_level_steps,
                                                                                    goal=pred['o'],
-                                                                                   sample_actions=False,
-                                                                                   sample_states=False,
+                                                                                   sample_actions=True,
+                                                                                   sample_states=True,
                                                                                    disable_exploration=True,
                                                                                    reconstruct=True)
                     simulated_ground_truth = self.filter_up(o=simulation['model'][self.links[lvl_below]],
@@ -201,8 +201,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                     distance_reward = torch.mean((state_below[5] - end_state_repr_below) ** 2, dim=-1,
                                                  keepdim=True).detach()
                     reachability_coeff = torch.exp(- 100 * simulation['agent']['r'][-1] ** 2).detach()
-                    simulated_ground_truth['r'] += distance_reward
-                    simulated_ground_truth['r'] *= reachability_coeff
+                    #simulated_ground_truth['r'] += distance_reward
+                    #simulated_ground_truth['r'] *= reachability_coeff
 
                 goal_rewards.append(simulation['agent']['r'][-1])
                 reachability_rewards.append(reachability_coeff)
@@ -471,6 +471,9 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         start_state_lvl = rssm_detach_state(*start_state_lvl)
         start_state_below = {k: torch.stack(v) for k, v in model_predictions[level - 1].items() if
                              k in rssm_state_keys()}
+        # TODO: use masks here
+        # TODO: is that correct?
+        # TODO: the original start states are in the targets, we don't need to re-calculate them
         start_state_below = {k: self.upwards_filters[level]['o'](v) for k, v in start_state_below.items()}
         start_state_below = {k: list(v.unbind(0)) for k, v in start_state_below.items()}  # need lists
         start_state_below, _ = rssm_states_seq_to_batch(start_state_below, model_predictions[level - 1]['terminal'])
@@ -675,14 +678,14 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
             loss_level = self.rssm_loss(pred[level], pred_ema[level], targets[level], mask_lvl, self.kl_betas[level],
                                         self.kl_reg_betas[level], level)
-            if level > 0:
-                a_rec_loss = self._mse(pred[level]['a_rec'], targets[level]['a_orig'],
-                                       torch.ones_like(targets[level]['a_orig']))
-                agent_model_exploration_loss = self.abstract_level_model_exploration(pred, targets, level)
-                agent_model_exploration_loss = {f'{k}_agent': v for k, v in agent_model_exploration_loss.items()}
+            #if level > 0:
+                #a_rec_loss = self._mse(pred[level]['a_rec'], targets[level]['a_orig'],
+                #                       torch.ones_like(targets[level]['a_orig']))
+                #agent_model_exploration_loss = self.abstract_level_model_exploration(pred, targets, level)
+                #agent_model_exploration_loss = {f'{k}_agent': v for k, v in agent_model_exploration_loss.items()}
 
-                loss_level['total_a_rec'] = a_rec_loss
-                loss_level.update(agent_model_exploration_loss)
+                #loss_level['total_a_rec'] = a_rec_loss
+                #loss_level.update(agent_model_exploration_loss)
 
             loss_level = {f'{k}_{level}': v for k, v in loss_level.items()}
             losses.update(loss_level)
@@ -787,7 +790,10 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             # loss['total'] += loss['ema_reg']
 
         if self.temporal_activation_regularization > 0:
-            raise NotImplementedError('this has been deactivated')
+            #raise NotImplementedError('this has been deactivated')
+            loss['temporal_act_reg'] = self._mse(pred['s_embedding'][:-1], torch.stack(pred['s_embedding'][1:]), valid[:-1])
+            loss['temporal_act_reg'] *= self.temporal_activation_regularization
+            loss['total'] += loss['temporal_act_reg']
             # loss['temporal_act_reg'] = self._mse(pred['h'][:-1], torch.stack(pred['h'][1:]), valid[:-1])
             # loss['temporal_act_reg'] *= self.temporal_activation_regularization
             # loss['total'] += loss['temporal_act_reg']

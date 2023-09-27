@@ -403,11 +403,11 @@ class ActorCriticAgent(torch.nn.Module):
             gamma = 0.99
             #bootstrap = (1 - mask)[-1] * v_actor[-1]
             #bootstrap = (1 - mask)[-1] * v_actor[-1]  # (1 - mask[-1]) * v_actor[-1]
-        bootstrap = (1 - mask)[-1] * v_actor[-1]
-        lambda_returns, mask = calc_lambda_returns(r[:-1], terminal[:-1], v_actor[:-1], bootstrap, gamma, 0.99)
+        bootstrap = (1 - terminal)[-1] * v_actor[-1] + terminal[-1] * r[-1]
+        lambda_returns = calc_lambda_returns(r[:-1], terminal[:-1], v_actor[:-1], bootstrap, gamma, 0.99)
         #bootstrap = (1 - mask)[-1] * v_actor[-1]  # (1 - mask[-1]) * v_actor[-1]
         #bootstrap = (1 - mask)[-1] * (((1 - terminal) * v_actor + terminal * r))[-1]
-        #mask = mask[:-1]
+        mask = mask[:-1]
         v_actor = v_actor[:-1]
         o = o[:-1]
         a = a[:-1]
@@ -549,7 +549,7 @@ class ActorCriticAgent(torch.nn.Module):
         # plt.hist(actor_grads, bins=100)
         # plt.show()
         #torch.nn.utils.clip_grad_value_(self.parameters(), 1.0)
-        torch.nn.utils.clip_grad_norm(self.parameters(), 10.0)
+        torch.nn.utils.clip_grad_norm_(self.parameters(), 10.0)
 
         # if logger:
         #    message = {}
@@ -599,6 +599,10 @@ class ActorCriticAgent(torch.nn.Module):
         # else:
         #    return - torch.mean(torchd.kl_divergence(goal, o) + torchd.kl_divergence(o, goal), dim=-1, keepdim=True)
         #similarity = torch.pow(0.99, torch.mean(torch.abs(o - goal) ** 2, dim=-1, keepdim=True))
+        #o_norm = torch.linalg.vector_norm(o, dim=-1, keepdim=True)
+        #goal_norm = torch.linalg.vector_norm(goal, dim=-1, keepdim=True)
+        #norm = torch.maximum(o_norm, goal_norm)
+        #similarity = torch.linalg.vecdot(goal / norm, o / norm, dim=-1).unsqueeze(-1)
         similarity = - torch.mean(torch.abs(o - goal) ** 2, dim=-1, keepdim=True)
         return similarity
 
@@ -645,10 +649,12 @@ class ActorCriticAgent(torch.nn.Module):
                             step: RSSMStateType,
                             goal: torch.Tensor,
                             terminal: torch.Tensor):
+        return terminal
         term_prob = terminal
         if self.goal_seeking:
             o = self.o_from_state(step)
-            similarity = torch.exp(10000 * self.goal_similarity(o, goal))
+            similarity = torch.exp(1000 * - torch.mean(torch.abs(o - goal) ** 2, dim=-1, keepdim=True))
+            #similarity = torch.exp(1000 * self.goal_similarity(o, goal))
             term_prob = torch.maximum(similarity, terminal)
         assert torch.all(term_prob >= 0)
         assert torch.all(term_prob <= 1)
@@ -683,17 +689,14 @@ def calc_lambda_returns(
     target = rewards + disc_mat * discount * next_values * (1 - lambda_)
     timesteps = list(range(rewards.shape[0] - 1, -1, -1))
     outputs = []
-    discounts = []
     accumulated_reward = bootstrap
     for t in timesteps:
         inp = target[t]
         final_discount = disc_mat[t] * discount
         accumulated_reward = inp + final_discount * lambda_ * accumulated_reward
         outputs.append(accumulated_reward)
-        discounts.append(final_discount)
     returns = torch.flip(torch.stack(outputs), [0])
-    discounts = torch.flip(torch.stack(discounts), [0])
-    return returns, discounts
+    return returns
 
 
 def calc_returns_simple(rewards: torch.Tensor,

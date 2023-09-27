@@ -1051,7 +1051,10 @@ def rssm_states_seq_to_batch(mem: Dict[str, List[torch.Tensor]],
     terminal = stack_if_list(terminal_flags)
     mask = compute_mask(terminal)  # take all terminal flags to compute maskt to not miss terminals before i_start
     mask = mask[i_start:i_end]
+    #mask2 = torch.concat(mask.unbind(0), dim=0)
     mask = mask.reshape(mask.shape[0] * mask.shape[1], 1)
+
+    #assert torch.abs(mask - mask2).sum() < 0.01
 
     return states, mask
 

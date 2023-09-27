@@ -16,7 +16,8 @@ mdm:
       -  d_z: 20
          d_h: 200
          d_a: <infer>
-         d_s_embedding: null
+         d_s_embedding: 10
+         s_embedding_lws: [128, 64, 64]
          n_hidden_layers: 1
          hidden_dropout: 0.1
          epsilon: 0.1
@@ -54,7 +55,7 @@ mdm:
       -  d_z: 20
          d_h: 200
          d_a: 2
-         d_s_embedding: null
+         d_s_embedding: 25
          n_hidden_layers: 1
          hidden_dropout: 0.1
          epsilon: 0.1
@@ -69,7 +70,7 @@ mdm:
             lws: [ 100, 100, 100 ]
             layer_norm: True
             activation: "relu"
-            d_x_encoded: 100
+            d_x_encoded: 32
          o_decoder:
             class: "GaussianDecoder"
             lws: [ 100, 100, 100 ]
@@ -109,12 +110,12 @@ mdm:
             window_size: 4
    warmup_steps: [ 'rand', 'rand' ]
    kl_betas: [ 0.5, 0.5 ]
-   kl_reg_betas: [ 0.01, 0.01 ]
+   kl_reg_betas: [ 0.0, 0.0 ]
    ema_regularization: 0.0
    ema_coeff: 0.95
    ema_update_interval: 10
    latent_overshooting: [ ] #[14, 9]
-   temporal_activation_regularization: 0.0
+   temporal_activation_regularization: 1.0
    kl_balance: 0.8
 
 optim:
@@ -126,7 +127,7 @@ trainer:
    freeze_model: False
    stop_collect: False
    eval_interval: 50
-   d_batch: 512
+   d_batch: 256
    subtrajectory_len: 50
    collect_envs: 50
    collect_interval: 100
@@ -144,7 +145,7 @@ agents:
          eps_exploration_init: 0.9
          eps_exploration_coeff: 0.999
          eps_exploration_min: 0.3
-         act_entropy_exploration_coeff: 0.001
+         act_entropy_exploration_coeff: 0.01
          learn_act_entropy_exploration_coeff: False
          novelty_exploration_coeff: 0.00
          tr_policy_kl_coeff: 0.1
@@ -169,7 +170,7 @@ agents:
          eps_exploration_init: 0.9
          eps_exploration_coeff: 0.999
          eps_exploration_min: 0.3
-         act_entropy_exploration_coeff: 0.001
+         act_entropy_exploration_coeff: 0.01
          learn_act_entropy_exploration_coeff: False
          novelty_exploration_coeff: 0.00
          tr_policy_kl_coeff: 0.1
@@ -200,8 +201,8 @@ agents:
          novelty_exploration_coeff: 0.0
          tr_policy_kl_coeff: 0.1
          tr_policy_ema_update_coeff: 0.95
-         lr_actor: 0.02
-         lr_critic: 0.04
+         lr_actor: 0.0002
+         lr_critic: 0.0004
          min_a: <infer>
          max_a: <infer>
          actor_lws: [ 100, 200, 100 ]

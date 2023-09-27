@@ -30,7 +30,7 @@ from mdm.utils.torch_tools import to_tensors, to_np, compute_mask, record_parame
 from mdm.utils.utils import (prepare_data, TempFigure, trajectory_statistics, trajectories_from_simulation,
                              anim_to_vid, rssm_states_seq_to_batch, log_params, InMemoryFile,
                              fig_to_img, valid_subtrajectories, valid_subtrajectories_unbiased,
-                             valid_subtrajectories_unbiased_fast, valid_subtrajectories_2)
+                             valid_subtrajectories_unbiased_fast, valid_subtrajectories_2, append_memory, extend_memory)
 from mdm.utils.gym_nav2d_tools import *
 
 
@@ -41,11 +41,6 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
     stop_collect = cfg['trainer']['stop_collect'] if cfg['trainer']['stop_collect'] > 0 else sys.maxsize
     logger.start_session()
     model.prepare_for_training()
-
-    # for evaluation of latent space
-    # grid_trajs = gen_regular_grid_trajectories(eval_env.env_fns[0](), trajs_vert=10, trajs_horiz=10, step_size=1.0)
-    # grid_trajs = to_tensors(grid_trajs, model.device, padding='repeat')
-    # grid_trajs = prepare_data(grid_trajs)
 
     # actor_params = np.sum(
     #    record_parameters(model.r_max_agents[0][0].actor_net, reduction_fn=lambda x: x.ravel().mean()))
@@ -119,13 +114,18 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 abstract_level = l > 0
                 r_max_simulation = r_max_agent.act_in_sim(start_state_lvl, model, agent_model_steps[l],
                                                           sample_states=sample_model, sample_actions=sample_agents,
-                                                          reconstruct=not abstract_level)
+                                                          reconstruct=True)
                 r_max_losses = r_max_agent.update_step(r_max_simulation['agent'],
                                                        # first_step_mask=start_state_mask.unsqueeze(0),
                                                        first_step_mask=None,
                                                        actor_optimizer=r_max_actor_opt,
                                                        critic_optimizer=r_max_critic_opt,
                                                        logger=logger)
+
+                if i_step % cfg['trainer']['eval_interval'] == 0:
+                    plot_value_function(eval_env, model, r_max_agent, l, logger, i_step)
+                if l > 0 and i_step % cfg['trainer']['eval_interval'] == 0:
+                    plot_goals(r_max_simulation, model, logger, i_step, l)
 
                 # action std
                 acts = torch.stack(r_max_simulation['agent']['a']).detach().cpu().numpy().reshape(-1, 2)
@@ -356,56 +356,66 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                     state = goal_simulation['model_state']
                     """
 
+                    # take completely random start and goal states for the GSA to train on
                     chunk_size = model.strides[l + 1]
                     goal_agent, goal_actor_opt, goal_critic_opt = model.goal_seeking_agents[l]
+
                     gsa_start_states, gsa_first_step_mask = rssm_states_seq_to_batch(pred[l], targets[l]['terminal'])
                     gsa_start_states = rssm_detach_state(*gsa_start_states)
-                    # gsa_goal_states, _ = rssm_states_seq_to_batch(pred[l], targets[l]['terminal'],
-                    #                                              i_start=chunk_size)
-                    # gsa_goal_states = rssm_detach_state(*gsa_goal_states)
+                    probs = 1 - gsa_first_step_mask.squeeze()
+                    start_state_idx = torch.multinomial(probs, gsa_first_step_mask.shape[0], replacement=True)
+                    gsa_start_states = [x[start_state_idx] for x in gsa_start_states]
 
-                    # take completely random start and goal states for the GSA to train on
-                    with torch.no_grad():
-                        #torch.multinomial(gsa_first_step_mask.squeeze(), gsa_first_step_mask.shape[0], replacement=True)
-                        start_state_idx = torch.randperm(gsa_start_states[0].shape[0])
+                    gsa_agent_mem, gsa_model_mem = {}, {}
+                    goal_mem = []
+                    gsa_losses = {}
+
+                    n_goals = 3
+                    n_steps = [random.randint(chunk_size, 3 * chunk_size) for _ in range(n_goals)]
+                    start_state = gsa_start_states
+                    for i_goal in range(n_goals):
+                        # this avoids start states if the mask value is high
                         goal_state_idx = torch.randperm(gsa_start_states[0].shape[0])
-                        gsa_start_states = [x[start_state_idx] for x in gsa_start_states]
                         gsa_goal_states = [x[goal_state_idx] for x in gsa_start_states]
                         # 10% random perturbation
                         # gsa_start_states = [x + 0.1 * (torch.rand_like(x) - 0.5) * x for x in gsa_start_states]
                         # gsa_goal_states = [x + 0.1 * (torch.rand_like(x) - 0.5) * x for x in gsa_goal_states]
                         gsa_goals = goal_agent.o_from_state(gsa_goal_states)
+                        goal_mem.append(gsa_goals)
 
-                    n_steps = random.randint(chunk_size, 5 * chunk_size)
-                    goal_simulation = goal_agent.act_in_sim(gsa_start_states, model, n_steps, gsa_goals,
-                                                            sample_states=False, sample_actions=sample_agents,
-                                                            disable_exploration=False, reconstruct=True)
+                        goal_simulation = goal_agent.act_in_sim(start_state, model, n_steps[i_goal], gsa_goals,
+                                                                sample_states=True, sample_actions=sample_agents,
+                                                                disable_exploration=False, reconstruct=True)
+                        agent_mem = goal_simulation['agent']
+                        # agent_mem['o'].append(torch.zeros_like(agent_mem['o'][0]))
+                        # agent_mem['r'].append(torch.zeros_like(agent_mem['r'][0]))
+                        # agent_mem['terminal'].append(torch.zeros_like(agent_mem['terminal'][0]))
+                        # agent_mem['a'].append(torch.zeros_like(agent_mem['a'][0]))
+                        # agent_mem['a_dist'].append(torch.zeros_like(agent_mem['a_dist'][0]))
+                        # make last reward 0 to avoid goal seeking agent getting reward from beyond goal
+                        # agent_mem['r'][-1] = torch.zeros_like(agent_mem['r'][-1])
+                        # make last time step terminal to avoid goal seeking agent getting bootstraps from beyond goals
+                        # agent_mem['terminal'][-1] = torch.ones_like(agent_mem['terminal'][-1])
+                        # agent_mem['terminal'][-2] = torch.ones_like(agent_mem['terminal'][-2])
+                        loss = goal_agent.update_step(agent_mem,
+                                                      # first_step_mask=gsa_first_step_mask,
+                                                      first_step_mask=None,
+                                                      actor_optimizer=goal_actor_opt,
+                                                      critic_optimizer=goal_critic_opt)
+                        loss = {f'{k}_{i_goal}': v for i, (k, v) in enumerate(loss.items())}
+                        gsa_losses.update(loss)
 
-                    if i_step % cfg['trainer']['eval_interval'] == 0:
-                        fig = plot_goal_seeking_performance(goal_agent, goal_simulation, gsa_goals, gsa_start_states,
-                                                            model)
-                        logger.log_plot(fig_to_img(fig),
-                                        Scope.TRAIN() / f'goal_seeking_agent/{l}/goal_seeking_train_performance',
-                                        i_step)
+                        extend_memory(gsa_agent_mem, goal_simulation['agent'])
+                        extend_memory(gsa_model_mem, goal_simulation['model'])
 
-                    agent_mem = goal_simulation['agent']
-                    # agent_mem['o'].append(torch.zeros_like(agent_mem['o'][0]))
-                    # agent_mem['r'].append(torch.zeros_like(agent_mem['r'][0]))
-                    # agent_mem['terminal'].append(torch.zeros_like(agent_mem['terminal'][0]))
-                    # agent_mem['a'].append(torch.zeros_like(agent_mem['a'][0]))
-                    # agent_mem['a_dist'].append(torch.zeros_like(agent_mem['a_dist'][0]))
-                    # make last reward 0 to avoid goal seeking agent getting reward from beyond goal
-                    # agent_mem['r'][-1] = torch.zeros_like(agent_mem['r'][-1])
-                    # make last time step terminal to avoid goal seeking agent getting bootstraps from beyond goals
-                    # agent_mem['terminal'][-1] = torch.ones_like(agent_mem['terminal'][-1])
-                    # agent_mem['terminal'][-2] = torch.ones_like(agent_mem['terminal'][-2])
-                    goal_losses = goal_agent.update_step(agent_mem,
-                                                         first_step_mask=gsa_first_step_mask,
-                                                         # first_step_mask=None,
-                                                         actor_optimizer=goal_actor_opt,
-                                                         critic_optimizer=goal_critic_opt)
+                        start_state = rssm_detach_state(*goal_simulation['model_state'])
 
-                    logger.log(to_np(goal_losses), Scope.TRAIN() / f'goal_seeking_agent/{l}/', i_step)
+                    logger.log(to_np(gsa_losses), Scope.TRAIN() / f'goal_seeking_agent/{l}/', i_step)
+
+                    if i_step % cfg['trainer']['eval_interval'] == 0 and l == 0:
+                        plot_goal_conditioned_value_function(eval_env, l, model, goal_agent, logger, i_step, 3, 3)
+                        plot_goal_seeking_performance(goal_agent, gsa_model_mem, gsa_agent_mem, goal_mem,
+                                                      gsa_start_states, model, n_steps, logger, i_step, l)
 
         # p1 = torch.sum(torch.stack([p.mean() for p in model.parameters()]))
         # assert np.isclose((p0 - p1).detach().cpu().numpy(), 0), 'Model parameters changed during agent training!'
@@ -432,83 +442,12 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 # test various model prediction lengths
                 log_prediction_error_plot(batch, cfg, i_step, logger, model, pred, targets)
 
-                # probe L0 goal seeking agent
                 if len(model.goal_seeking_agents) > 0 and isinstance(eval_env.env_fns[0]().unwrapped,
                                                                      gym_nav2d.envs.Nav2dEnv):
-                    trajs_orig = train_driver.interact(cfg['trainer']['d_batch'])
-                    batch = to_tensors(trajs_orig, model.device, padding='repeat')
-                    batch = prepare_data(batch)
-                    eval_steps = [-1] + cfg['trainer']['model_train_steps'][1:]
-                    eval_losses, pred, targets, _ = model.eval_step(batch, model_steps=eval_steps, sample_state=False,
-                                                                    sample_output=False,
-                                                                    force_warmup=[-1 for _ in range(model.levels)])
-                    gsa = model.goal_seeking_agents[0][0]
-                    states = {k: torch.stack(v) for k, v in pred[0].items() if k in rssm_state_keys()}
-                    gsa_goals = gsa.o_from_state(rssm_remove_labels(states))
-                    goals = model.filter_up(o=gsa_goals[1:], terminal=targets[0]['terminal'][1:], level=1)['o']
-                    goal_obs = model.filter_up(o=targets[0]['o'][1:], terminal=targets[0]['terminal'][1:], level=1)['o']
-                    goal_terminals = model.filter_up(o=targets[0]['terminal'][1:], terminal=targets[0]['terminal'][1:],
-                                                     level=1)['o']
-                    goal_distances = []
-                    for i in range(len(goals)):
-                        goal_distances.append([])
-                        for j in range(len(goals)):
-                            d = gsa.goal_similarity(goals[i], goals[j])[0].detach().cpu().numpy()
-                            goal_distances[-1].append(d)
-                    goal_distances = np.array(goal_distances).squeeze(-1)
-
-                    chunk_size = model.strides[1]
-                    gsa_agent_mem = {}
-                    total_steps_remaining = len(batch['o']) - 1  # first step is start state
-                    state = {k: pred[0][k][0] for k in rssm_state_keys()}
-                    state = rssm_remove_labels(state)
-                    for i_goal, goal in enumerate(goals):
-                        # i_state = i_goal * chunk_size
-                        # state = rssm_remove_labels({k: pred[0][k][i_state] for k in rssm_state_keys()})
-                        n_steps = np.minimum(total_steps_remaining, chunk_size)
-                        simulation = gsa.act_in_sim(env_start_state=state, sim_env=model, n_steps=n_steps, goal=goal,
-                                                    sample_actions=False, disable_exploration=True, sample_states=False,
-                                                    agent_memory=gsa_agent_mem)
-                        state = simulation['model_state']
-                        total_steps_remaining -= chunk_size
-
-                    a_gsa_sim = torch.stack(gsa_agent_mem['a'])[:, 0].detach().cpu().numpy()
-                    env = CacheLastStepEnv(eval_env.env_fns[0]())
-                    init_obs = targets[0]['o'][0][0].detach().cpu().numpy()
-                    init_obs_unnorm = env.unnormalize_observation(init_obs)
-                    env_init_options = {'agent_x': init_obs_unnorm[0], 'agent_y': init_obs_unnorm[1]}
-                    gsa_executed_actions_mem = collect_data(env, a_gsa_sim.shape[0] + 1, PredefinedPolicy(a_gsa_sim),
-                                                            options=env_init_options)
-
-                    orig_obs = targets[0]['o'][1:].detach().cpu().numpy()
-                    valid_steps = 1 - compute_mask(targets[0]['terminal'][1:]).detach().cpu().numpy()
-                    agent_obs = gsa_executed_actions_mem[0]['o'][1:]
-                    goal_obs = goal_obs.detach().cpu().numpy()
-                    valid_goals = 1 - compute_mask(goal_terminals).detach().cpu().numpy()
-                    hsv_values = np.linspace(0.9, 0.2, num=np.maximum(len(agent_obs), len(orig_obs)))
-                    with TempFigure(figsize=(10, 5)) as fig:
-                        ax_0 = fig.add_subplot(1, 2, 1)
-                        c = [to_rgba(hsv_to_rgb((0.05, 1.0, hsv_values[t])), valid_goals[t, 0, 0]) for t in
-                             range(len(goal_obs))]
-                        ax_0.scatter(goal_obs[:, 0, 0], goal_obs[:, 0, 1], label='goal pos', figure=fig, c=c, s=100)
-                        c = [to_rgba(hsv_to_rgb((0.15, 1.0, hsv_values[t])), valid_steps[t, 0, 0]) for t in
-                             range(len(orig_obs))]
-                        ax_0.scatter(orig_obs[:, 0, 0], orig_obs[:, 0, 1], label='original pos', figure=fig, c=c, s=60)
-                        c = [to_rgba(hsv_to_rgb((0.55, 1.0, hsv_values[t])), valid_steps[t, 0, 0]) for t in
-                             range(len(agent_obs))]
-                        ax_0.scatter(agent_obs[:, 0], agent_obs[:, 1], label='agent pos', figure=fig, c=c, marker="P")
-                        ax_0.set_title(f'{valid_steps[:, 0, 0].sum().astype(int)} steps')
-                        ax_0.scatter(init_obs[0], init_obs[1], marker='p', label='start pos', c='green')
-                        ax_0.legend()
-                        fig.axes[0].add_patch(Rectangle((-1, -1), 2, 2, fill=False, edgecolor='grey', linestyle='--'))
-                        ax_1 = fig.add_subplot(1, 2, 2)
-                        ax_1.set_title('Euclidean goal distances')
-                        mat = ax_1.matshow(goal_distances)
-                        fig.colorbar(mat, ax=ax_1)
-                        plt.tight_layout()
-                        # plt.show()
-                        logger.log_plot(fig_to_img(fig), Scope.TEST() / f'goal_seeking_agent/{0}/goal_seeking_plot',
-                                        i_step)
+                    # probe L0 goal seeking agent
+                    nav2d_gsa_plot(cfg, eval_env, eval_steps, i_step, logger, model, train_driver)
+                    # latent state plot from trajectory grid
+                    latent_state_PCA_plot(eval_env, eval_steps, i_step, logger, model)
 
                 # hierarchical agent
                 eval_env.reset()
@@ -592,33 +531,6 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 #    if ag is None: continue
                 #    log_params(ag[0], logger, Scope.PARAMETERS() / f'agent/goal_seeking_agent_{i_ag}', time_step=i_step)
 
-                """
-                    _, pred_pca, _, _ = model.eval_step(model_batch, model_steps=eval_steps, sample_state=False,
-                    sample_output=False,
-                    force_warmup=[-1 for _ in range(model.levels)])
-                    # latent sate PCA 3d plot
-                    for l in range(model.levels):
-                    states = torch.stack(pred_pca[0]['z'])
-                    states = states.detach().cpu().numpy()
-                    d_time, d_batch, d_z = states.shape
-                    pca = PCA(n_components=3)
-                    states_trans = pca.fit_transform(states.reshape(d_time * d_batch, d_z))
-                    xy_positions = (model_batch['o'].detach().cpu().numpy()[:, :, :2].reshape(d_time * d_batch, 2) + 1.0) / 2.0
-                    colors = np.concatenate([xy_positions, np.zeros((d_time * d_batch, 1), dtype=float)], axis=-1)
-                    with TempFigure() as fig:
-                    ax = fig.add_subplot(projection='3d')
-                    ax.set_title(f'Total explained variance: {np.sum(pca.explained_variance_ratio_):.3f}')
-                    ax.scatter(states_trans[:, 0], states_trans[:, 1], states_trans[:, 2], c=colors)
-                    ax.set_xlabel(f'PCA 1 ({pca.explained_variance_ratio_[0]:.3f})')
-                    ax.set_ylabel(f'PCA 2 ({pca.explained_variance_ratio_[1]:.3f})')
-                    ax.set_zlabel(f'PCA 3 ({pca.explained_variance_ratio_[2]:.3f})')
-                    plt.tight_layout()
-                    logger.log_plot(fig_to_img(fig), Scope.TEST() / f'model/{0}/latent_state_pca', i_step)
-                    # sanity check to confirm that coloring based on xy positions makes sense
-                    # plt.scatter(xy_positions[:, 0], xy_positions[:, 1], c=colors)
-                    # plt.show()
-                    """
-
         if i_step % cfg['trainer']['checkpoint_interval'] == 0:
             timestamp = time.time_ns()
             pid = os.getpid()
@@ -628,25 +540,256 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
             logger.log_file(cpt_file, Scope.DATA() / 'weights')
 
 
-def plot_goal_seeking_performance(goal_agent, goal_simulation, gsa_goals, gsa_start_states, model):
+def plot_value_function(eval_env, model, agent, level, logger, i_step):
+    grid_trajs = gen_regular_grid_trajectories(eval_env.unwrapped.env_fns[0](), trajs_vert=10, trajs_horiz=10,
+                                               step_size=1.0)
+    grid_trajs = to_tensors(grid_trajs, model.device, padding='repeat')
+    grid_trajs = prepare_data(grid_trajs)
+    _, pred_grid, targets_grid, _ = model.eval_step(grid_trajs, model_steps=[-1 for _ in range(model.levels)],
+                                                    sample_state=False, sample_output=False,
+                                                    force_warmup=[-1 for _ in range(model.levels)])
+    values = agent.critic_net(torch.stack(pred_grid[level]['s_embedding'])).detach().cpu().numpy()
+    obs = grid_trajs['o']
+    for upsampling_stage in range(level + 1):
+        obs = model.upwards_filters[upsampling_stage]['o'](obs)
+    obs = obs.detach().cpu().numpy()
+    values = values.reshape(-1, 1)
+    obs = obs.reshape(-1, obs.shape[-1])
+    fig, ax = plt.subplots(subplot_kw={"projection": "3d"})
+    ax.set_xlim([-1, 1])
+    ax.set_ylim([-1, 1])
+    ax.plot_trisurf(obs[:, 0], obs[:, 1], values[:, 0], antialiased=True, cmap=plt.cm.viridis)
+
+    logger.log_plot(fig_to_img(fig),
+                    Scope.TRAIN() / f'r_max_agent/{level}/value_function_plot',
+                    i_step)
+    plt.close(fig)
+    del fig
+
+
+def plot_goal_conditioned_value_function(eval_env, l, model, agent, logger, i_step, n_rows, n_cols):
+    grid_trajs = gen_regular_grid_trajectories(eval_env.unwrapped.env_fns[0](), trajs_vert=10, trajs_horiz=10,
+                                               step_size=1.0)
+    grid_trajs = to_tensors(grid_trajs, model.device, padding='repeat')
+    grid_trajs = prepare_data(grid_trajs)
+    _, pred_grid, _, _ = model.eval_step(grid_trajs, model_steps=[-1 for _ in range(model.levels)],
+                                         sample_state=False, sample_output=False,
+                                         force_warmup=[-1 for _ in range(model.levels)])
+    s_embeddings = torch.stack(pred_grid[l]['s_embedding']).flatten(start_dim=0, end_dim=-2)
+    fig, axes = plt.subplots(n_rows, n_cols, subplot_kw={"projection": "3d", 'computed_zorder': False}, figsize=(10, 10))
+    for ax in axes.ravel():
+        i_goal = np.random.randint(s_embeddings.shape[0])
+        ax.set_xlim([-1, 1])
+        ax.set_ylim([-1, 1])
+
+        goal = s_embeddings[i_goal].unsqueeze(0).repeat((s_embeddings.shape[0], 1))
+        fused_embeddings = torch.concat([s_embeddings, goal], dim=-1)
+        values = agent.critic_net(fused_embeddings).detach().cpu().numpy()
+
+        obs = grid_trajs['o'].flatten(start_dim=0, end_dim=-2).detach().cpu().numpy()
+        ax.plot_trisurf(obs[:, 0], obs[:, 1], values[:, 0], antialiased=True, zorder=0, cmap=plt.cm.viridis)
+        ax.scatter(obs[i_goal, 0], obs[i_goal, 1], values[i_goal, 0], zorder=1, linewidth=5, color='red')
+    plt.tight_layout()
+    #plt.show()
+
+    logger.log_plot(fig_to_img(fig),
+                    Scope.TRAIN() / f'goal_seeking_agent/{l}/value_function_plot',
+                    i_step)
+    plt.close(fig)
+    del fig
+
+
+def plot_goals(r_max_simulation, model, logger, i_step, l):
+    abstract_obs = torch.stack(r_max_simulation['model']['o'])
+    goal_obs = model.rssm_modules[l - 1].decode(abstract_obs, sample=False, reconstruct_observation=True)['o']
+    goal_obs = goal_obs.detach().cpu().numpy()
+    terminals = torch.stack(r_max_simulation['model']['terminal']).detach().cpu().numpy()
+
+    fig, axes = plt.subplots(5, 5, figsize=(10, 10), sharex=True, sharey=True)
+    indices = np.random.randint(low=0, high=goal_obs[0].shape[0], size=(25,))
+
+    for i_ax, ax in enumerate(axes.ravel()):
+        # preparations
+        idx = indices[i_ax]
+        ax.set_xlim([-1, 1])
+        ax.set_ylim([-1, 1])
+
+        alphas = 1 - terminals[:, idx, 0]
+        for t in list(range(goal_obs.shape[0])):
+            ax.scatter(goal_obs[t, idx, 0], goal_obs[t, idx, 1], c='C0', s=50, alpha=alphas)
+            ax.scatter(goal_obs[t, idx, 0], goal_obs[t, idx, 1], marker=f'${t + 1}$', c='white', s=30,
+                       alpha=min(0.5, alphas[t]))
+
+        # add reward location for reference
+        ax.scatter(0, 0, label='reward', marker='x', c='red', s=45, alpha=0.2)
+    # ax.legend()
+    plt.tight_layout()
+    #plt.show()
+
+    logger.log_plot(fig_to_img(fig),
+                    Scope.TRAIN() / f'r_max_agent/{l}/goal_seeking_train_performance',
+                    i_step)
+    plt.close(fig)
+    del fig
+
+
+def nav2d_gsa_plot(cfg, eval_env, eval_steps, i_step, logger, model, train_driver):
+    trajs_orig = train_driver.interact(cfg['trainer']['d_batch'])
+    batch = to_tensors(trajs_orig, model.device, padding='repeat')
+    batch = prepare_data(batch)
+    eval_steps = [-1] + cfg['trainer']['model_train_steps'][1:]
+    eval_losses, pred, targets, _ = model.eval_step(batch, model_steps=eval_steps, sample_state=False,
+                                                    sample_output=False,
+                                                    force_warmup=[-1 for _ in range(model.levels)])
+    gsa = model.goal_seeking_agents[0][0]
+    states = {k: torch.stack(v) for k, v in pred[0].items() if k in rssm_state_keys()}
+    gsa_goals = gsa.o_from_state(rssm_remove_labels(states))
+    goals = model.filter_up(o=gsa_goals[1:], terminal=targets[0]['terminal'][1:], level=1)['o']
+    goal_obs = model.filter_up(o=targets[0]['o'][1:], terminal=targets[0]['terminal'][1:], level=1)['o']
+    goal_terminals = model.filter_up(o=targets[0]['terminal'][1:], terminal=targets[0]['terminal'][1:],
+                                     level=1)['o']
+    goal_distances = []
+    for i in range(len(goals)):
+        goal_distances.append([])
+        for j in range(len(goals)):
+            d = gsa.goal_similarity(goals[i], goals[j])[0].detach().cpu().numpy()
+            goal_distances[-1].append(d)
+    goal_distances = np.array(goal_distances).squeeze(-1)
+    chunk_size = model.strides[1]
+    gsa_agent_mem = {}
+    total_steps_remaining = len(batch['o']) - 1  # first step is start state
+    state = {k: pred[0][k][0] for k in rssm_state_keys()}
+    state = rssm_remove_labels(state)
+    for i_goal, goal in enumerate(goals):
+        # i_state = i_goal * chunk_size
+        # state = rssm_remove_labels({k: pred[0][k][i_state] for k in rssm_state_keys()})
+        n_steps = np.minimum(total_steps_remaining, chunk_size)
+        simulation = gsa.act_in_sim(env_start_state=state, sim_env=model, n_steps=n_steps, goal=goal,
+                                    sample_actions=False, disable_exploration=True, sample_states=False,
+                                    agent_memory=gsa_agent_mem)
+        state = simulation['model_state']
+        total_steps_remaining -= chunk_size
+    a_gsa_sim = torch.stack(gsa_agent_mem['a'])[:, 0].detach().cpu().numpy()
+    env = CacheLastStepEnv(eval_env.unwrapped.env_fns[0]())
+    init_obs = targets[0]['o'][0][0].detach().cpu().numpy()
+    init_obs_unnorm = env.unwrapped.unnormalize_observation(init_obs)
+    env_init_options = {'agent_x': init_obs_unnorm[0], 'agent_y': init_obs_unnorm[1]}
+    gsa_executed_actions_mem = collect_data(env, a_gsa_sim.shape[0] + 1, PredefinedPolicy(a_gsa_sim),
+                                            options=env_init_options)
+    orig_obs = targets[0]['o'][1:].detach().cpu().numpy()
+    valid_steps = 1 - compute_mask(targets[0]['terminal'][1:]).detach().cpu().numpy()
+    agent_obs = gsa_executed_actions_mem[0]['o'][1:]
+    goal_obs = goal_obs.detach().cpu().numpy()
+    valid_goals = 1 - compute_mask(goal_terminals).detach().cpu().numpy()
+    hsv_values = np.linspace(0.9, 0.2, num=np.maximum(len(agent_obs), len(orig_obs)))
+    with TempFigure(figsize=(10, 5)) as fig:
+        ax_0 = fig.add_subplot(1, 2, 1)
+        c = [to_rgba(hsv_to_rgb((0.05, 1.0, hsv_values[t])), valid_goals[t, 0, 0]) for t in
+             range(len(goal_obs))]
+        ax_0.scatter(goal_obs[:, 0, 0], goal_obs[:, 0, 1], label='goal pos', figure=fig, c=c, s=100)
+        c = [to_rgba(hsv_to_rgb((0.15, 1.0, hsv_values[t])), valid_steps[t, 0, 0]) for t in
+             range(len(orig_obs))]
+        ax_0.scatter(orig_obs[:, 0, 0], orig_obs[:, 0, 1], label='original pos', figure=fig, c=c, s=60)
+        c = [to_rgba(hsv_to_rgb((0.55, 1.0, hsv_values[t])), valid_steps[t, 0, 0]) for t in
+             range(len(agent_obs))]
+        ax_0.scatter(agent_obs[:, 0], agent_obs[:, 1], label='agent pos', figure=fig, c=c, marker="P")
+        ax_0.set_title(f'{valid_steps[:, 0, 0].sum().astype(int)} steps')
+        ax_0.scatter(init_obs[0], init_obs[1], marker='p', label='start pos', c='green')
+        ax_0.legend()
+        fig.axes[0].add_patch(Rectangle((-1, -1), 2, 2, fill=False, edgecolor='grey', linestyle='--'))
+        ax_1 = fig.add_subplot(1, 2, 2)
+        ax_1.set_title('Euclidean goal distances')
+        mat = ax_1.matshow(goal_distances)
+        fig.colorbar(mat, ax=ax_1)
+        plt.tight_layout()
+        # plt.show()
+        logger.log_plot(fig_to_img(fig), Scope.TEST() / f'goal_seeking_agent/{0}/goal_seeking_plot',
+                        i_step)
+    return batch, eval_steps
+
+
+def latent_state_PCA_plot(eval_env, eval_steps, i_step, logger, model):
+    grid_trajs = gen_regular_grid_trajectories(eval_env.unwrapped.env_fns[0](), trajs_vert=10, trajs_horiz=10,
+                                               step_size=1.0)
+    grid_trajs = to_tensors(grid_trajs, model.device, padding='repeat')
+    grid_trajs = prepare_data(grid_trajs)
+    _, pred_pca, _, _ = model.eval_step(grid_trajs, model_steps=eval_steps, sample_state=False,
+                                        sample_output=False,
+                                        force_warmup=[-1 for _ in range(model.levels)])
+    # latent sate PCA 3d plot
+    # for l in range(model.levels):
+    states = torch.stack(pred_pca[0]['z'])
+    states = states.detach().cpu().numpy()
+    d_time, d_batch, d_z = states.shape
+    pca = PCA(n_components=3)
+    states_trans = pca.fit_transform(states.reshape(d_time * d_batch, d_z))
+    xy_positions = (grid_trajs['o'].detach().cpu().numpy()[:, :, :2].reshape(d_time * d_batch, 2) + 1.0) / 2.0
+    colors = np.concatenate([xy_positions, np.zeros((d_time * d_batch, 1), dtype=float)], axis=-1)
+    with TempFigure() as fig:
+        ax = fig.add_subplot(projection='3d')
+        ax.view_init(elev=50, azim=45)
+        ax.set_title(f'Total explained variance: {np.sum(pca.explained_variance_ratio_):.3f}')
+        ax.scatter(states_trans[:, 0], states_trans[:, 1], states_trans[:, 2], c=colors)
+        ax.set_xlabel(f'PCA 1 ({pca.explained_variance_ratio_[0]:.3f})')
+        ax.set_ylabel(f'PCA 2 ({pca.explained_variance_ratio_[1]:.3f})')
+        ax.set_zlabel(f'PCA 3 ({pca.explained_variance_ratio_[2]:.3f})')
+        plt.tight_layout()
+        # plt.show()
+        logger.log_plot(fig_to_img(fig), Scope.TEST() / f'model/{0}/latent_state_pca', i_step)
+        # sanity check to confirm that coloring based on xy positions makes sense
+        # plt.scatter(xy_positions[:, 0], xy_positions[:, 1], c=colors)
+        # plt.show()
+
+
+def plot_goal_seeking_performance(goal_agent, model_mem, agent_mem, gsa_goals, gsa_start_states, model,
+                                  n_steps_per_chunk, logger, i_step, l):
+    chunk_colors = ['lightblue', 'deepskyblue', 'dodgerblue', 'cornflowerblue', 'royalblue', 'blue']
+    markers = ['^', 's', 'p', 'h']
+    if not isinstance(gsa_goals, list):
+        gsa_goals = [gsa_goals]
     start_obs = model.rssm_modules[0].decode(goal_agent.o_from_state(gsa_start_states),
                                              sample=False, reconstruct_observation=True)['o']
     start_obs = start_obs.detach().cpu().numpy()
-    goal_obs = model.rssm_modules[0].decode(gsa_goals, sample=False, reconstruct_observation=True)['o']
-    goal_obs = goal_obs.detach().cpu().numpy()
-    traj_obs = torch.stack(goal_simulation['model']['o']).detach().cpu().numpy()
+    goal_reconstr = [model.rssm_modules[0].decode(g, sample=False, reconstruct_observation=True) for g in gsa_goals]
+    goal_obs = [g['o'].detach().cpu().numpy() for g in goal_reconstr]
+    traj_obs = torch.stack(model_mem['o']).detach().cpu().numpy()
+    traj_terminals = torch.stack(agent_mem['terminal']).detach().cpu().numpy()
+
     fig, axes = plt.subplots(5, 5, figsize=(10, 10), sharex=True, sharey=True)
-    indices = np.random.randint(low=0, high=goal_obs.shape[0], size=(25,))
+    indices = np.random.randint(low=0, high=goal_obs[0].shape[0], size=(25,))
     for i_ax, ax in enumerate(axes.ravel()):
+        # preparations
         idx = indices[i_ax]
-        ax.scatter(start_obs[idx, 0], start_obs[idx, 1], label='start')
-        ax.scatter(goal_obs[idx, 0], goal_obs[idx, 1], label='goal')
-        ax.scatter(traj_obs[:, idx, 0], traj_obs[:, idx, 1], label='steps')
         ax.set_xlim([-1, 1])
         ax.set_ylim([-1, 1])
-    ax.legend()
+
+        # plot observations of agent steps
+        current_step = 0
+        for i_chunk, n_steps in enumerate(n_steps_per_chunk):
+            t_s, t_e = current_step, current_step + n_steps
+            a = 1 - traj_terminals[t_s:t_e, idx, 0]
+            ax.scatter(traj_obs[t_s:t_e, idx, 0], traj_obs[t_s:t_e, idx, 1], c=chunk_colors[i_chunk],
+                       label='steps', alpha=a)
+            current_step += n_steps
+
+        # plot start and goals
+        ax.scatter(start_obs[idx, 0], start_obs[idx, 1], c='orange', label='start', s=45)
+        ax.scatter(start_obs[idx, 0], start_obs[idx, 1], marker='$s$', c='white', s=25, alpha=0.5)
+        for i_goal, g in enumerate(goal_obs):
+            ax.scatter(g[idx, 0], g[idx, 1], c='green', label=f'goal {i_goal + 1}', s=45)
+            ax.scatter(g[idx, 0], g[idx, 1], marker=f'${i_goal + 1}$', c='white', s=25, alpha=0.5)
+
+        # add reward location for reference
+        ax.scatter(0, 0, label='reward', marker='x', c='red', s=45, alpha=0.2)
+    # ax.legend()
     plt.tight_layout()
-    return fig
+
+    logger.log_plot(fig_to_img(fig),
+                    Scope.TRAIN() / f'goal_seeking_agent/{l}/goal_seeking_train_performance',
+                    i_step)
+    plt.close(fig)
+    del fig
+    # plt.show()
 
 
 def update_model_chunk_distance(i_step, l, logger, model, r_max_simulation):
