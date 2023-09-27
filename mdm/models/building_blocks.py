@@ -886,11 +886,11 @@ class RSSMCell(torch.nn.Module):
         # if latent_dist != 'normal':
         #    raise NotImplementedError('Check z_dist, z_dist_params, z_sample and z_mode methods first!')
 
-        #if latent_dist == 'normal':
+        # if latent_dist == 'normal':
         #    assert o_decoder.d_x_encoded == d_z + d_h
         #    assert r_decoder.d_x_encoded == d_z + d_h
         #    assert term_decoder.d_x_encoded == d_z + d_h
-        #elif latent_dist == 'categorical':
+        # elif latent_dist == 'categorical':
         #    assert o_decoder.d_x_encoded == d_z * n_latent_categories + d_h
         #    assert r_decoder.d_x_encoded == d_z * n_latent_categories + d_h
         #    assert term_decoder.d_x_encoded == d_z * n_latent_categories + d_h
@@ -1177,7 +1177,8 @@ class RSSMCell(torch.nn.Module):
                       net_output: torch.Tensor):
         if self.latent_dist == 'normal':
             mu, logvar = torch.tensor_split(net_output, 2, -1)
-            sigma = torch.nn.functional.softplus(logvar) + self.epsilon
+            # sigma = torch.nn.functional.softplus(logvar) + self.epsilon
+            sigma = torch.nn.functional.tanh(logvar) * 3 + self.epsilon  # limit total possible variance
             z_dist = torch.stack([mu, sigma], dim=-1)
         elif self.latent_dist == 'bernoulli':
             probs = torch.nn.functional.sigmoid(net_output)
