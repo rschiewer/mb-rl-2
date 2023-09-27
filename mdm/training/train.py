@@ -413,7 +413,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                     logger.log(to_np(gsa_losses), Scope.TRAIN() / f'goal_seeking_agent/{l}/', i_step)
 
                     if i_step % cfg['trainer']['eval_interval'] == 0 and l == 0:
-                        plot_goal_conditioned_value_function(eval_env, l, model, goal_agent, logger, i_step, 3, 3)
+                        plot_goal_conditioned_value_function(eval_env, model, goal_agent, l, logger, i_step, 3, 3)
                         plot_goal_seeking_performance(goal_agent, gsa_model_mem, gsa_agent_mem, goal_mem,
                                                       gsa_start_states, model, n_steps, logger, i_step, l)
 
@@ -447,7 +447,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                     # probe L0 goal seeking agent
                     nav2d_gsa_plot(cfg, eval_env, eval_steps, i_step, logger, model, train_driver)
                     # latent state plot from trajectory grid
-                    latent_state_PCA_plot(eval_env, eval_steps, i_step, logger, model)
+                    latent_state_pca_plot(model, eval_env, eval_steps, i_step, logger)
 
                 # hierarchical agent
                 eval_env.reset()
@@ -556,8 +556,8 @@ def plot_value_function(eval_env, model, agent, level, logger, i_step):
     values = values.reshape(-1, 1)
     obs = obs.reshape(-1, obs.shape[-1])
     fig, ax = plt.subplots(subplot_kw={"projection": "3d"})
-    ax.set_xlim([-1, 1])
-    ax.set_ylim([-1, 1])
+    ax.set_xlim([-1.1, 1.1])
+    ax.set_ylim([-1.1, 1.1])
     ax.plot_trisurf(obs[:, 0], obs[:, 1], values[:, 0], antialiased=True, cmap=plt.cm.viridis)
 
     logger.log_plot(fig_to_img(fig),
@@ -567,7 +567,7 @@ def plot_value_function(eval_env, model, agent, level, logger, i_step):
     del fig
 
 
-def plot_goal_conditioned_value_function(eval_env, l, model, agent, logger, i_step, n_rows, n_cols):
+def plot_goal_conditioned_value_function(eval_env, model, agent, level, logger, i_step, n_rows, n_cols):
     grid_trajs = gen_regular_grid_trajectories(eval_env.unwrapped.env_fns[0](), trajs_vert=10, trajs_horiz=10,
                                                step_size=1.0)
     grid_trajs = to_tensors(grid_trajs, model.device, padding='repeat')
@@ -575,12 +575,12 @@ def plot_goal_conditioned_value_function(eval_env, l, model, agent, logger, i_st
     _, pred_grid, _, _ = model.eval_step(grid_trajs, model_steps=[-1 for _ in range(model.levels)],
                                          sample_state=False, sample_output=False,
                                          force_warmup=[-1 for _ in range(model.levels)])
-    s_embeddings = torch.stack(pred_grid[l]['s_embedding']).flatten(start_dim=0, end_dim=-2)
+    s_embeddings = torch.stack(pred_grid[level]['s_embedding']).flatten(start_dim=0, end_dim=-2)
     fig, axes = plt.subplots(n_rows, n_cols, subplot_kw={"projection": "3d", 'computed_zorder': False}, figsize=(10, 10))
     for ax in axes.ravel():
         i_goal = np.random.randint(s_embeddings.shape[0])
-        ax.set_xlim([-1, 1])
-        ax.set_ylim([-1, 1])
+        ax.set_xlim([-1.1, 1.1])
+        ax.set_ylim([-1.1, 1.1])
 
         goal = s_embeddings[i_goal].unsqueeze(0).repeat((s_embeddings.shape[0], 1))
         fused_embeddings = torch.concat([s_embeddings, goal], dim=-1)
@@ -590,10 +590,9 @@ def plot_goal_conditioned_value_function(eval_env, l, model, agent, logger, i_st
         ax.plot_trisurf(obs[:, 0], obs[:, 1], values[:, 0], antialiased=True, zorder=0, cmap=plt.cm.viridis)
         ax.scatter(obs[i_goal, 0], obs[i_goal, 1], values[i_goal, 0], zorder=1, linewidth=5, color='red')
     plt.tight_layout()
-    #plt.show()
 
     logger.log_plot(fig_to_img(fig),
-                    Scope.TRAIN() / f'goal_seeking_agent/{l}/value_function_plot',
+                    Scope.TRAIN() / f'goal_seeking_agent/{level}/value_function_plot',
                     i_step)
     plt.close(fig)
     del fig
@@ -611,8 +610,8 @@ def plot_goals(r_max_simulation, model, logger, i_step, l):
     for i_ax, ax in enumerate(axes.ravel()):
         # preparations
         idx = indices[i_ax]
-        ax.set_xlim([-1, 1])
-        ax.set_ylim([-1, 1])
+        ax.set_xlim([-1.1, 1.1])
+        ax.set_ylim([-1.1, 1.1])
 
         alphas = 1 - terminals[:, idx, 0]
         for t in list(range(goal_obs.shape[0])):
@@ -622,7 +621,6 @@ def plot_goals(r_max_simulation, model, logger, i_step, l):
 
         # add reward location for reference
         ax.scatter(0, 0, label='reward', marker='x', c='red', s=45, alpha=0.2)
-    # ax.legend()
     plt.tight_layout()
     #plt.show()
 
@@ -708,7 +706,7 @@ def nav2d_gsa_plot(cfg, eval_env, eval_steps, i_step, logger, model, train_drive
     return batch, eval_steps
 
 
-def latent_state_PCA_plot(eval_env, eval_steps, i_step, logger, model):
+def latent_state_pca_plot(model, eval_env, eval_steps, i_step, logger):
     grid_trajs = gen_regular_grid_trajectories(eval_env.unwrapped.env_fns[0](), trajs_vert=10, trajs_horiz=10,
                                                step_size=1.0)
     grid_trajs = to_tensors(grid_trajs, model.device, padding='repeat')
@@ -716,29 +714,38 @@ def latent_state_PCA_plot(eval_env, eval_steps, i_step, logger, model):
     _, pred_pca, _, _ = model.eval_step(grid_trajs, model_steps=eval_steps, sample_state=False,
                                         sample_output=False,
                                         force_warmup=[-1 for _ in range(model.levels)])
+    obs = grid_trajs['o']
+
     # latent sate PCA 3d plot
-    # for l in range(model.levels):
-    states = torch.stack(pred_pca[0]['z'])
-    states = states.detach().cpu().numpy()
-    d_time, d_batch, d_z = states.shape
-    pca = PCA(n_components=3)
-    states_trans = pca.fit_transform(states.reshape(d_time * d_batch, d_z))
-    xy_positions = (grid_trajs['o'].detach().cpu().numpy()[:, :, :2].reshape(d_time * d_batch, 2) + 1.0) / 2.0
-    colors = np.concatenate([xy_positions, np.zeros((d_time * d_batch, 1), dtype=float)], axis=-1)
-    with TempFigure() as fig:
-        ax = fig.add_subplot(projection='3d')
-        ax.view_init(elev=50, azim=45)
-        ax.set_title(f'Total explained variance: {np.sum(pca.explained_variance_ratio_):.3f}')
-        ax.scatter(states_trans[:, 0], states_trans[:, 1], states_trans[:, 2], c=colors)
-        ax.set_xlabel(f'PCA 1 ({pca.explained_variance_ratio_[0]:.3f})')
-        ax.set_ylabel(f'PCA 2 ({pca.explained_variance_ratio_[1]:.3f})')
-        ax.set_zlabel(f'PCA 3 ({pca.explained_variance_ratio_[2]:.3f})')
-        plt.tight_layout()
-        # plt.show()
-        logger.log_plot(fig_to_img(fig), Scope.TEST() / f'model/{0}/latent_state_pca', i_step)
-        # sanity check to confirm that coloring based on xy positions makes sense
-        # plt.scatter(xy_positions[:, 0], xy_positions[:, 1], c=colors)
-        # plt.show()
+    for quantity in ['s_embedding', 'z', 'h']:
+        for level in range(model.levels):
+            states = torch.stack(pred_pca[level][quantity]).detach().cpu().numpy()
+            d_time, d_batch, d_z = states.shape
+
+            pca = PCA(n_components=3)
+            states_trans = pca.fit_transform(states.reshape(d_time * d_batch, d_z))
+
+            obs_level = obs
+            for upsampling_stage in range(level + 1):
+                obs_level = model.upwards_filters[upsampling_stage]['o'](obs_level)
+            obs_level = obs_level.reshape(-1, obs_level.shape[-1]).detach().cpu().numpy()
+            xy_positions = (obs_level[:, :2] + 1.0) / 2.0
+            colors = np.concatenate([xy_positions, np.zeros((d_time * d_batch, 1), dtype=float)], axis=-1)
+
+            with TempFigure() as fig:
+                ax = fig.add_subplot(projection='3d')
+                ax.view_init(elev=50, azim=45)
+                ax.set_title(f'Total explained variance: {np.sum(pca.explained_variance_ratio_):.3f}')
+                ax.scatter(states_trans[:, 0], states_trans[:, 1], states_trans[:, 2], c=colors)
+                ax.set_xlabel(f'PCA 1 ({pca.explained_variance_ratio_[0]:.3f})')
+                ax.set_ylabel(f'PCA 2 ({pca.explained_variance_ratio_[1]:.3f})')
+                ax.set_zlabel(f'PCA 3 ({pca.explained_variance_ratio_[2]:.3f})')
+                plt.tight_layout()
+                # plt.show()
+                logger.log_plot(fig_to_img(fig), Scope.TEST() / f'model/{level}/pca_{quantity}', i_step)
+                # sanity check to confirm that coloring based on xy positions makes sense
+                # plt.scatter(xy_positions[:, 0], xy_positions[:, 1], c=colors)
+                # plt.show()
 
 
 def plot_goal_seeking_performance(goal_agent, model_mem, agent_mem, gsa_goals, gsa_start_states, model,
@@ -760,8 +767,8 @@ def plot_goal_seeking_performance(goal_agent, model_mem, agent_mem, gsa_goals, g
     for i_ax, ax in enumerate(axes.ravel()):
         # preparations
         idx = indices[i_ax]
-        ax.set_xlim([-1, 1])
-        ax.set_ylim([-1, 1])
+        ax.set_xlim([-1.1, 1.1])
+        ax.set_ylim([-1.1, 1.1])
 
         # plot observations of agent steps
         current_step = 0
