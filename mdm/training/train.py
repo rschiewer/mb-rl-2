@@ -59,8 +59,8 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
         if cfg['trainer']['subtrajectory_len'] > 0:
             # model_batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
             # model_batch = valid_subtrajectories_unbiased(batch, 15)
-            # model_batch = valid_subtrajectories_unbiased_fast(batch, cfg['trainer']['subtrajectory_len'])
-            model_batch = valid_subtrajectories_2(batch, cfg['trainer']['subtrajectory_len'])
+            model_batch = valid_subtrajectories_unbiased_fast(batch, cfg['trainer']['subtrajectory_len'])
+            #model_batch = valid_subtrajectories_2(batch, cfg['trainer']['subtrajectory_len'])
         else:
             model_batch = batch
 
@@ -116,8 +116,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                                                           sample_states=sample_model, sample_actions=sample_agents,
                                                           reconstruct=True)
                 r_max_losses = r_max_agent.update_step(r_max_simulation['agent'],
-                                                       # first_step_mask=start_state_mask.unsqueeze(0),
-                                                       first_step_mask=None,
+                                                       first_step_mask=start_state_mask.unsqueeze(0),
                                                        actor_optimizer=r_max_actor_opt,
                                                        critic_optimizer=r_max_critic_opt,
                                                        logger=logger)
@@ -362,19 +361,20 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
 
                     gsa_start_states, gsa_first_step_mask = rssm_states_seq_to_batch(pred[l], targets[l]['terminal'])
                     gsa_start_states = rssm_detach_state(*gsa_start_states)
+                    # this avoids start states if the mask value is high
                     probs = 1 - gsa_first_step_mask.squeeze()
                     start_state_idx = torch.multinomial(probs, gsa_first_step_mask.shape[0], replacement=True)
-                    gsa_start_states = [x[start_state_idx] for x in gsa_start_states]
-
-                    gsa_agent_mem, gsa_model_mem = {}, {}
-                    goal_mem = []
-                    gsa_losses = {}
+                    randomized_gsa_start_states = [x[start_state_idx] for x in gsa_start_states]
+                    randomized_gsa_start_state_mask = gsa_first_step_mask[start_state_idx]
 
                     n_goals = 3
                     n_steps = [random.randint(chunk_size, 3 * chunk_size) for _ in range(n_goals)]
-                    start_state = gsa_start_states
+                    gsa_agent_mem, gsa_model_mem, gsa_losses = {}, {}, {}
+                    goal_mem = []
+
+                    start_state = randomized_gsa_start_states
+                    start_state_mask = randomized_gsa_start_state_mask
                     for i_goal in range(n_goals):
-                        # this avoids start states if the mask value is high
                         goal_state_idx = torch.randperm(gsa_start_states[0].shape[0])
                         gsa_goal_states = [x[goal_state_idx] for x in gsa_start_states]
                         # 10% random perturbation
@@ -398,8 +398,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                         # agent_mem['terminal'][-1] = torch.ones_like(agent_mem['terminal'][-1])
                         # agent_mem['terminal'][-2] = torch.ones_like(agent_mem['terminal'][-2])
                         loss = goal_agent.update_step(agent_mem,
-                                                      # first_step_mask=gsa_first_step_mask,
-                                                      first_step_mask=None,
+                                                      first_step_mask=start_state_mask,
                                                       actor_optimizer=goal_actor_opt,
                                                       critic_optimizer=goal_critic_opt)
                         loss = {f'{k}_{i_goal}': v for i, (k, v) in enumerate(loss.items())}
@@ -409,13 +408,15 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                         extend_memory(gsa_model_mem, goal_simulation['model'])
 
                         start_state = rssm_detach_state(*goal_simulation['model_state'])
+                        start_state_mask = torch.stack([start_state_mask] + goal_simulation['model']['terminal'])
+                        start_state_mask = (1.0 - torch.cumprod(1.0 - start_state_mask, dim=0))[-1]
 
                     logger.log(to_np(gsa_losses), Scope.TRAIN() / f'goal_seeking_agent/{l}/', i_step)
 
                     if i_step % cfg['trainer']['eval_interval'] == 0 and l == 0:
                         plot_goal_conditioned_value_function(eval_env, model, goal_agent, l, logger, i_step, 3, 3)
                         plot_goal_seeking_performance(goal_agent, gsa_model_mem, gsa_agent_mem, goal_mem,
-                                                      gsa_start_states, model, n_steps, logger, i_step, l)
+                                                      randomized_gsa_start_states, model, n_steps, logger, i_step, l)
 
         # p1 = torch.sum(torch.stack([p.mean() for p in model.parameters()]))
         # assert np.isclose((p0 - p1).detach().cpu().numpy(), 0), 'Model parameters changed during agent training!'
@@ -438,16 +439,13 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                                                                 sample_output=False,
                                                                 force_warmup=[-1 for _ in range(model.levels)])
                 logger.log(to_np(eval_losses), Scope.TEST(), i_step)
-
-                # test various model prediction lengths
                 log_prediction_error_plot(batch, cfg, i_step, logger, model, pred, targets)
 
-                if len(model.goal_seeking_agents) > 0 and isinstance(eval_env.env_fns[0]().unwrapped,
-                                                                     gym_nav2d.envs.Nav2dEnv):
-                    # probe L0 goal seeking agent
-                    nav2d_gsa_plot(cfg, eval_env, eval_steps, i_step, logger, model, train_driver)
-                    # latent state plot from trajectory grid
-                    latent_state_pca_plot(model, eval_env, eval_steps, i_step, logger)
+                # flat agent
+                eval_env.reset()
+                policy = LatentAgentPolicy(r_max_agents[0][0], model, explore=False)
+                eval_mem_flat = collect_data(eval_env, cfg['eval']['eval_steps'], policy)
+                logger.log(trajectory_statistics(eval_mem_flat), Scope.TEST() / 'flat_agent/', i_step)
 
                 # hierarchical agent
                 eval_env.reset()
@@ -457,41 +455,14 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
 
                 # record video with hierarchical policy
                 if video_env:
-                    # record an episode
-                    video_env.reset()
-                    video_env.get_wrapper_attr('start_video_recorder')()
-                    policy = HierarchicalLatentAgentPolicy(model, explore=False)
-                    _ = collect_data(video_env, cfg['eval']['eval_steps'], policy)
-                    video_env.get_wrapper_attr('close_video_recorder')()
+                    record_episode(cfg, i_step, logger, model, video_env)
 
-                    # make video smaller
-                    # video_name = f'{video_env.name_prefix}-episode-{video_env.episode_id-1}.mp4'
-                    # video_path = os.path.join(video_env.video_folder, video_name)
-                    video_path = video_env.env.video_recorder.path
-                    metadata_path = video_path[:video_path.rindex('.')] + '.meta.json'
-
-                    timestamp = time.time_ns()
-                    pid = os.getpid()
-                    tmp_file_name = f'.{pid}_{timestamp}_agent_video.mp4'
-
-                    clip = mp.VideoFileClip(video_path)
-                    clip = clip.resize(width=80)
-                    clip.write_videofile(tmp_file_name, preset='veryslow', verbose=False, logger=None)
-                    try:
-                        os.remove(video_path)  # delete original video file
-                        os.remove(metadata_path)
-                    except FileNotFoundError:
-                        print('Failed to delete original video data')
-
-                    # upload
-                    video = InMemoryFile.consume_file(tmp_file_name)
-                    logger.log({'hierarchical_agent': video}, Scope.TEST() / 'agent_action_videos/', i_step)
-
-                # flat agent
-                eval_env.reset()
-                policy = LatentAgentPolicy(r_max_agents[0][0], model, explore=False)
-                eval_mem_flat = collect_data(eval_env, cfg['eval']['eval_steps'], policy)
-                logger.log(trajectory_statistics(eval_mem_flat), Scope.TEST() / 'flat_agent/', i_step)
+                if len(model.goal_seeking_agents) > 0 and isinstance(eval_env.env_fns[0]().unwrapped,
+                                                                     gym_nav2d.envs.Nav2dEnv):
+                    # probe L0 goal seeking agent
+                    nav2d_gsa_plot(cfg, eval_env, eval_steps, i_step, logger, model, train_driver)
+                    # latent state plot from trajectory grid
+                    latent_state_pca_plot(model, eval_env, eval_steps, i_step, logger)
 
                 if log_videos:
                     # print trajectories, works only for nav2d env
@@ -540,8 +511,36 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
             logger.log_file(cpt_file, Scope.DATA() / 'weights')
 
 
+def record_episode(cfg, i_step, logger, model, video_env):
+    # record an episode
+    video_env.reset()
+    video_env.get_wrapper_attr('start_video_recorder')()
+    policy = HierarchicalLatentAgentPolicy(model, explore=False)
+    _ = collect_data(video_env, cfg['eval']['eval_steps'], policy)
+    video_env.get_wrapper_attr('close_video_recorder')()
+    # make video smaller
+    # video_name = f'{video_env.name_prefix}-episode-{video_env.episode_id-1}.mp4'
+    # video_path = os.path.join(video_env.video_folder, video_name)
+    video_path = video_env.env.video_recorder.path
+    metadata_path = video_path[:video_path.rindex('.')] + '.meta.json'
+    timestamp = time.time_ns()
+    pid = os.getpid()
+    tmp_file_name = f'.{pid}_{timestamp}_agent_video.mp4'
+    clip = mp.VideoFileClip(video_path)
+    clip = clip.resize(width=80)
+    clip.write_videofile(tmp_file_name, preset='veryslow', verbose=False, logger=None)
+    try:
+        os.remove(video_path)  # delete original video file
+        os.remove(metadata_path)
+    except FileNotFoundError:
+        print('Failed to delete original video data')
+    # upload
+    video = InMemoryFile.consume_file(tmp_file_name)
+    logger.log({'hierarchical_agent': video}, Scope.TEST() / 'agent_action_videos/', i_step)
+
+
 def plot_value_function(eval_env, model, agent, level, logger, i_step):
-    grid_trajs = gen_regular_grid_trajectories(eval_env.unwrapped.env_fns[0](), trajs_vert=10, trajs_horiz=10,
+    grid_trajs = gen_regular_grid_trajectories(eval_env.unwrapped.env_fns[0](), trajs_vert=30, trajs_horiz=30,
                                                step_size=1.0)
     grid_trajs = to_tensors(grid_trajs, model.device, padding='repeat')
     grid_trajs = prepare_data(grid_trajs)
@@ -568,7 +567,7 @@ def plot_value_function(eval_env, model, agent, level, logger, i_step):
 
 
 def plot_goal_conditioned_value_function(eval_env, model, agent, level, logger, i_step, n_rows, n_cols):
-    grid_trajs = gen_regular_grid_trajectories(eval_env.unwrapped.env_fns[0](), trajs_vert=10, trajs_horiz=10,
+    grid_trajs = gen_regular_grid_trajectories(eval_env.unwrapped.env_fns[0](), trajs_vert=30, trajs_horiz=30,
                                                step_size=1.0)
     grid_trajs = to_tensors(grid_trajs, model.device, padding='repeat')
     grid_trajs = prepare_data(grid_trajs)
@@ -707,7 +706,7 @@ def nav2d_gsa_plot(cfg, eval_env, eval_steps, i_step, logger, model, train_drive
 
 
 def latent_state_pca_plot(model, eval_env, eval_steps, i_step, logger):
-    grid_trajs = gen_regular_grid_trajectories(eval_env.unwrapped.env_fns[0](), trajs_vert=10, trajs_horiz=10,
+    grid_trajs = gen_regular_grid_trajectories(eval_env.unwrapped.env_fns[0](), trajs_vert=30, trajs_horiz=30,
                                                step_size=1.0)
     grid_trajs = to_tensors(grid_trajs, model.device, padding='repeat')
     grid_trajs = prepare_data(grid_trajs)

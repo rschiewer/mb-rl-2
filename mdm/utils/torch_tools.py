@@ -784,7 +784,7 @@ def masked_mean(x: torch.Tensor,
                 dim: int | Tuple[int] | List[int] | None = None,
                 keepdim: bool = False
                 ):
-    #assert x.shape[:mask.squeeze().ndim] == mask.squeeze().shape, 'Leading dimensions of x and mask mismatch'
+    # assert x.shape[:mask.squeeze().ndim] == mask.squeeze().shape, 'Leading dimensions of x and mask mismatch'
     valid = 1 - mask.to(dtype=torch.float32)
     valid = unsqueeze_right(valid, x)
     valid = valid.expand_as(x)
@@ -822,6 +822,7 @@ def compute_mask(terminals: Union[List[torch.Tensor], torch.Tensor],
                  threshold: Optional[float] = None,
                  first_step_mask: Optional[torch.Tensor] = None,
                  gamma: float = 1.0,
+                 shift_one_time_step: bool = True,
                  disable: bool = True):
     with torch.no_grad():
         terminals = stack_if_list(terminals).detach()
@@ -835,8 +836,10 @@ def compute_mask(terminals: Union[List[torch.Tensor], torch.Tensor],
         elif first_step_mask.ndim == 2:
             first_step_mask = first_step_mask.unsqueeze(0)  # add time dimension
 
-        terminals = torch.concat([first_step_mask, terminals], dim=0)  # this shifts time one to the right
-        terminals = terminals[:-1]  # cut last time step since we don't need it
+        if shift_one_time_step:
+            terminals = torch.concat([first_step_mask, terminals], dim=0)  # this shifts time one to the right
+            terminals = terminals[:-1]  # cut last time step since we don't need it
+
         valid = 1.0 - terminals.to(dtype=torch.float32)  # invert to compute exponentially decreasing validity mask
         valid = torch.cumprod(valid, dim=0)
 
@@ -857,35 +860,35 @@ def compute_mask(terminals: Union[List[torch.Tensor], torch.Tensor],
         #                   torch.tensor(1.0, device=terminals.device, dtype=terminals.dtype),
         #                   torch.tensor(0.0, device=terminals.device, dtype=terminals.dtype))
 
-        #if disable:
-        #    mask = torch.zeros_like(mask)
-
-        return mask.detach()
-
-        """
-        if mode == 'deterministic' and threshold is not None:
-            terminals_transformed = torch.where(terminals > threshold,
-                                                torch.tensor(1.0, device=terminals.device, dtype=terminals.dtype),
-                                                torch.tensor(0.0, device=terminals.device, dtype=terminals.dtype))
-        elif mode == 'stochastic':
-            terminals_transformed = torch.distributions.Bernoulli(probs=torch.nn.functional.sigmoid(terminals)).sample()
-        elif mode == 'default':
-            terminals_transformed = terminals
-        else:
-            raise ValueError(f'Unknown mode: {mode}')
-
-        mask = torch.zeros_like(terminals)
-        if first_step_mask is not None:
-            mask[0] = first_step_mask
-
-        for t in range(1, d_time):
-            mask[t] = torch.maximum(mask[t - 1], terminals_transformed[t - 1])
-
         # if disable:
         #    mask = torch.zeros_like(mask)
 
         return mask.detach()
-        """
+
+    """
+    if mode == 'deterministic' and threshold is not None:
+        terminals_transformed = torch.where(terminals > threshold,
+                                            torch.tensor(1.0, device=terminals.device, dtype=terminals.dtype),
+                                            torch.tensor(0.0, device=terminals.device, dtype=terminals.dtype))
+    elif mode == 'stochastic':
+        terminals_transformed = torch.distributions.Bernoulli(probs=torch.nn.functional.sigmoid(terminals)).sample()
+    elif mode == 'default':
+        terminals_transformed = terminals
+    else:
+        raise ValueError(f'Unknown mode: {mode}')
+
+    mask = torch.zeros_like(terminals)
+    if first_step_mask is not None:
+        mask[0] = first_step_mask
+
+    for t in range(1, d_time):
+        mask[t] = torch.maximum(mask[t - 1], terminals_transformed[t - 1])
+
+    # if disable:
+    #    mask = torch.zeros_like(mask)
+
+    return mask.detach()
+    """
 
 
 def compute_mask_old(terminals: torch.Tensor,

@@ -490,8 +490,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         loss_level = self.rssm_loss(memory, memory_other, memory_targets, mask_lvl, self.kl_betas[level],
                                     self.kl_reg_betas[level], level)
 
-        #if self._current_train_step % 50 == 0:
-        #    render_goals([memory_states_below, memory], level, self)
         return loss_level
 
     def forward_all_levels_old(self,

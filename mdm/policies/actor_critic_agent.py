@@ -403,7 +403,7 @@ class ActorCriticAgent(torch.nn.Module):
             gamma = 0.99
             #bootstrap = (1 - mask)[-1] * v_actor[-1]
             #bootstrap = (1 - mask)[-1] * v_actor[-1]  # (1 - mask[-1]) * v_actor[-1]
-        bootstrap = (1 - terminal)[-1] * v_actor[-1] + terminal[-1] * r[-1]
+        bootstrap = v_actor[-1] #(1 - terminal)[-1] * v_actor[-1] + terminal[-1] * r[-1]
         lambda_returns = calc_lambda_returns(r[:-1], terminal[:-1], v_actor[:-1], bootstrap, gamma, 0.99)
         #bootstrap = (1 - mask)[-1] * v_actor[-1]  # (1 - mask[-1]) * v_actor[-1]
         #bootstrap = (1 - mask)[-1] * (((1 - terminal) * v_actor + terminal * r))[-1]

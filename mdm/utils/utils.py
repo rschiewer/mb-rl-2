@@ -1047,9 +1047,8 @@ def rssm_states_seq_to_batch(mem: Dict[str, List[torch.Tensor]],
     # states = (torch.concat(states['z'], dim=0), torch.concat(states['z_prior'], dim=0),
     #          torch.concat(states['z_post'], dim=0), torch.concat(states['rnn_state'], dim=0))
 
-    # we can inject terminal flags from target data which are already stacked, so we use this convenience wrapper
-    terminal = stack_if_list(terminal_flags)
-    mask = compute_mask(terminal)  # take all terminal flags to compute maskt to not miss terminals before i_start
+    # mask out trajectory parts past the end and terminal states as well, as we don't want to start in them
+    mask = compute_mask(terminal_flags, shift_one_time_step=False)
     mask = mask[i_start:i_end]
     #mask2 = torch.concat(mask.unbind(0), dim=0)
     mask = mask.reshape(mask.shape[0] * mask.shape[1], 1)
