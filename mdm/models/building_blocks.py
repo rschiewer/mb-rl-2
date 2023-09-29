@@ -13,7 +13,7 @@ import numpy as np
 from mdm.utils.torch_tools import (layers_with_activation as lwa, get_dist_params,
                                    sample_from_categorical, ManagedStatefulTrainingModule, detach_dist, concat_dists,
                                    disable_torch_compile, stack_tensor_dicts, concat_tensor_dicts,
-                                   CustomGRUCell, unsqueeze_right)
+                                   CustomGRUCell, unsqueeze_right, TanhBijector)
 from torch.profiler import record_function
 from mdm.models.fastrnns import LayerNormLSTMCell
 
@@ -326,6 +326,85 @@ class MLPEncoder(InputEncoder):
         o = torch.flatten(o, start_dim=-len(self.s_x_orig))
         return self._mdl(o)
 
+
+class GaussianEncoder(InputEncoder):
+
+    def __init__(self,
+                 s_x_orig: Union[int, Sequence[int]],
+                 d_x_encoded: int,
+                 lws: Sequence[int],
+                 activation: str,
+                 layer_norm: bool,
+                 epsilon: float,
+                 **kwargs):
+        super(GaussianEncoder, self).__init__(s_x_orig, d_x_encoded)
+        lws = (np.prod(s_x_orig).item(), *lws, d_x_encoded * 2)
+        self._mdl = torch.nn.Sequential(lwa(lws, activation, layer_norm=layer_norm, name='gaussian_encoder'))
+        self.epsilon = epsilon
+
+    def forward(self, o: torch.Tensor,
+                sample: bool = True):
+        o = torch.flatten(o, start_dim=-len(self.s_x_orig))
+        params = self._mdl(o)
+        mu, logvar = torch.tensor_split(params, 2, dim=-1)
+        sigma = torch.nn.functional.softplus(logvar) + self.epsilon
+        d = torch.stack([mu, sigma], dim=-1)
+        if sample:
+            s = self.sample(d)
+        else:
+            s = self.mean(d)
+        return d, s
+
+    @torch.jit.ignore
+    def dist(self,
+             parameters: torch.Tensor) -> torch.distributions.Distribution:
+        mu, sigma = parameters.unbind(-1)
+        d = torch.distributions.Normal(loc=mu, scale=sigma)
+        d = torch.distributions.Independent(d, 1)
+        return d
+
+    @torch.jit.ignore
+    def sample(self,
+               parameters):
+        mu, sigma = parameters.unbind(-1)
+        d = torch.distributions.Normal(loc=mu, scale=sigma)
+        d = torch.distributions.Independent(d, 1)
+        s = d.rsample()
+        return s
+
+    @torch.jit.ignore
+    def mean(self,
+             parameters):
+        mu, sigma = parameters.unbind(-1)
+        return mu
+
+
+class SquashedGaussianEncoder(GaussianEncoder):
+
+    @torch.jit.ignore
+    def dist(self,
+             parameters: torch.Tensor) -> torch.distributions.Distribution:
+        mu, sigma = parameters.unbind(-1)
+        d = torch.distributions.Normal(loc=mu, scale=sigma)
+        d = torch.distributions.TransformedDistribution(d, [TanhBijector()])
+        d = torch.distributions.Independent(d, 1)
+        return d
+
+    @torch.jit.ignore
+    def sample(self,
+               parameters):
+        mu, sigma = parameters.unbind(-1)
+        d = torch.distributions.Normal(loc=mu, scale=sigma)
+        d = torch.distributions.TransformedDistribution(d, [TanhBijector()])
+        d = torch.distributions.Independent(d, 1)
+        s = d.rsample()
+        return s
+
+    @torch.jit.ignore
+    def mean(self,
+             parameters):
+        mu, sigma = parameters.unbind(-1)
+        return torch.nn.functional.tanh(mu)
 
 class OutputDecoder(torch.nn.Module, ABC):
 
@@ -1123,6 +1202,8 @@ class RSSMCell(torch.nn.Module):
                 last_state: Optional[RSSMStateType] = None,
                 use_posterior: bool = True,
                 sample_state: bool = True) -> RSSMStateType:
+        if torch.any(a > 1.0) or torch.any(a < -1.0):
+            raise ValueError('Found invalid actions outside of [-1, 1] interval')
         # if o is None and last_state is None:
         #    raise ValueError('Need at least "o" or "last_state"')
         # if o is None and use_posterior:
@@ -1178,7 +1259,7 @@ class RSSMCell(torch.nn.Module):
         if self.latent_dist == 'normal':
             mu, logvar = torch.tensor_split(net_output, 2, -1)
             # sigma = torch.nn.functional.softplus(logvar) + self.epsilon
-            sigma = torch.nn.functional.tanh(logvar) * 3 + self.epsilon  # limit total possible variance
+            sigma = torch.nn.functional.sigmoid(logvar) * 3 + self.epsilon  # limit total possible variance
             z_dist = torch.stack([mu, sigma], dim=-1)
         elif self.latent_dist == 'bernoulli':
             probs = torch.nn.functional.sigmoid(net_output)
