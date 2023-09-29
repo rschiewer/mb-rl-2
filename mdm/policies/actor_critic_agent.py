@@ -192,7 +192,7 @@ class ActorCriticAgent(torch.nn.Module):
                 timestep = {  # 'o_env': env_state[0],
                     # 'o_env_next': next_env_state[0],
                     # 'goal': goal,
-                    'o': agent_o,
+                    'o': self.fuse_o_with_goal(next_env_state, goal), #agent_o,
                     'a': a,
                     'r': r,
                     # 'r_raw': pred['r'],
@@ -394,7 +394,7 @@ class ActorCriticAgent(torch.nn.Module):
             # we only train a single chunk, no bootstrapping needed beyond that
             # CAUTION: we don't train the last step and should get one step more than chunk size
             #bootstrap = (1 - mask)[-1] * r[-1]  # (1 - mask[-1]) * v_actor[-1]
-            gamma = 0.98
+            gamma = 0.90
             #lambda_returns = calc_returns_simple(r[:-1], terminal[:-1], bootstrap, gamma=gamma)
             #bootstrap = torch.zeros_like(r[-1])  # (1 - mask[-1]) * v_actor[-1]
             #lambda_returns = calc_lambda_returns(r, terminal, v_actor, bootstrap, gamma, 0.95)
@@ -405,6 +405,7 @@ class ActorCriticAgent(torch.nn.Module):
             #bootstrap = (1 - mask)[-1] * v_actor[-1]  # (1 - mask[-1]) * v_actor[-1]
         bootstrap = v_actor[-1] #(1 - terminal)[-1] * v_actor[-1] + terminal[-1] * r[-1]
         lambda_returns = calc_lambda_returns(r[:-1], terminal[:-1], v_actor[:-1], bootstrap, gamma, 0.99)
+        #lambda_returns = calc_returns_simple(r[:-1], terminal[:-1], bootstrap, gamma=gamma)
         #bootstrap = (1 - mask)[-1] * v_actor[-1]  # (1 - mask[-1]) * v_actor[-1]
         #bootstrap = (1 - mask)[-1] * (((1 - terminal) * v_actor + terminal * r))[-1]
         mask = mask[:-1]
@@ -422,7 +423,7 @@ class ActorCriticAgent(torch.nn.Module):
         # lambda_returns = calc_returns_simple(r[:-1], terminal[:-1], bootstrap, gamma=gamma)
 
         # normalize returns and state values
-        ret_mean, ret_std = self.return_running_average(lambda_returns, mask)  # update and return stats
+        ret_mean, ret_std = self.return_running_average(lambda_returns)  # update and return stats
         lambda_returns_actor = self.return_running_average.normalize(lambda_returns, ret_mean, ret_std)
         v_actor = self.return_running_average.normalize(v_actor, ret_mean, ret_std)
         # ret_mean, ret_std = lambda_returns.mean(dim=-1).detach(), lambda_returns.std(dim=-1).detach()
@@ -442,7 +443,7 @@ class ActorCriticAgent(torch.nn.Module):
 
         act_entropy = self._a_dist_entropy(a_dist)
         act_entropy_reward_aug = self.alpha * torch.sum(act_entropy, dim=-1, keepdim=True)
-        policy_loss = policy_loss + act_entropy_reward_aug
+        policy_loss = policy_loss - act_entropy_reward_aug
 
         # CRITIC
         with torch.no_grad():
@@ -539,8 +540,8 @@ class ActorCriticAgent(torch.nn.Module):
         actor_optimizer.zero_grad(set_to_none=True)
         critic_optimizer.zero_grad(set_to_none=True)
 
-        # val_bef = np.sum([p.detach().cpu().numpy().mean() for p in self.critic_net.parameters()])
-        # pol_bef = np.sum([p.detach().cpu().numpy().mean() for p in self.actor_net.parameters()])
+        #val_bef = np.sum([p.detach().cpu().numpy().mean() for p in self.critic_net.parameters()])
+        #pol_bef = np.sum([p.detach().cpu().numpy().mean() for p in self.actor_net.parameters()])
 
         losses['total'].backward()
 
@@ -561,14 +562,14 @@ class ActorCriticAgent(torch.nn.Module):
         actor_optimizer.step()
         critic_optimizer.step()
 
-        # val_aftr = np.sum([p.detach().cpu().numpy().mean() for p in self.critic_net.parameters()])
-        # pol_aftr = np.sum([p.detach().cpu().numpy().mean() for p in self.actor_net.parameters()])
+        #val_aftr = np.sum([p.detach().cpu().numpy().mean() for p in self.critic_net.parameters()])
+        #pol_aftr = np.sum([p.detach().cpu().numpy().mean() for p in self.actor_net.parameters()])
 
         # if self.goal_seeking:
-        #    _val_diff = val_aftr - val_bef
-        #    _pol_diff = pol_aftr - pol_bef
-        #    print(_val_diff)
-        #    print(_pol_diff)
+        #_val_diff = val_aftr - val_bef
+        #_pol_diff = pol_aftr - pol_bef
+        #print(_val_diff)
+        #print(_pol_diff)
 
         self._update_ema_modules()
 
