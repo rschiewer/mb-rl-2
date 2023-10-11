@@ -417,8 +417,8 @@ def anim_to_vid(anim: animation.Animation,
     timestamp = time.time_ns()
     pid = os.getpid()
     tmp_file_name = f'.{pid}_{timestamp}_video_anim.mp4'
-    extra_args = ['-vcodec', 'libx264', '-pix_fmt', 'yuv420p']
-    writer = animation.writers['ffmpeg'](fps=fps, extra_args=extra_args)
+    extra_args = ['-vcodec', 'mpeg4'] #, '-pix_fmt', 'yuv420p']
+    writer = animation.writers['ffmpeg'](fps=fps)#, extra_args=extra_args)
     anim.save(tmp_file_name, writer=writer, dpi=dpi)
     # print(os.path.getsize(tmp_file_name) / 1024 )
 

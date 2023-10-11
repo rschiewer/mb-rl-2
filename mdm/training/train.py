@@ -49,7 +49,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
 
     for i_step in tqdm(range(cfg['trainer']['n_train_steps']), desc='Training Progress'):
         batch = train_driver.interact(cfg['trainer']['d_batch'])
-        #batch = add_no_ops(batch, model.strides[1])
+        # batch = add_no_ops(batch, model.strides[1])
         batch = to_tensors(batch, 'cuda', padding='repeat')
         batch = prepare_data(batch)
 
@@ -61,7 +61,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
         if cfg['trainer']['subtrajectory_len'] > 0:
             # model_batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
             # model_batch = valid_subtrajectories_unbiased(batch, 15)
-            #model_batch = valid_subtrajectories_unbiased_fast(batch, cfg['trainer']['subtrajectory_len'])
+            # model_batch = valid_subtrajectories_unbiased_fast(batch, cfg['trainer']['subtrajectory_len'])
             model_batch = valid_subtrajectories_2(batch, cfg['trainer']['subtrajectory_len'])
         else:
             model_batch = batch
@@ -120,10 +120,13 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                                                        critic_optimizer=r_max_critic_opt,
                                                        logger=logger)
 
-                if i_step % cfg['trainer']['eval_interval'] == 0:
+                if (i_step % cfg['trainer']['eval_interval'] == 0
+                        and isinstance(eval_env.unwrapped.env_fns[0]().unwrapped, gym_nav2d.envs.Nav2dEnv)):
                     plot_value_function(eval_env, model, r_max_agent, l, logger, i_step)
                     plot_rewards(eval_env, model, l, logger, i_step)
-                if l > 0 and i_step % cfg['trainer']['eval_interval'] == 0:
+                if (l > 0
+                        and i_step % cfg['trainer']['eval_interval'] == 0
+                        and isinstance(eval_env.unwrapped.env_fns[0]().unwrapped, gym_nav2d.envs.Nav2dEnv)):
                     plot_goals(r_max_simulation, model, logger, i_step, l)
 
                 # action std
@@ -194,9 +197,27 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                                             Scope.TRAIN() / f'r_max_agent_fake_goals/{l}/her_step_reward',
                                             i_step)
 
+                """
+                if l > 0:
+                    # agent gets some observations and the according action from model action autoencoder
+                    states = {k: torch.stack(v[0: -1]) for k, v in pred[l].items() if k in rssm_state_keys()}
+                    states = rssm_remove_labels(states)
+                    agent_o = r_max_agent.o_from_state(states).detach()
+                    agent_a_dist, agent_a = r_max_agent(agent_o)
+                    # correct action from autoencoder is one time step later!
+                    model_a = torch.stack(pred[l]['a'][1:]).detach()
+                    act_reg_loss = - r_max_agent._a_log_prob(agent_a_dist, model_a).mean()
+                    r_max_actor_opt.zero_grad(set_to_none=True)
+                    act_reg_loss.backward()
+                    r_max_actor_opt.step()
+                    logger.log(to_np({'monitoring_act_alignment_loss': act_reg_loss}),
+                               Scope.TRAIN() / f'r_max_agent/{l}/', i_step)
+                """
+
                 if l < model.levels - 1:
                     update_model_chunk_distance(i_step, l, logger, model, r_max_simulation)
-                    train_goal_seeking_agent_rand(model, l, pred, targets, eval_env, cfg, i_step, logger, sample_agents)
+                    train_goal_seeking_agent_rand(model, l, pred, targets, eval_env, cfg, i_step, logger, sample_model,
+                                                  sample_agents)
 
         # p1 = torch.sum(torch.stack([p.mean() for p in model.parameters()]))
         # assert np.isclose((p0 - p1).detach().cpu().numpy(), 0), 'Model parameters changed during agent training!'
@@ -212,7 +233,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
 
                 # model
                 trajs_orig = test_driver.interact(cfg['trainer']['d_batch'])
-                #trajs_orig = add_no_ops(trajs_orig, model.strides[1])
+                # trajs_orig = add_no_ops(trajs_orig, model.strides[1])
                 batch = to_tensors(trajs_orig, model.device, padding='repeat')
                 batch = prepare_data(batch)
                 eval_steps = [-1] + cfg['trainer']['model_train_steps'][1:]
@@ -224,14 +245,14 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
 
                 # flat agent
                 eval_env.reset()
-                policy = LatentAgentPolicy(r_max_agents[0][0], model, explore=False)
-                eval_mem_flat = collect_data(eval_env, cfg['eval']['eval_steps'], policy)
+                flat_policy = LatentAgentPolicy(r_max_agents[0][0], model, explore=False)
+                eval_mem_flat = collect_data(eval_env, cfg['eval']['eval_steps'], flat_policy)
                 logger.log(trajectory_statistics(eval_mem_flat), Scope.TEST() / 'flat_agent/', i_step)
 
                 # hierarchical agent
                 eval_env.reset()
-                policy = HierarchicalLatentAgentPolicy(model, explore=False)
-                eval_mem_hierarchical = collect_data(eval_env, cfg['eval']['eval_steps'], policy)
+                hierarchical_policy = HierarchicalLatentAgentPolicy(model, explore=False)
+                eval_mem_hierarchical = collect_data(eval_env, cfg['eval']['eval_steps'], hierarchical_policy)
                 logger.log(trajectory_statistics(eval_mem_hierarchical), Scope.TEST() / 'hierarchical_agent/', i_step)
 
                 # record video with hierarchical policy
@@ -240,9 +261,11 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
 
                 if len(model.goal_seeking_agents) > 0 and isinstance(eval_env.unwrapped.env_fns[0]().unwrapped,
                                                                      gym_nav2d.envs.Nav2dEnv):
+                    pass
                     # probe L0 goal seeking agent
-                    #nav2d_gsa_plot(cfg, eval_env, eval_steps, i_step, logger, model, train_driver)
-                    # latent state plot from trajectory grid
+                    # nav2d_gsa_plot(cfg, eval_env, eval_steps, i_step, logger, model, train_driver)
+
+                if isinstance(eval_env.unwrapped.env_fns[0]().unwrapped, gym_nav2d.envs.Nav2dEnv):
                     latent_state_pca_plot(model, eval_env, eval_steps, i_step, logger)
 
                 if log_videos:
@@ -282,6 +305,13 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 # for i_ag, ag in enumerate(goal_seeking_agents):
                 #    if ag is None: continue
                 #    log_params(ag[0], logger, Scope.PARAMETERS() / f'agent/goal_seeking_agent_{i_ag}', time_step=i_step)
+
+                # for debugging: check that reward location is always the same
+                #r_pos = []
+                #for traj in train_driver.memory:
+                #    r_pos.append(traj['o'][:, 2:4])
+                #r_pos = np.concatenate(r_pos, axis=0)
+                #print(f'{r_pos.mean(axis=0)}({r_pos.std(axis=0)})')
 
         if i_step % cfg['trainer']['checkpoint_interval'] == 0:
             timestamp = time.time_ns()
@@ -350,7 +380,8 @@ def train_goal_seeking_agent(model, level, pred, targets, eval_env, cfg, i_step,
                                       randomized_gsa_start_states, model, n_steps, logger, i_step, level)
 
 
-def train_goal_seeking_agent_rand(model, level, pred, targets, eval_env, cfg, i_step, logger, sample_agents):
+def train_goal_seeking_agent_rand(model, level, pred, targets, eval_env, cfg, i_step, logger, sample_model,
+                                  sample_agents):
     """
                     Version A:
                     We start at the same spot as the r_max agent, namely at start_state_lvl. We then use the observation
@@ -534,7 +565,7 @@ def train_goal_seeking_agent_rand(model, level, pred, targets, eval_env, cfg, i_
         goal_mem.append(gsa_goals)
 
         goal_simulation = goal_agent.act_in_sim(start_state, model, n_steps[i_goal], gsa_goals,
-                                                sample_states=True, sample_actions=sample_agents,
+                                                sample_states=sample_model, sample_actions=sample_agents,
                                                 disable_exploration=False, reconstruct=True)
         agent_mem = goal_simulation['agent']
         # agent_mem['o'].append(torch.zeros_like(agent_mem['o'][0]))
@@ -569,7 +600,9 @@ def train_goal_seeking_agent_rand(model, level, pred, targets, eval_env, cfg, i_
 
     logger.log(to_np(gsa_losses), Scope.TRAIN() / f'goal_seeking_agent/{level}/', i_step)
 
-    if i_step % cfg['trainer']['eval_interval'] == 0 and level == 0:
+    if (i_step % cfg['trainer']['eval_interval'] == 0
+            and level == 0
+            and isinstance(eval_env.unwrapped.env_fns[0]().unwrapped, gym_nav2d.envs.Nav2dEnv)):
         plot_goal_conditioned_value_function(eval_env, model, goal_agent, level, logger, i_step, 3, 3)
         plot_goal_seeking_performance(goal_agent, gsa_model_mem, gsa_agent_mem, goal_mem,
                                       randomized_gsa_start_states, model, n_steps, logger, i_step, level)
@@ -580,6 +613,7 @@ def record_episode(cfg, i_step, logger, model, video_env):
     video_env.reset()
     video_env.get_wrapper_attr('start_video_recorder')()
     policy = HierarchicalLatentAgentPolicy(model, explore=False)
+    #policy = LatentAgentPolicy(model.r_max_agents[0][0], model, explore=False)
     _ = collect_data(video_env, cfg['eval']['eval_steps'], policy)
     video_env.get_wrapper_attr('close_video_recorder')()
     # make video smaller
@@ -591,7 +625,7 @@ def record_episode(cfg, i_step, logger, model, video_env):
     pid = os.getpid()
     tmp_file_name = f'.{pid}_{timestamp}_agent_video.mp4'
     clip = mp.VideoFileClip(video_path)
-    clip = clip.resize(width=80)
+    #clip = clip.resize(width=80)
     clip.write_videofile(tmp_file_name, preset='veryslow', verbose=False, logger=None)
     try:
         os.remove(video_path)  # delete original video file
@@ -657,9 +691,9 @@ def plot_rewards(eval_env, model, level, logger, i_step):
     del fig
 
 
-
 def plot_goal_conditioned_value_function(eval_env, model, agent, level, logger, i_step, n_rows, n_cols):
-    grid_trajs = gen_regular_grid_trajectories(eval_env.unwrapped.env_fns[0](), trajs_vert=30, trajs_horiz=30,
+    eval_env = eval_env.unwrapped.env_fns[0]()
+    grid_trajs = gen_regular_grid_trajectories(eval_env, trajs_vert=30, trajs_horiz=30,
                                                step_size=1.0)
     grid_trajs = to_tensors(grid_trajs, model.device, padding='repeat')
     grid_trajs = prepare_data(grid_trajs)
@@ -667,7 +701,8 @@ def plot_goal_conditioned_value_function(eval_env, model, agent, level, logger, 
                                          sample_state=False, sample_output=False,
                                          force_warmup=[-1 for _ in range(model.levels)])
     s_embeddings = torch.stack(pred_grid[level]['s_embedding']).flatten(start_dim=0, end_dim=-2)
-    fig, axes = plt.subplots(n_rows, n_cols, subplot_kw={"projection": "3d", 'computed_zorder': False}, figsize=(10, 10))
+    fig, axes = plt.subplots(n_rows, n_cols, subplot_kw={"projection": "3d", 'computed_zorder': False},
+                             figsize=(10, 10))
     for ax in axes.ravel():
         i_goal = np.random.randint(s_embeddings.shape[0])
         ax.set_xlim([-1.1, 1.1])
@@ -679,9 +714,17 @@ def plot_goal_conditioned_value_function(eval_env, model, agent, level, logger, 
 
         obs = grid_trajs['o'].flatten(start_dim=0, end_dim=-2).detach().cpu().numpy()
         ax.plot_trisurf(obs[:, 0], obs[:, 1], values[:, 0], antialiased=True, zorder=0, cmap=plt.cm.viridis)
-        ax.scatter(obs[i_goal, 0], obs[i_goal, 1], values[i_goal, 0], zorder=1, linewidth=5, color='red')
-    plt.tight_layout()
 
+        goal_world_coords = (obs[i_goal] + 1) * 255 / 2
+        goal_dist_to_reward = math.sqrt(pow((eval_env.goal_x - goal_world_coords[0]), 2)
+                                        + pow(eval_env.goal_y - goal_world_coords[1], 2))
+        if goal_dist_to_reward <= eval_env.eps:
+            c = 'magenta'
+        else:
+            c = 'red'
+        ax.scatter(obs[i_goal, 0], obs[i_goal, 1], values[i_goal, 0], zorder=1, linewidth=5, color=c, depthshade=True)
+    plt.tight_layout()
+    # plt.show()
     logger.log_plot(fig_to_img(fig),
                     Scope.TRAIN() / f'goal_seeking_agent/{level}/value_function_plot',
                     i_step)
@@ -713,7 +756,7 @@ def plot_goals(r_max_simulation, model, logger, i_step, l):
         # add reward location for reference
         ax.scatter(0, 0, label='reward', marker='x', c='red', s=45, alpha=0.2)
     plt.tight_layout()
-    #plt.show()
+    # plt.show()
 
     logger.log_plot(fig_to_img(fig), Scope.TRAIN() / f'r_max_agent/{l}/goal_seeking_train_performance', i_step)
     plt.close(fig)
@@ -722,7 +765,7 @@ def plot_goals(r_max_simulation, model, logger, i_step, l):
 
 def nav2d_gsa_plot(cfg, eval_env, eval_steps, i_step, logger, model, train_driver):
     trajs_orig = train_driver.interact(cfg['trainer']['d_batch'])
-    #trajs_orig = add_no_ops(trajs_orig, model.strides[1])
+    # trajs_orig = add_no_ops(trajs_orig, model.strides[1])
     batch = to_tensors(trajs_orig, model.device, padding='repeat')
     batch = prepare_data(batch)
     eval_steps = [-1] + cfg['trainer']['model_train_steps'][1:]
@@ -962,7 +1005,7 @@ def log_prediction_error_plot(batch, cfg, i_step, logger, model, pred, targets):
                     z_coord = diff[i_run]
                     ax.plot(time_steps, y_coord, z_coord, linewidth=2)
             plt.tight_layout()
-            #plt.show()
+            # plt.show()
             logger.log_plot(fig_to_img(fig), Scope.TRAIN() / f'model/{l}/prediction_error', i_step)
 
 

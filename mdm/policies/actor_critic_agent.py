@@ -162,7 +162,7 @@ class ActorCriticAgent(torch.nn.Module):
         with FreezeParameters([world, other_world]):
             for t in range(n_steps):
                 agent_o = self.fuse_o_with_goal(env_state, goal)
-                a_dist, a = self(agent_o, sample=sample_actions, disable_exploration=disable_exploration)
+                a_dist, a = self(agent_o.detach(), sample=sample_actions, disable_exploration=disable_exploration)
                 # ema_a_dist, _, ema_v = self(agent_o, use_ema_modules=True, sample=sample_actions,
                 #                            disable_exploration=disable_exploration)
                 ema_a_dist = torch.ones_like(a_dist)
@@ -189,14 +189,11 @@ class ActorCriticAgent(torch.nn.Module):
                 r = self.build_step_reward(next_env_state, pred['r'], goal, self.goal_seeking)
                 terminal = self.build_step_terminal(next_env_state, goal, pred['terminal'])
 
-                timestep = {  # 'o_env': env_state[0],
-                    # 'o_env_next': next_env_state[0],
-                    # 'goal': goal,
-                    'o': self.fuse_o_with_goal(next_env_state, goal), #agent_o,
+                timestep = {
+                    'o': agent_o, #self.fuse_o_with_goal(next_env_state, goal), #agent_o,
                     'a': a,
                     'r': r,
-                    # 'r_raw': pred['r'],
-                    'terminal': terminal,
+                    'terminal': pred['terminal'],
                     'a_dist': a_dist,
                     'ema_a_dist': ema_a_dist,
                     'model_novelty': novelty
@@ -205,6 +202,8 @@ class ActorCriticAgent(torch.nn.Module):
                 append_memory(agent_memory, **timestep)
                 append_memory(env_mem, **pred, **rssm_add_labels(next_env_state))
                 env_state = next_env_state
+
+        #append_memory(agent_memory, o=self.fuse_o_with_goal(next_env_state, goal))  # add final observation to memory
 
         # agent novelty reward, could be computed in eval_step to save some compute
         # a_ema = torch.stack(agent_memory['a'][-n_steps:])
@@ -283,16 +282,18 @@ class ActorCriticAgent(torch.nn.Module):
                 sample: bool,
                 explore: bool = False):
         mu, sigma = dist_params.unbind(-1)
-        if explore:
-            noise = torch.distributions.Normal(torch.zeros_like(mu), torch.full_like(sigma, self.eps.data)).sample()
-            sigma = sigma + noise
-            sigma = torch.where(sigma < self.eps_min + self.min_float, self.eps_min + self.min_float, sigma)
         d = self._a_dist(mu, sigma)
 
         if sample:
             s = d.rsample()
         else:
             s = torch.nn.functional.tanh(mu)
+
+        if explore:
+            noise = torch.distributions.Normal(torch.zeros_like(mu), torch.full_like(sigma, self.eps.data)).sample()
+            s = s + noise
+            s = torch.tanh(s)
+            #sigma = torch.where(sigma < self.eps_min + self.min_float, self.eps_min + self.min_float, sigma)
 
         # s = self.scale_to_a_interval(s)
 
@@ -338,6 +339,14 @@ class ActorCriticAgent(torch.nn.Module):
                   # goal: Union[List[torch.Tensor], List[None]],
                   first_step_mask: Optional[torch.Tensor] = None,
                   for_train_step: bool = False):
+
+        # s_0            s_1            s_2
+        #  |  __________^ |  __________^ |
+        #  v /            v /            v
+        # a_0            a_1            a_2
+        # r_0(a_0, s_0), r_1(a_1, s_1), r_2(a_2, s_2)
+        # t_0(a_0, s_0), t_1(a_1, s_1), t_2(a_2, s_2)
+
         o = torch.stack(o)
         terminal = torch.stack(terminal)
         r = torch.stack(r)
@@ -404,6 +413,7 @@ class ActorCriticAgent(torch.nn.Module):
             #bootstrap = (1 - mask)[-1] * v_actor[-1]
             #bootstrap = (1 - mask)[-1] * v_actor[-1]  # (1 - mask[-1]) * v_actor[-1]
         bootstrap = v_actor[-1] #(1 - terminal)[-1] * v_actor[-1] + terminal[-1] * r[-1]
+        #bootstrap = (1 - terminal)[-1] * v_actor[-1] + terminal[-1] * r[-1]
         lambda_returns = calc_lambda_returns(r[:-1], terminal[:-1], v_actor[:-1], bootstrap, gamma, 0.99)
         #lambda_returns = calc_returns_simple(r[:-1], terminal[:-1], bootstrap, gamma=gamma)
         #bootstrap = (1 - mask)[-1] * v_actor[-1]  # (1 - mask[-1]) * v_actor[-1]
@@ -423,13 +433,14 @@ class ActorCriticAgent(torch.nn.Module):
         # lambda_returns = calc_returns_simple(r[:-1], terminal[:-1], bootstrap, gamma=gamma)
 
         # normalize returns and state values
-        ret_mean, ret_std = self.return_running_average(lambda_returns)  # update and return stats
+        ret_mean, ret_std = self.return_running_average(lambda_returns, mask=mask)  # update and return stats
         lambda_returns_actor = self.return_running_average.normalize(lambda_returns, ret_mean, ret_std)
         v_actor = self.return_running_average.normalize(v_actor, ret_mean, ret_std)
         # ret_mean, ret_std = lambda_returns.mean(dim=-1).detach(), lambda_returns.std(dim=-1).detach()
         # lambda_returns_actor = (lambda_returns - ret_mean) / ret_std
         # v_actor = (v_actor - ret_mean) / ret_std
         advantage_actor = lambda_returns_actor - v_actor  # advantage
+        #advantage_actor = lambda_returns #- v_actor
 
         # ACTOR
         if self.dynamics_loss:

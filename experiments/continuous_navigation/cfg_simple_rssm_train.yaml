@@ -1,8 +1,8 @@
 ---
 neptune_cfg: "../neptune_settings.yaml"
-env_name: "InvertedPendulum-v4" #"dm_control/cheetah-run-v0"# "gym_nav2d:nav2dEasySparse-v0" #"HalfCheetah-v4"#"InvertedPendulum-v4" #"gym_nav2d:nav2dEasySparse-v0" #"gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-v0"
+env_name: "InvertedPendulum-v4" #"InvertedPendulum-v4" #"dm_control/cheetah-run-v0"# "gym_nav2d:nav2dEasySparse-v0" #"HalfCheetah-v4"#"InvertedPendulum-v4" #"gym_nav2d:nav2dEasySparse-v0" #"gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-v0"
 prefill_memory: "random" #"offline-dataset" # "random", False
-prefill_episodes: 100
+prefill_episodes: 500
 train_samples: null #"nav2d_Easy_train.samples" #"nav2d_Easy_train.samples"
 test_samples: null #"nav2d_EasySparse_expert.samples" #"nav2d_Easy_expert.samples"
 checkpoint_path: "checkpoints"
@@ -16,8 +16,8 @@ mdm:
       -  d_z: 30
          d_h: 200
          d_a: <infer>
-         d_s_embedding: 20
-         s_embedding_lws: [128, 64, 32]
+         d_s_embedding: 30
+         s_embedding_lws: [ 128, 64, 32 ]
          n_hidden_layers: 1
          hidden_dropout: 0.1
          epsilon: 0.1
@@ -68,13 +68,13 @@ optim:
    lr: 0.0005 #0.0002
 
 trainer:
-   n_train_steps: 3000
+   n_train_steps: 5000
    freeze_model: False
    stop_collect: False
    eval_interval: 50
-   d_batch: 256
-   subtrajectory_len: 50
-   collect_envs: 10
+   d_batch: 2048
+   subtrajectory_len: 20
+   collect_envs: 20
    collect_interval: 100
    agent_train_interval: 1
    model_train_steps: [ -1 ]
@@ -90,7 +90,7 @@ agents:
          eps_exploration_init: 0.9
          eps_exploration_coeff: 0.999
          eps_exploration_min: 0.3
-         act_entropy_exploration_coeff: 0.01
+         act_entropy_exploration_coeff: 0.001
          learn_act_entropy_exploration_coeff: False
          novelty_exploration_coeff: 0.0
          tr_policy_kl_coeff: 0.1

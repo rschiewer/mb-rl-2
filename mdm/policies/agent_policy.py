@@ -61,11 +61,11 @@ class LatentAgentPolicy(Policy):
             self._current_env_state = self.model.rssm_modules[self.agent.level].init_state(d_batch, device)
 
         # get data and add time dim
-        o = torch.from_numpy(env.last_o).unsqueeze(0).to(device=device, dtype=torch.float32)
-        a = torch.from_numpy(env.last_a).unsqueeze(0).to(device=device, dtype=torch.float32)
-        r = torch.from_numpy(env.last_r).unsqueeze(0).to(device=device, dtype=torch.float32)
-        terminal = torch.from_numpy(env.last_term).unsqueeze(0).to(device=device, dtype=torch.float32)
-        truncated = torch.from_numpy(env.last_trunc).unsqueeze(0).to(device=device, dtype=torch.float32)
+        o = torch.from_numpy(np.array(env.last_o)).unsqueeze(0).to(device=device, dtype=torch.float32)
+        a = torch.from_numpy(np.array(env.last_a)).unsqueeze(0).to(device=device, dtype=torch.float32)
+        r = torch.from_numpy(np.array(env.last_r)).unsqueeze(0).to(device=device, dtype=torch.float32)
+        terminal = torch.from_numpy(np.array(env.last_term)).unsqueeze(0).to(device=device, dtype=torch.float32)
+        truncated = torch.from_numpy(np.array(env.last_trunc)).unsqueeze(0).to(device=device, dtype=torch.float32)
         if isinstance(env, CacheLastStepEnv):  # add batch dim if unbatched env
             o, a, r, terminal, truncated = [x.unsqueeze(1) for x in (o, a, r, terminal, truncated)]
         # prepare data
@@ -90,7 +90,7 @@ class LatentAgentPolicy(Policy):
         if torch.isinf(self._current_env_state[0]).any():
             raise RuntimeError(f'Invalid inf state in step {env.current_step}: {self._current_env_state[0]}')
 
-        agent_o = self.agent.fuse_o_with_goal(self._current_env_state)
+        agent_o = self.agent.o_from_state(self._current_env_state)
         a_dist, a, = self.agent(agent_o, sample=self.explore, disable_exploration=not self.explore)
 
         if torch.isnan(a).any():
@@ -98,6 +98,8 @@ class LatentAgentPolicy(Policy):
         if torch.isinf(a).any():
             raise RuntimeError(f'Invalid inf action: {a}')
 
+        if isinstance(env, CacheLastStepEnv):  # remove batch dimension if it's not a vector env
+            a = a[0]
         return a.detach().cpu().numpy()
 
 
@@ -143,10 +145,11 @@ class HierarchicalLatentAgentPolicy(Policy):
         assert len(use_slow_world_model) == 1, "all agents should either use the slow world model or the fast one"
         assert len(o_key) == 1, "all agents should use the same observation key"
         self._use_ema_modules = use_slow_world_model.pop()
+        self.sample_world_model = False
 
     @staticmethod
     def _empty_cache():
-        return {'o': [], 'r': [], 'terminal': [], 'time_step': []}
+        return {'o': [], 'a': [], 'r': [], 'terminal': [], 'time_step': []}
 
     def _reset(self,
                d_batch: int):
@@ -168,7 +171,7 @@ class HierarchicalLatentAgentPolicy(Policy):
         if isinstance(env, CacheLastStepEnv):  # add batch dim if unbatched env
             o, a, r, terminal, truncated = [x.unsqueeze(1) for x in (o, a, r, terminal, truncated)]
         env_data = {'o': o, 'a': a, 'r': r, 'terminal': terminal, 'truncated': truncated, 'mask': torch.empty_like(r)}
-        env_data = prepare_data(env_data, remove_keys=['a', 'truncated', 'mask'])
+        env_data = prepare_data(env_data, remove_keys=['truncated', 'mask'])
         env_data = {k: list(v.unbind(0)) for k, v in env_data.items()}
         return env_data
 
@@ -180,25 +183,31 @@ class HierarchicalLatentAgentPolicy(Policy):
             if self._next_state_update[i_lvl] > 0:
                 continue  # no need to update level yet
 
-            # prepare data from level below for this level's model to digest
-            # env_data_below = {k: torch.stack(v) for k, v in self._env_data_below_cache[i_lvl].items()}
-            # actions = self._act_cache[i_lvl].pop(0).unsqueeze(0)  # take oldest action from cache
-            # data_filtered = {k: self.model.upwards_filters[i_lvl][k](env_data_below[k]) for k in ('o', 'r', 'terminal')}
-            # data_filtered['a'] = actions  # we don't want filtered actions from lower level, but original ones from this
-
             n_steps = self.model.strides[i_lvl]
             data_filtered = self.model.filter_up(o=self._env_data_below_cache[i_lvl]['o'],
+                                                 a=self._env_data_below_cache[i_lvl]['a'],
                                                  r=self._env_data_below_cache[i_lvl]['r'],
                                                  terminal=self._env_data_below_cache[i_lvl]['terminal'],
                                                  level=i_lvl, n_steps=n_steps,
                                                  respect_terminal_flag=True)
-            data_filtered['a'] = self._act_cache[i_lvl].pop(0).unsqueeze(0)  # take oldest action from cache
+
+            # remove data used for this update step
+            self._env_data_below_cache[i_lvl]['o'] = self._env_data_below_cache[i_lvl]['o'][n_steps:]
+            self._env_data_below_cache[i_lvl]['a'] = self._env_data_below_cache[i_lvl]['a'][n_steps:]
+            self._env_data_below_cache[i_lvl]['r'] = self._env_data_below_cache[i_lvl]['r'][n_steps:]
+            self._env_data_below_cache[i_lvl]['terminal'] = self._env_data_below_cache[i_lvl]['terminal'][n_steps:]
+
+            # take real actions from this level instead of the ones from action autoencoder if they are available
+            #if len(self._act_cache[i_lvl]) > 0:
+            #    data_filtered['a'] = self._act_cache[i_lvl].pop(0).unsqueeze(0)  # take oldest action from cache
+            if len(self._act_cache[i_lvl]) > 0:
+                self._act_cache[i_lvl].pop(0)  # remove oldest action from action cache
 
             # memorize the latest inputs the model has seen as they are needed for the agent during planning
             state = self._grounded_env_states[i_lvl]
-            mem, _, new_state = self.model.forward_static(data_filtered, start_state=state, level=i_lvl, n_steps=-1,
-                                                          n_warmup=-1, sample_state=False, sample_output=False,
-                                                          use_ema_modules=self._use_ema_modules)
+            mem, _, new_state = self.model.forward_static(data_filtered, start_state=state, level=i_lvl, n_steps=1,
+                                                          n_warmup=1, sample_state=self.sample_world_model,
+                                                          sample_output=False, use_ema_modules=self._use_ema_modules)
             self._grounded_env_states[i_lvl] = new_state
 
             # bookkeeping
@@ -209,7 +218,6 @@ class HierarchicalLatentAgentPolicy(Policy):
             self.flight_record[i_lvl]['r'].append(mem['r'][0])
             self.flight_record[i_lvl]['terminal'].append(mem['terminal'][0])
             timestep = torch.tensor(env.current_step, dtype=torch.float32, device=state[0].device)
-
             if isinstance(env, CacheLastStepVecEnv):
                 timestep = torch.tile(timestep[None, ...], [env.unwrapped.num_envs, 1])
             self.flight_record[i_lvl]['time_step'].append(timestep)
@@ -218,13 +226,13 @@ class HierarchicalLatentAgentPolicy(Policy):
             if i_lvl < self.model.i_top:
                 o_key = self.model.r_max_agents[i_lvl + 1][0].observation_type
                 self._env_data_below_cache[i_lvl + 1]['o'] += mem[o_key]
+                self._env_data_below_cache[i_lvl + 1]['a'] += mem['a']
                 self._env_data_below_cache[i_lvl + 1]['r'] += mem['r']
                 self._env_data_below_cache[i_lvl + 1]['terminal'] += mem['terminal']
                 self._env_data_below_cache[i_lvl + 1]['time_step'].append(timestep)
 
-            # reset counter and clear caches
+            # reset counter
             self._next_state_update[i_lvl] = self.model.strides[i_lvl]
-            self._env_data_below_cache[i_lvl] = self._empty_cache()
 
     @torch.no_grad()
     def _replan(self):
@@ -246,7 +254,7 @@ class HierarchicalLatentAgentPolicy(Policy):
         state = self._grounded_env_states[i_highest]
         agent = self.model.r_max_agents[i_highest][0]
         simulation = agent.act_in_sim(env_start_state=state, sim_env=self.model, n_steps=1, sample_actions=self.explore,
-                                      sample_states=False, disable_exploration=not self.explore,
+                                      sample_states=self.sample_world_model, disable_exploration=not self.explore,
                                       reconstruct=i_highest > 0)
         self._act_cache[i_highest] += simulation['agent']['a']
 
@@ -260,7 +268,7 @@ class HierarchicalLatentAgentPolicy(Policy):
                 for goal in goals_from_above:
                     simulation = agent.act_in_sim(env_start_state=state, sim_env=self.model, n_steps=n_steps, goal=goal,
                                                   sample_actions=False, disable_exploration=True,  # never explore here
-                                                  sample_states=False, reconstruct=i_lvl > 0)
+                                                  sample_states=self.sample_world_model, reconstruct=i_lvl > 0)
                     state = simulation['model_state']
                     self._act_cache[i_lvl] += simulation['agent']['a']
                     if i_lvl > 0:
@@ -268,6 +276,17 @@ class HierarchicalLatentAgentPolicy(Policy):
                 goals_from_above = new_goals
 
         self._action_queue += self._act_cache[0]
+
+
+        """
+        # act with action autoencoder
+        if i_highest > 0:
+            agent_a = torch.stack(simulation['agent']['a'])
+            _, a = self.model.act_dec(agent_a)
+            a = torch.permute(a, (0, 2, 1, 3))
+            a = a.reshape(a.shape[0] * a.shape[1], a.shape[2], a.shape[3])
+            self._action_queue += list(a.unbind(0))
+        """
 
         """
         simulation = agent.act_in_sim(env_state=state, sim_env=self.model, n_steps=1, sample_actions=True,
@@ -324,22 +343,16 @@ class HierarchicalLatentAgentPolicy(Policy):
             d_batch = 1
         if env.current_step == 0:
             self._reset(d_batch)
-            # store default zero actions as last performend action
-            self._act_cache = [[torch.zeros((d_batch, rssm.d_a), device=self.model.device, dtype=torch.float32)] for
-                               rssm in self.model.rssm_modules]
 
-        # TODO: are the correct state time steps recorded?
+        # first step: store current env ground truth data to cache
+        self._env_data_below_cache[0] = self._prep_step(env)
+        self._check_state_update(env)  # update individual level's states if necessary
 
-        with torch.no_grad():
-            # first step: store current env ground truth data to cache
-            self._env_data_below_cache[0] = self._prep_step(env)
-            self._check_state_update(env)  # update individual level's states if necessary
+        # check if re-planning is needed
+        if len(self._action_queue) == 0:
+            self._replan()
 
-            # check if re-planning is needed
-            if len(self._action_queue) == 0:
-                self._replan()
-
-            action = self._action_queue.pop(0)
+        action = self._action_queue.pop(0)
 
         if isinstance(env, CacheLastStepEnv):  # remove batch dimension if it's not a vector env
             action = action[0]

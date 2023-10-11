@@ -34,7 +34,7 @@ def main():
     parser.add_argument('-n_collect', type=int)
     args = parser.parse_args()
 
-    cfg = load_yaml(here() / 'cfg_rssm_train.yaml')
+    cfg = load_yaml(here() / 'cfg_simple_rssm_train.yaml')
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
     if args.d_batch:
@@ -50,8 +50,9 @@ def main():
     GlobalLogger.bind(logger, {'_mask_model': 50,
                                '_mask_latent_overshooting': 50,
                                '_mask_agent': 50,
-                               'simulated_ground_truth_goal_distance': 50,
-                               '_sanity_check_goal_computation': 50})
+                               '_simulated_ground_truth_goal_distance': 50,
+                               '_sanity_check_goal_computation': 50,
+                               'action_alignment': 50})
 
     def make_env_fn():
         _env = gym.make(cfg['env_name'])
@@ -143,6 +144,7 @@ def main():
     # plt.show()
 
     def simple_collect_fn(explore: bool):
+        print('simple collect function')
         agent = r_max_agents[0][0]
         agent.eval()
         collect_env.reset()
@@ -151,18 +153,19 @@ def main():
         train_mem.extend(collected_data_trajectories)
 
     def collect_fn(explore: bool):
-        agent = r_max_agents[0][0]
-        agent.eval()
-        collect_env.reset()
-        policy = LatentAgentPolicy(agent, model, explore=explore)
-        collected_data_trajectories = collect_data(collect_env, -1, policy)
-        train_mem.extend(collected_data_trajectories)
+        #agent = r_max_agents[0][0]
+        #agent.eval()
+        #collect_env.reset()
+        #policy = LatentAgentPolicy(agent, model, explore=explore)
+        #collected_data_trajectories = collect_data(collect_env, -1, policy)
+        #train_mem.extend(collected_data_trajectories)
 
         collect_env.reset()
         agent_eval_mode(r_max_agents + goal_seeking_agents)
         policy = HierarchicalLatentAgentPolicy(model, explore=explore)
         collected_data_trajectories = collect_data(collect_env, -1, policy)
         # visualize_trajectory(collected_data_trajectories[0])
+        train_mem.extend(collected_data_trajectories)
 
         """
         n_plots = model.levels + 1
@@ -203,12 +206,10 @@ def main():
             logger.log_plot(fig_to_img(fig), Scope.TEST() / f'model/latent_state_pca')
         """
 
-        train_mem.extend(collected_data_trajectories)
-
     print('Starting Training')
     # with torch.autograd.detect_anomaly(check_nan=True):
-    train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collect_fn, eval_env, test_driver,
-                train_driver, logger, log_videos=False, video_env=video_env)
+    train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, simple_collect_fn, eval_env, test_driver,
+                train_driver, logger, log_videos=True, video_env=video_env)
     # with profile(activities=[ProfilerActivity.CPU], record_shapes=True, profile_memory=True) as prof:
     #    train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collect_fn, eval_env, test_driver,
     #        train_driver, logger, profile=profiling_run, log_videos=True)

@@ -1321,20 +1321,20 @@ class RSSMCell(torch.nn.Module):
 
     @torch.jit.export
     def decode(self,
-               s: torch.Tensor,
+               s_embed: torch.Tensor,
                sample: bool,
                reconstruct_observation: bool):
-        if s.ndim == 2:
+        if s_embed.ndim == 2:
             d_batch = 0
         else:
             d_batch = 1
         if reconstruct_observation:
-            o_dist, o_smpl = self.o_decoder(s, sample)
+            o_dist, o_smpl = self.o_decoder(s_embed, sample)
         else:
-            o_dist, o_smpl = self.zero_o_dist(d_batch, s.device), self.zero_o(d_batch, s.device)
-        r_dist, r_smpl = self.r_decoder(s, sample)
+            o_dist, o_smpl = self.zero_o_dist(d_batch, s_embed.device), self.zero_o(d_batch, s_embed.device)
+        r_dist, r_smpl = self.r_decoder(s_embed, sample)
         # r_smpl = torch.nn.functional.tanh(r_smpl)
-        term_dist, term_smpl = self.term_decoder(s, sample)
+        term_dist, term_smpl = self.term_decoder(s_embed, sample)
 
         return {'o': o_smpl, 'o_dist': o_dist, 'r': r_smpl, 'r_dist': r_dist, 'terminal': term_smpl,
                 'terminal_dist': term_dist}
