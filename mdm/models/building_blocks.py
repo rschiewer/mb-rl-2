@@ -1046,7 +1046,13 @@ class RSSMCell(torch.nn.Module):
         z = self.zero_z(d_batch, device)
         h = self.zero_h(d_batch, device)
         rnn_state = self.zero_rnn_state(d_batch, device)
-        mock = torch.zeros(d_batch, self.d_z_out, device=device)
+        if self.latent_dist == 'normal':
+            mock = torch.zeros(d_batch, self.d_z_out, device=device)
+            mock[:, mock.shape[1] // 2:] = 1  # unit variance
+        elif self.latent_dist == 'bernoulli':
+            mock = torch.full((d_batch, self.d_z_out), fill_value=0.5, device=device)
+        else:  # categorical
+            mock = torch.ones(d_batch, self.d_z_out, device=device)
         z_prior_params = self.z_dist_params(mock)
         z_post_params = self.z_dist_params(mock)
         s_embedding = self.zero_s_embedding(d_batch, device)
