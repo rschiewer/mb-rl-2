@@ -216,8 +216,8 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
 
                 if l < model.levels - 1:
                     update_model_chunk_distance(i_step, l, logger, model, r_max_simulation)
-                    train_goal_seeking_agent_rand(model, l, pred, targets, eval_env, cfg, i_step, logger, sample_model,
-                                                  sample_agents)
+                    #train_goal_seeking_agent_rand(model, l, pred, targets, eval_env, cfg, i_step, logger, sample_model,
+                    #                              sample_agents)
 
         # p1 = torch.sum(torch.stack([p.mean() for p in model.parameters()]))
         # assert np.isclose((p0 - p1).detach().cpu().numpy(), 0), 'Model parameters changed during agent training!'
@@ -295,8 +295,18 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                         fig, anim = visualize_overlaid_trajectories(trajs_sim[0], trajs_orig_pad[0], figure=fig)
                         vid = anim_to_vid(anim)
                         vid.name = 'model_sim'
-                    logger.log({'live_model': vid}, Scope.TEST() / 'model_prediction_video/', i_step)
+                    logger.log({'model': vid}, Scope.TEST() / 'model_prediction_video/0', i_step)
 
+                    if model.levels > 1:
+                        trajs_sim = trajectories_from_simulation(pred[1], model, 1)
+                        # truncate to original trajectory length
+                        l_traj_orig = trajs_orig_pad[0]['o'].shape[0]
+                        trajs_sim = [{k: v[:l_traj_orig] for k, v in traj.items()} for traj in trajs_sim]
+                        with TempFigure() as fig:
+                            fig, anim = visualize_overlaid_trajectories(trajs_sim[0], trajs_orig_pad[0], figure=fig)
+                            vid = anim_to_vid(anim)
+                            vid.name = 'model_sim'
+                        logger.log({'model': vid}, Scope.TEST() / 'model_prediction_video/1', i_step)
                 # log model and agent params
                 # log_params(model, logger, Scope.PARAMETERS() / 'model', time_step=i_step)
                 # for i_ag, ag in enumerate(r_max_agents):

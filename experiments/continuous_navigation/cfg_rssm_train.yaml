@@ -13,11 +13,11 @@ repeat_terminal_state: False
 mdm:
    rssm_modules:
       # RSSM no. 1
-      -  d_z: 20
+      -  d_z: 30
          d_h: 200
          d_a: <infer>
-         d_s_embedding: 15
-         s_embedding_lws: [100]
+         d_s_embedding: 40
+         s_embedding_lws: [ 128, 64, 32 ]
          n_hidden_layers: 1
          hidden_dropout: 0.1
          epsilon: 0.1
@@ -30,7 +30,7 @@ mdm:
          n_latent_categories: 16
          o_encoder:
             class: "MLPEncoder"
-            d_x_encoded: 32
+            d_x_encoded: 64
             lws: [ 100, 100, 100 ]
             layer_norm: True
             activation: "relu"
@@ -54,9 +54,9 @@ mdm:
       # RSSM no. 2
       -  d_z: 25
          d_h: 220
-         d_a: 2
-         d_s_embedding: 20
-         s_embedding_lws: [100]
+         d_a: 8
+         d_s_embedding: 40
+         s_embedding_lws: [ 128, 64, 32 ]
          n_hidden_layers: 1
          hidden_dropout: 0.1
          epsilon: 0.1
@@ -115,7 +115,7 @@ mdm:
    ema_regularization: 0.0
    ema_coeff: 0.95
    ema_update_interval: 10
-   latent_overshooting: [ ] #[14, 9]
+   latent_overshooting: [] #[14, 9]
    temporal_activation_regularization: 0.0
    kl_balance: 0.8
 
@@ -128,12 +128,12 @@ trainer:
    freeze_model: False
    stop_collect: False
    eval_interval: 50
-   d_batch: 470
-   subtrajectory_len: 50
-   collect_envs: 50
+   d_batch: 512
+   subtrajectory_len: 30
+   collect_envs: 20
    collect_interval: 100
    agent_train_interval: 1
-   model_train_steps: [ -1, 20 ]
+   model_train_steps: [ -1, -1 ]
    agent_model_steps: [ 16, 10 ]
    checkpoint_interval: 100
    sample_model_during_agent_training: True
@@ -146,7 +146,7 @@ agents:
          eps_exploration_init: 0.9
          eps_exploration_coeff: 0.999
          eps_exploration_min: 0.3
-         act_entropy_exploration_coeff: 0.001
+         act_entropy_exploration_coeff: 0.01
          learn_act_entropy_exploration_coeff: False
          novelty_exploration_coeff: 0.00
          tr_policy_kl_coeff: 0.1
@@ -171,7 +171,7 @@ agents:
          eps_exploration_init: 0.9
          eps_exploration_coeff: 0.999
          eps_exploration_min: 0.3
-         act_entropy_exploration_coeff: 0.001
+         act_entropy_exploration_coeff: 0.01
          learn_act_entropy_exploration_coeff: False
          novelty_exploration_coeff: 0.00
          tr_policy_kl_coeff: 0.1

@@ -540,7 +540,7 @@ class BinomialDecoder(OutputDecoder):
         params = self._mdl(x_enc)
         s_new = params.shape[:-1] + self.s_x_orig
         params = params.reshape(s_new)
-        params = torch.nn.functional.sigmoid(params)
+        #params = torch.nn.functional.sigmoid(params)
         d = params
         # d = torch.distributions.ContinuousBernoulli(params=params)
         # d = torch.distributions.Bernoulli(params=params)
@@ -566,7 +566,7 @@ class BinomialDecoder(OutputDecoder):
     @torch.jit.ignore
     def dist(self,
              parameters: torch.Tensor) -> torch.distributions.Distribution:
-        d = torch.distributions.ContinuousBernoulli(probs=parameters)
+        d = torch.distributions.ContinuousBernoulli(logits=parameters)
         # d = torch.distributions.Bernoulli(logits=parameters)
         d = torch.distributions.Independent(d, 1)
         return d
@@ -574,7 +574,7 @@ class BinomialDecoder(OutputDecoder):
     @torch.jit.ignore
     def sample(self,
                parameters):
-        d = torch.distributions.ContinuousBernoulli(probs=parameters)
+        d = torch.distributions.ContinuousBernoulli(logits=parameters)
         d = torch.distributions.Independent(d, 1)
         s = d.rsample()
         # s = d.sample() + parameters - parameters.detach()
@@ -583,7 +583,7 @@ class BinomialDecoder(OutputDecoder):
     @torch.jit.ignore
     def mean(self,
              parameters):
-        d = torch.distributions.ContinuousBernoulli(probs=parameters)
+        d = torch.distributions.ContinuousBernoulli(logits=parameters)
         d = torch.distributions.Independent(d, 1)
         s = d.mean
         # s = d.sample() + parameters - parameters.detach()

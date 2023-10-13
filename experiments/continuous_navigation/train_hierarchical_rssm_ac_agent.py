@@ -34,7 +34,7 @@ def main():
     parser.add_argument('-n_collect', type=int)
     args = parser.parse_args()
 
-    cfg = load_yaml(here() / 'cfg_simple_rssm_train.yaml')
+    cfg = load_yaml(here() / 'cfg_rssm_train.yaml')
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
     if args.d_batch:
@@ -153,6 +153,7 @@ def main():
         train_mem.extend(collected_data_trajectories)
 
     def collect_fn(explore: bool):
+        print('hierarchical collect function')
         #agent = r_max_agents[0][0]
         #agent.eval()
         #collect_env.reset()
@@ -164,7 +165,7 @@ def main():
         agent_eval_mode(r_max_agents + goal_seeking_agents)
         policy = HierarchicalLatentAgentPolicy(model, explore=explore)
         collected_data_trajectories = collect_data(collect_env, -1, policy)
-        # visualize_trajectory(collected_data_trajectories[0])
+        #visualize_trajectory(collected_data_trajectories[0])
         train_mem.extend(collected_data_trajectories)
 
         """
@@ -208,8 +209,8 @@ def main():
 
     print('Starting Training')
     # with torch.autograd.detect_anomaly(check_nan=True):
-    train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, simple_collect_fn, eval_env, test_driver,
-                train_driver, logger, log_videos=True, video_env=video_env)
+    train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collect_fn, eval_env, test_driver,
+                train_driver, logger, log_videos=False, video_env=video_env)
     # with profile(activities=[ProfilerActivity.CPU], record_shapes=True, profile_memory=True) as prof:
     #    train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collect_fn, eval_env, test_driver,
     #        train_driver, logger, profile=profiling_run, log_videos=True)

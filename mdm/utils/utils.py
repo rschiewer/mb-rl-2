@@ -438,14 +438,23 @@ def join_trajectories(t1: Dict[str, np.ndarray], t2: Dict[str, np.ndarray]):
     return joined
 
 
-def trajectories_from_simulation(model_mem: Dict[str, List[torch.Tensor]]):
+def trajectories_from_simulation(model_mem: Dict[str, List[torch.Tensor]],
+                                 model: 'HierarchicalRSSM' = None,
+                                 level: int = 0):
     n_trajs = model_mem['o'][0].shape[0]
     if isinstance(model_mem['o'], list):  # time dimension is list
-        trajs = {k: torch.stack(model_mem[k]).detach().cpu().numpy() for k in ('o', 'a', 'r', 'terminal')}
+        trajs = {k: torch.stack(model_mem[k]) for k in ('o', 'a', 'r', 'terminal')}
     else:  # time dimension is tensor
-        trajs = {k: model_mem[k].detach().cpu().numpy() for k in ('o', 'a', 'r', 'terminal')}
+        trajs = {k: model_mem[k] for k in ('o', 'a', 'r', 'terminal')}
 
-    trajs = [{k: v[:, i] for k, v in trajs.items()} for i in range(n_trajs)]
+    if level > 0:
+        reconstr_goal = model.rssm_modules[level - 1].decode(trajs['o'], sample=False, reconstruct_observation=True)
+        trajs['o'] = reconstr_goal['o']
+        # to make reconstructed traj fit the original traj
+        n_repeat = model.strides[level]
+        trajs = {k: torch.repeat_interleave(v, n_repeat, dim=0) for k, v in trajs.items()}
+
+    trajs = [{k: v[:, i].detach().cpu().numpy() for k, v in trajs.items()} for i in range(n_trajs)]
     return trajs
 
 
@@ -631,7 +640,7 @@ def valid_subtrajectories_unbiased_fast(data: Dict[str, torch.Tensor],
 
     ret_data = {}
     for k, v in data.items():
-        if k == 'mask':
+        if k in ['mask', 'terminal']:
             pad = torch.ones(n_trajs, 1, *v.shape[2:], device=v.device, dtype=v.dtype)
         else:
             pad = torch.zeros(n_trajs, 1, *v.shape[2:], device=v.device, dtype=v.dtype)
@@ -675,7 +684,7 @@ def valid_subtrajectories_unbiased(data: Dict[str, torch.Tensor],
     ret_data = {}
     for k, v in data.items():
         v = v.swapaxes(0, 1)
-        if k == 'mask':
+        if k in ['mask', 'terminal']:
             v_new = torch.ones(n_trajs, length, *v.shape[2:], device=v.device, dtype=v.dtype)
         else:
             v_new = torch.zeros(n_trajs, length, *v.shape[2:], device=v.device, dtype=v.dtype)
@@ -698,7 +707,7 @@ def valid_subtrajectories_2(data: Dict[str, torch.Tensor],
 
     ret_data = {}
     for k, v in data.items():
-        if k == 'mask':
+        if k in ['mask', 'terminal']:
             empty = torch.ones(length, n_trajs, *v.shape[2:], device=v.device, dtype=v.dtype)
         else:
             empty = torch.zeros(length, n_trajs, *v.shape[2:], device=v.device, dtype=v.dtype)

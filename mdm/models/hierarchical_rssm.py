@@ -101,10 +101,10 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
         if self.levels > 1:
             self.act_enc = SquashedGaussianEncoder(s_x_orig=(self.strides[1], self.rssm_modules[0].d_a),
-                                                   d_x_encoded=self.rssm_modules[1].d_a, lws=[64, 64, 64, 32],
+                                                   d_x_encoded=self.rssm_modules[1].d_a, lws=[32, 32],
                                                    activation='relu', epsilon=0.1, layer_norm=True)
             self.act_dec = MLPDecoder(s_x_orig=(self.strides[1], self.rssm_modules[0].d_a),
-                                      d_x_encoded=self.rssm_modules[1].d_a, lws=[32, 64, 64, 64], activation='relu',
+                                      d_x_encoded=self.rssm_modules[1].d_a, lws=[32, 32], activation='relu',
                                       layer_norm=True, final_activation='tanh')
 
     @property
@@ -128,21 +128,21 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         self.dbg_timestep = 0
 
     @torch.jit.ignore
-    def forward_dynamic_2(self,
-                          start_state: RSSMStateType,
-                          start_state_below: RSSMStateType,
-                          level: int,
-                          n_steps: int,
-                          n_warmup: int = 0,
-                          memory: Optional[Dict[str, torch.Tensor]] = None,
-                          memory_other: Optional[Dict[str, torch.Tensor]] = None,
-                          memory_targets: Optional[Dict[str, torch.Tensor]] = None,
-                          memory_below: Optional[Dict[str, torch.Tensor]] = None,
-                          sample_state: bool = True,
-                          sample_output: bool = True,
-                          reconstruct: bool = True,
-                          use_ema_modules: bool = False,
-                          start_time_step: Optional[torch.Tensor] = None):
+    def forward_dynamic_action_autoenc(self,
+                                       start_state: RSSMStateType,
+                                       start_state_below: RSSMStateType,
+                                       level: int,
+                                       n_steps: int,
+                                       n_warmup: int = 0,
+                                       memory: Optional[Dict[str, torch.Tensor]] = None,
+                                       memory_other: Optional[Dict[str, torch.Tensor]] = None,
+                                       memory_targets: Optional[Dict[str, torch.Tensor]] = None,
+                                       memory_below: Optional[Dict[str, torch.Tensor]] = None,
+                                       sample_state: bool = True,
+                                       sample_output: bool = True,
+                                       reconstruct: bool = True,
+                                       use_ema_modules: bool = False,
+                                       start_time_step: Optional[torch.Tensor] = None):
         assert level > 0, 'Not intended for level 0 model, use forward_static()'
 
         mdl = self._ema_rssm_modules[level] if use_ema_modules else self.rssm_modules[level]
@@ -162,6 +162,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
         state = start_state
         state_below = start_state_below
+        a_alignments = []
         with FreezeParameters([r_max_agent, gs_agent]):
             for t in range(n_steps):
                 # get action from agent
@@ -177,25 +178,27 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 # get simulated ground truth for this step from level below
                 # if a chunk starts in an invalid trajectory part (beyond terminal state), this is filtered out later
                 with torch.no_grad():
-                    _, a_lower = self.act_dec(a_t)
-                    a_lower = torch.permute(a_lower, (1, 0, 2))
+                    a_lower = self.actions_down(a_t, level).detach()
                     pred_below, _, next_state_below = self.forward_static(trajectory={'a': a_lower, 'o': None},
                                                                           start_state=state_below, level=lvl_below,
                                                                           n_steps=-1, n_warmup=0)
                     simulated_ground_truth = self.filter_up(o=pred_below['s_embedding'],
-                                                            a=pred_below['a'],
+                                                            a=pred_below['a'],  # explicitly reconstruct a_t from below
                                                             r=pred_below['r'],
                                                             terminal=pred_below['terminal'],
-                                                            n_steps=lower_level_steps, respect_terminal_flag=True,
-                                                            window_size=lower_level_steps, level=level)
-                    #pred_below = {k: list(v.unbind(0)) for k, v in pred_below.items()}
+                                                            n_steps=lower_level_steps,
+                                                            respect_terminal_flag=True,
+                                                            window_size=lower_level_steps,
+                                                            level=level)
                     # remove time dim
                     simulated_ground_truth = {k: v.squeeze(0) for k, v in simulated_ground_truth.items()}
 
-                # TODO: sample_output changed to fixed false to reduce variance of training targets
+                a_alignments.append(torch.abs(simulated_ground_truth['a'] - a_t))
+
                 if t < n_warmup:  # if still in warmup, re-do last step with simulated ground truth and use posterior
                     o_enc = mdl.o_encoder(simulated_ground_truth['o'])
-                    next_state = mdl(a=a_t, o_enc=o_enc, last_state=state,
+                    a_rec = simulated_ground_truth['a']
+                    next_state = mdl(a=a_rec, o_enc=o_enc, last_state=state,
                                      use_posterior=True, sample_state=sample_state)
                     pred = mdl.decode(next_state[-1], sample=sample_output, reconstruct_observation=reconstruct)
 
@@ -205,6 +208,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 # TODO: hack until proper ema model querying is implemented
                 append_memory(memory_other, **rssm_add_labels(next_state))
 
+
                 # important: update model states
                 state = next_state
                 state_below = next_state_below
@@ -213,6 +217,11 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             memory_targets = {k: torch.stack(v) for k, v in memory_targets.items()}
 
         # DEBUGGING
+
+        if GlobalLogger.can_log('action_alignment', self._current_train_step):
+            a_alignments = torch.stack(a_alignments).mean().detach().cpu().numpy().item()
+            GlobalLogger.logger.log({'action_alignment': a_alignments}, Scope.TRAIN() / f'model/{level}',
+                                    self._current_train_step)
 
         # action std
         # print(f'using agent: {torch.stack(this_run_a).detach().cpu().numpy().reshape(-1, 2).mean(axis=0)} | {torch.stack(this_run_a).detach().cpu().numpy().reshape(-1, 2).std(axis=0)}')
@@ -419,6 +428,31 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
         return memory, memory_other, state
 
+    def actions_up(self,
+                   a: torch.Tensor | List[torch.Tensor],
+                   level: int,
+                   mask: torch.Tensor | None = None):
+        a = stack_if_list(a)
+        a_reshaped = UpwardsFilter(self.strides[level])(a, mask=mask)
+        a_reshaped = torch.permute(a_reshaped, (0, 2, 1, 3))
+        a_reshaped = torch.flatten(a_reshaped, start_dim=2)
+        #    a_reshaped = UpwardsFilter(self.strides[level])(a_orig)
+        #    a_reshaped = torch.permute(a_reshaped, (0, 2, 1, 3))
+        #    a_enc_dist, a_enc = self.act_enc(a_reshaped, sample=False)
+        #    simulated_ground_truth['a'] = a_enc.detach()
+        return a_reshaped
+
+    def actions_down(self,
+                     a: torch.Tensor | List[torch.Tensor],
+                     level: int):
+        a = stack_if_list(a)
+        lower_level_steps = self.strides[level]
+        a_lower = a.reshape(a.shape[0], lower_level_steps, -1)
+        a_lower = torch.permute(a_lower, (1, 0, 2))
+        # _, a_lower = self.act_dec(a_t)
+        # a_lower = torch.permute(a_lower, (1, 0, 2))
+        return a_lower
+
     @torch.no_grad()
     def filter_up(self,
                   o: List[torch.Tensor] | None = None,
@@ -451,12 +485,16 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         if a is not None:
             a_orig = stack_if_list(a[:n_steps])
             if level > 0:
-                a_reshaped = UpwardsFilter(self.strides[level])(a_orig)
-                a_reshaped = torch.permute(a_reshaped, (0, 2, 1, 3))
-                a_enc_dist, a_enc = self.act_enc(a_reshaped, sample=False)
-                simulated_ground_truth['a'] = a_enc.detach()
+                simulated_ground_truth['a'] = self.actions_up(a_orig, level, mask=mask).detach()
             else:
                 simulated_ground_truth['a'] = a_orig.detach()
+            #if level > 0:
+            #    a_reshaped = UpwardsFilter(self.strides[level])(a_orig)
+            #    a_reshaped = torch.permute(a_reshaped, (0, 2, 1, 3))
+            #    a_enc_dist, a_enc = self.act_enc(a_reshaped, sample=False)
+            #    simulated_ground_truth['a'] = a_enc.detach()
+            #else:
+            #    simulated_ground_truth['a'] = a_orig.detach()
 
         if r is not None:
             simulated_ground_truth['r'] = flt['r'](stack_if_list(r[:n_steps]), mask=mask,
@@ -594,10 +632,10 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         start_state_below, _ = rssm_states_seq_to_batch(start_state_below, model_predictions[level - 1]['terminal'])
         start_state_below = rssm_detach_state(*start_state_below)
 
-        mem, mem_other, mem_targets, mem_below, state = self.forward_dynamic_2(start_state, start_state_below,
-                                                                             level=level, n_steps=10,
-                                                                             sample_output=True,
-                                                                             reconstruct=True, sample_state=True)
+        mem, mem_other, mem_targets, mem_below, state = self.forward_dynamic_action_autoenc(start_state, start_state_below,
+                                                                                            level=level, n_steps=10,
+                                                                                            sample_output=True,
+                                                                                            reconstruct=True, sample_state=True)
 
         return mem, mem_targets, mem_below
 
@@ -760,18 +798,19 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
             loss_level = self.rssm_loss(pred[level], pred_ema[level], targets[level], mask_lvl, self.kl_betas[level],
                                         self.kl_reg_betas[level], level)
-            if level < self.levels - 1:
-                # action autoencoder with static upfiltered trajectory data
-                loss_act_autoenc = self.action_autoencoder_loss(targets[level]['a'], mask_lvl, level + 1)
-                loss_level.update(loss_act_autoenc)
+            #if level < self.levels - 1:
+            #    # action autoencoder with static upfiltered trajectory data
+            #    loss_act_autoenc = self.action_autoencoder_loss(targets[level]['a'], mask_lvl, level + 1)
+            #    loss_level.update(loss_act_autoenc)
 
             if level > 0:
+                pass
                 # agent model exploration loss to connect current level and level below
-                pred_agent, targets_agent, pred_below_agent = self.agent_model_exploration(pred, targets, level)
-                mask_agent = compute_mask(targets_agent['terminal'])
-                loss_agent = self.rssm_loss(pred_agent, None, targets_agent, mask_agent, self.kl_betas[level],
-                                            self.kl_reg_betas[level], level)
-                loss_level.update({f'{k}_agent': v for k, v in loss_agent.items()})
+                #pred_agent, targets_agent, pred_below_agent = self.agent_model_exploration(pred, targets, level)
+                #mask_agent = compute_mask(targets_agent['terminal'])
+                #loss_agent = self.rssm_loss(pred_agent, None, targets_agent, mask_agent, self.kl_betas[level],
+                #                            self.kl_reg_betas[level], level)
+                #loss_level.update({f'{k}_agent': v for k, v in loss_agent.items()})
 
                 # mask_below = compute_mask(pred_below_agent['terminal'])
                 # loss_act_autoenc_agent = self.action_autoencoder_loss(pred_below_agent['a'], mask_below, level,

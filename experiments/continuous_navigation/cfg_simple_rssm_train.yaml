@@ -16,7 +16,7 @@ mdm:
       -  d_z: 30
          d_h: 200
          d_a: <infer>
-         d_s_embedding: 30
+         d_s_embedding: null
          s_embedding_lws: [ 128, 64, 32 ]
          n_hidden_layers: 1
          hidden_dropout: 0.1
@@ -72,8 +72,8 @@ trainer:
    freeze_model: False
    stop_collect: False
    eval_interval: 50
-   d_batch: 2048
-   subtrajectory_len: 20
+   d_batch: 512
+   subtrajectory_len: 30
    collect_envs: 20
    collect_interval: 100
    agent_train_interval: 1
@@ -90,7 +90,7 @@ agents:
          eps_exploration_init: 0.9
          eps_exploration_coeff: 0.999
          eps_exploration_min: 0.3
-         act_entropy_exploration_coeff: 0.001
+         act_entropy_exploration_coeff: 0.01
          learn_act_entropy_exploration_coeff: False
          novelty_exploration_coeff: 0.0
          tr_policy_kl_coeff: 0.1

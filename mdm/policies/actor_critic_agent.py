@@ -292,6 +292,7 @@ class ActorCriticAgent(torch.nn.Module):
         if explore:
             noise = torch.distributions.Normal(torch.zeros_like(mu), torch.full_like(sigma, self.eps.data)).sample()
             s = s + noise
+            #s = torch.clamp(s, -1.0, 1.0)
             s = torch.tanh(s)
             #sigma = torch.where(sigma < self.eps_min + self.min_float, self.eps_min + self.min_float, sigma)
 
@@ -415,6 +416,7 @@ class ActorCriticAgent(torch.nn.Module):
         bootstrap = v_actor[-1] #(1 - terminal)[-1] * v_actor[-1] + terminal[-1] * r[-1]
         #bootstrap = (1 - terminal)[-1] * v_actor[-1] + terminal[-1] * r[-1]
         lambda_returns = calc_lambda_returns(r[:-1], terminal[:-1], v_actor[:-1], bootstrap, gamma, 0.99)
+        #lambda_returns = calc_lambda_returns(r, terminal, v_actor[:-1], bootstrap, gamma, 0.99)
         #lambda_returns = calc_returns_simple(r[:-1], terminal[:-1], bootstrap, gamma=gamma)
         #bootstrap = (1 - mask)[-1] * v_actor[-1]  # (1 - mask[-1]) * v_actor[-1]
         #bootstrap = (1 - mask)[-1] * (((1 - terminal) * v_actor + terminal * r))[-1]
@@ -459,6 +461,7 @@ class ActorCriticAgent(torch.nn.Module):
         # CRITIC
         with torch.no_grad():
             value_target = lambda_returns  # + act_entropy_reward_aug  # + model_novelty_reward_aug[:-1]
+        #v_critic = self.critic_net(o.detach()[:-1])
         v_critic = self.critic_net(o.detach())
         value_loss = torch.nn.functional.smooth_l1_loss(v_critic, value_target.detach(), reduction='none')
         # ppo_loss = valid[:-1] * self.beta * torchd.kl_divergence(detach_dist(ema_a_dist),
@@ -485,6 +488,7 @@ class ActorCriticAgent(torch.nn.Module):
             a_dist_std = masked_var(a, mask)
             a_min = a.min()
             a_max = a.max()
+            a_entropy = masked_mean(self._a_dist_entropy(a_dist), mask)
             ep_r = (r * (1 - mask)).sum(dim=0)
             ep_r_mask = torch.where(mask.mean(dim=0) < 1.0, 0.0, 1.0)
             valid_r = masked_mean(ep_r, ep_r_mask)
@@ -499,6 +503,7 @@ class ActorCriticAgent(torch.nn.Module):
                   'monitoring_a_dist_std': a_dist_std,
                   'monitoring_a_min': a_min,
                   'monitoring_a_max': a_max,
+                  'monitoring_a_entropy': a_entropy,
                   'monitoring_r_running_average': running_r,
                   'monitoring_o_running_average': running_o,
                   'monitoring_obtained_reward': valid_r,
@@ -561,7 +566,7 @@ class ActorCriticAgent(torch.nn.Module):
         # plt.hist(actor_grads, bins=100)
         # plt.show()
         #torch.nn.utils.clip_grad_value_(self.parameters(), 1.0)
-        torch.nn.utils.clip_grad_norm_(self.parameters(), 10.0)
+        torch.nn.utils.clip_grad_norm_(self.parameters(), 100.0)
 
         # if logger:
         #    message = {}
