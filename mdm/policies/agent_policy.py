@@ -63,9 +63,9 @@ class LatentAgentPolicy(Policy):
         # get data and add time dim
         o = torch.from_numpy(env.last_o).unsqueeze(0).to(device=device, dtype=torch.float32)
         a = torch.from_numpy(env.last_a).unsqueeze(0).to(device=device, dtype=torch.float32)
-        r = torch.from_numpy(env.last_r).unsqueeze(0).to(device=device, dtype=torch.float32)
-        terminal = torch.from_numpy(env.last_term).unsqueeze(0).to(device=device, dtype=torch.float32)
-        truncated = torch.from_numpy(env.last_trunc).unsqueeze(0).to(device=device, dtype=torch.float32)
+        r = torch.from_numpy(np.array(env.last_r)).unsqueeze(0).to(device=device, dtype=torch.float32)
+        terminal = torch.from_numpy(np.array(env.last_term)).unsqueeze(0).to(device=device, dtype=torch.float32)
+        truncated = torch.from_numpy(np.array(env.last_trunc)).unsqueeze(0).to(device=device, dtype=torch.float32)
         if isinstance(env, CacheLastStepEnv):  # add batch dim if unbatched env
             o, a, r, terminal, truncated = [x.unsqueeze(1) for x in (o, a, r, terminal, truncated)]
         # prepare data
@@ -97,6 +97,9 @@ class LatentAgentPolicy(Policy):
             raise RuntimeError(f'Invalid NAN action: {a}')
         if torch.isinf(a).any():
             raise RuntimeError(f'Invalid inf action: {a}')
+
+        if isinstance(env, CacheLastStepEnv):
+            a = a[0]
 
         return a.detach().cpu().numpy()
 
@@ -154,6 +157,7 @@ class HierarchicalLatentAgentPolicy(Policy):
         self._env_data_below_cache = [self._empty_cache() for _ in range(self.model.levels)]
         self._act_cache = [[] for _ in range(self.model.levels)]
         self._next_state_update = self.model.strides
+        self._action_queue = []
 
     @torch.no_grad()
     def _prep_step(self,

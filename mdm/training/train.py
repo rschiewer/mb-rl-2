@@ -5,6 +5,9 @@ import random
 import os
 import time
 from math import floor, ceil
+from itertools import chain
+
+
 
 import gym_nav2d.envs
 import numpy as np
@@ -48,7 +51,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
 
     for i_step in tqdm(range(cfg['trainer']['n_train_steps']), desc='Training Progress'):
         batch = train_driver.interact(cfg['trainer']['d_batch'])
-        batch = to_tensors(batch, 'cuda', padding='repeat')
+        batch = to_tensors(batch, 'cuda')
         batch = prepare_data(batch)
 
         # _new_actor_params = np.sum(
@@ -116,16 +119,15 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                                                           sample_states=sample_model, sample_actions=sample_agents,
                                                           reconstruct=True)
                 r_max_losses = r_max_agent.update_step(r_max_simulation['agent'],
-                                                       # first_step_mask=start_state_mask.unsqueeze(0),
-                                                       first_step_mask=None,
+                                                       first_step_mask=start_state_mask.unsqueeze(0),
                                                        actor_optimizer=r_max_actor_opt,
                                                        critic_optimizer=r_max_critic_opt,
                                                        logger=logger)
 
-                if i_step % cfg['trainer']['eval_interval'] == 0:
-                    plot_value_function(eval_env, model, r_max_agent, l, logger, i_step)
-                if l > 0 and i_step % cfg['trainer']['eval_interval'] == 0:
-                    plot_goals(r_max_simulation, model, logger, i_step, l)
+                #if i_step % cfg['trainer']['eval_interval'] == 0:
+                #    plot_value_function(eval_env, model, r_max_agent, l, logger, i_step)
+                #if l > 0 and i_step % cfg['trainer']['eval_interval'] == 0:
+                #    plot_goals(r_max_simulation, model, logger, i_step, l)
 
                 # action std
                 acts = torch.stack(r_max_simulation['agent']['a']).detach().cpu().numpy().reshape(-1, 2)
@@ -475,7 +477,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                     tmp_file_name = f'.{pid}_{timestamp}_agent_video.mp4'
 
                     clip = mp.VideoFileClip(video_path)
-                    clip = clip.resize(width=80)
+                    #clip = clip.resize(width=80)
                     clip.write_videofile(tmp_file_name, preset='veryslow', verbose=False, logger=None)
                     try:
                         os.remove(video_path)  # delete original video file
@@ -937,7 +939,8 @@ def build_agents(cfg: dict,
             ActorCriticAgent, torch.optim.Optimizer, torch.optim.Optimizer):
         agent = ActorCriticAgent(level=level, observation_key='z', goal_seeking=goal_seeking, **cfg)
         agent = agent.to(device)
-        actor_optimizer = torch.optim.Adam(agent.actor_net.parameters(), lr=cfg['lr_actor'])
+        actor_params = chain.from_iterable([agent.actor_net.parameters(), agent.actor_net_sigma.parameters()])
+        actor_optimizer = torch.optim.Adam(actor_params, lr=cfg['lr_actor'])
         critic_optimizer = torch.optim.Adam(agent.critic_net.parameters(), lr=cfg['lr_critic'])
         return agent, actor_optimizer, critic_optimizer
 

@@ -1,5 +1,6 @@
 import sys
 from typing import Callable, List, Dict, TypeVar, Union
+from collections import namedtuple
 
 import gymnasium as gym
 from gymnasium.core import ActType
@@ -11,6 +12,15 @@ from mdm.policies.random_policy import RandomPolicy
 from mdm.utils.gym_wrappers import CacheLastStepEnv, CacheLastStepVecEnv, CacheLastStepVecEnvPool
 
 DataType = TypeVar('DataType', np.ndarray, int, float, bool)
+
+
+class TqdmIterMock:
+
+    def __init__(self):
+        self.n = 0
+
+    def refresh(self):
+        pass
 
 
 class GymEpisodeDriver(Driver):
@@ -29,21 +39,23 @@ class GymEpisodeDriver(Driver):
                  n_episodes: int,
                  mem: List[Dict[str, DataType]] = None,
                  seed: Union[int, List[int]] = None,
+                 progress_bar: bool = False,
                  **kwargs) -> List[Dict[str, DataType]]:
         if mem is None:
             mem = []
 
-        ep_iter = tqdm(range(n_episodes), desc='Collecting Samples')
-        if type(seed) is int:
-            seed = [seed for _ in range(n_episodes)]
-        elif seed is None:
-            seed = [None for _ in range(n_episodes)]
+        if progress_bar:
+            ep_iter = tqdm(range(n_episodes), desc='Collecting Samples')
+        else:
+            ep_iter = TqdmIterMock()
 
+        self.env.reset(seed=seed)
         while ep_iter.n < n_episodes:
             trajectories = collect_data(self.env, -1, self.policy)
             mem.extend(trajectories)
             ep_iter.n += len(trajectories)
             ep_iter.refresh()
+            self.env.reset()
 
         #for i_ep in ep_iter:
         #    traj_o, traj_a, traj_r, traj_term, traj_trunc, traj_mask = [], [], [], [], [], []

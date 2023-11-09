@@ -666,6 +666,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         losses = {}
         for level in range(self.levels):
             mask_lvl = compute_mask(targets[level]['terminal'])
+            #mask_lvl = torch.zeros_like(mask_lvl)
 
             if GlobalLogger.can_log('mask_model', self._current_train_step):
                 fig = plt.figure(figsize=(5, 5))

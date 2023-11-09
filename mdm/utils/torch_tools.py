@@ -243,7 +243,7 @@ class RunningMeanStd(torch.jit.ScriptModule):
         if mask is None:
             mask = torch.zeros_like(x)
         else:
-            mask = torch.flatten(mask, start_dim=0, end_dim=-(self._mean.ndim + 1))
+            mask = torch.flatten(mask, start_dim=0, end_dim=-(self._mean.ndim + 1)).detach()
         batch_mean = masked_mean(x, mask, dim=0)
         batch_var = masked_var(x, mask, dim=0)
 
@@ -962,8 +962,7 @@ class TanhBijector(torch.distributions.Transform):
         return torch.tanh(x)
 
     def _inverse(self, y):
-        # used torch.clamp before
-        y = torch.where((torch.abs(y) <= 1.0), torch.clamp(y, -0.99999997, 0.99999997), y)
+        y = torch.clamp(y, -0.99999997, 0.99999997)
         y = self.atanh(y)
         return y
 

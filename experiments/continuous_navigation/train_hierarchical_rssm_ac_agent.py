@@ -34,7 +34,7 @@ def main():
     parser.add_argument('-n_collect', type=int)
     args = parser.parse_args()
 
-    cfg = load_yaml(here() / 'cfg_rssm_train.yaml')
+    cfg = load_yaml(here() / 'cfg_simple_rssm_train.yaml')
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
     if args.d_batch:
@@ -99,9 +99,11 @@ def main():
     collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['trainer']['collect_envs'],
                                             worker=vec_env_worker_no_auto_reset)
     collect_env = CacheLastStepVecEnv(collect_env)
+    #collect_env = CacheLastStepEnv(make_env_fn())
     eval_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['eval']['eval_envs'],
                                          worker=vec_env_worker_no_auto_reset)
     eval_env = CacheLastStepVecEnv(eval_env)
+    #eval_env = CacheLastStepEnv(make_env_fn())
     video_env = gym.make(cfg['env_name'], render_mode='rgb_array')
     video_env = gym.wrappers.RescaleAction(video_env, min_action=-1.0, max_action=1.0)
 
@@ -122,7 +124,7 @@ def main():
         case 'random':
             print('collecting initial random trajectories...', flush=True)
             collect_driver = GymEpisodeDriver(collect_env, lambda *x: collect_env.action_space.sample())
-            collect_driver.interact(cfg['prefill_episodes'], train_mem)
+            collect_driver.interact(cfg['prefill_episodes'], train_mem, progress_bar=True)
         case False:
             print('starting with empty training memory...', flush=True)
     train_driver = OfflineRLDriver(train_mem, sampling_type=SamplingType.RANDOM)
@@ -133,7 +135,7 @@ def main():
     else:
         policy = get_expert_policy(cfg['env_name'], fallback_policy=lambda *x: collect_env.action_space.sample())
         collect_driver = GymEpisodeDriver(collect_env, policy)
-        collect_driver.interact(100, test_mem)
+        collect_driver.interact(100, test_mem, progress_bar=True)
     test_driver = OfflineRLDriver(test_mem, sampling_type=SamplingType.RANDOM)
 
     # fig, ani = visualize_trajectory(train_mem[0])
@@ -147,21 +149,27 @@ def main():
         agent.eval()
         collect_env.reset()
         policy = LatentAgentPolicy(agent, model, explore=explore)
-        collected_data_trajectories = collect_data(collect_env, -1, policy)
-        train_mem.extend(collected_data_trajectories)
+        d = GymEpisodeDriver(collect_env, policy)
+        d.interact(10, train_mem)
+        #collected_data_trajectories = collect_data(collect_env, -1, policy)
+        #train_mem.extend(collected_data_trajectories)
 
     def collect_fn(explore: bool):
         agent = r_max_agents[0][0]
         agent.eval()
         collect_env.reset()
         policy = LatentAgentPolicy(agent, model, explore=explore)
-        collected_data_trajectories = collect_data(collect_env, -1, policy)
-        train_mem.extend(collected_data_trajectories)
+        #collected_data_trajectories = collect_data(collect_env, -1, policy)
+        #train_mem.extend(collected_data_trajectories)
+        #train_mem.extend(collected_data_trajectories)
+        d = GymEpisodeDriver(collect_env, policy)
+        d.interact(10, train_mem)
 
-        collect_env.reset()
-        agent_eval_mode(r_max_agents + goal_seeking_agents)
-        policy = HierarchicalLatentAgentPolicy(model, explore=explore)
-        collected_data_trajectories = collect_data(collect_env, -1, policy)
+        #collect_env.reset()
+        #agent_eval_mode(r_max_agents + goal_seeking_agents)
+        #policy = HierarchicalLatentAgentPolicy(model, explore=explore)
+        #collected_data_trajectories = collect_data(collect_env, -1, policy)
+        #train_mem.extend(collected_data_trajectories)
         # visualize_trajectory(collected_data_trajectories[0])
 
         """
@@ -203,7 +211,6 @@ def main():
             logger.log_plot(fig_to_img(fig), Scope.TEST() / f'model/latent_state_pca')
         """
 
-        train_mem.extend(collected_data_trajectories)
 
     print('Starting Training')
     # with torch.autograd.detect_anomaly(check_nan=True):
