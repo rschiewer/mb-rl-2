@@ -226,25 +226,6 @@ class ActorCriticAgent(torch.nn.Module):
             self.eps.copy_(self.eps * self.eps_mul)
             self.eps.copy_(torch.max(self.eps, self.eps_min))
 
-    """
-    def scale_to_a_interval(self, action):
-        # if self.min_a is not None and self.max_a is not None:
-        #    action = clip_but_pass_gradient(action, self.min_a + self.min_float, self.max_a - self.min_float)
-        # action = torch.clamp(action, -1.0 + self.min_float, 1.0 - self.min_float)
-        if self.min_a is not None and self.max_a is not None:
-            action = action * (self.max_a - self.min_a) / 2 + (self.min_a + self.max_a) / 2
-        # if self.min_a is not None and self.max_a is not None:
-        #    action = torch.clamp(action, self.min_a + self.min_float, self.max_a - self.min_float)
-        return action
-
-    def scale_to_unit_interval(self, action):
-        if self.min_a is not None and self.max_a is not None:
-            action = 2 * (action - (self.min_a + self.max_a) / 2) / (self.max_a - self.min_a)
-        # stability reasons
-        # action = torch.clamp(action, -1.0 + self.min_float, 1.0 - self.min_float)
-        return action
-    """
-
     def _a_dist_params(self,
                        o: torch.Tensor):
         mu = self.actor_net(o)
@@ -292,7 +273,6 @@ class ActorCriticAgent(torch.nn.Module):
 
         clipped = torch.clamp(s, -1.0 + 1e-6, 1.0 - 1e-6)
         s = clipped.detach() + s - s.detach()
-        s = torch.tanh(s)
 
         return s
 
