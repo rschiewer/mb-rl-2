@@ -327,6 +327,86 @@ class MLPEncoder(InputEncoder):
         return self._mdl(o)
 
 
+class GaussianEncoder(InputEncoder):
+
+    def __init__(self,
+                 s_x_orig: Union[int, Sequence[int]],
+                 d_x_encoded: int,
+                 lws: Sequence[int],
+                 activation: str,
+                 layer_norm: bool,
+                 epsilon: float,
+                 **kwargs):
+        super(GaussianEncoder, self).__init__(s_x_orig, d_x_encoded)
+        lws = (np.prod(s_x_orig).item(), *lws, d_x_encoded * 2)
+        self._mdl = torch.nn.Sequential(lwa(lws, activation, layer_norm=layer_norm, name='gaussian_encoder'))
+        self.epsilon = epsilon
+
+    def forward(self, o: torch.Tensor,
+                sample: bool = True):
+        o = torch.flatten(o, start_dim=-len(self.s_x_orig))
+        params = self._mdl(o)
+        mu, logvar = torch.tensor_split(params, 2, dim=-1)
+        sigma = torch.nn.functional.softplus(logvar) + self.epsilon
+        d = torch.stack([mu, sigma], dim=-1)
+        if sample:
+            s = self.sample(d)
+        else:
+            s = self.mean(d)
+        return d, s
+
+    @torch.jit.ignore
+    def dist(self,
+             parameters: torch.Tensor) -> torch.distributions.Distribution:
+        mu, sigma = parameters.unbind(-1)
+        d = torch.distributions.Normal(loc=mu, scale=sigma)
+        d = torch.distributions.Independent(d, 1)
+        return d
+
+    @torch.jit.ignore
+    def sample(self,
+               parameters):
+        mu, sigma = parameters.unbind(-1)
+        d = torch.distributions.Normal(loc=mu, scale=sigma)
+        d = torch.distributions.Independent(d, 1)
+        s = d.rsample()
+        return s
+
+    @torch.jit.ignore
+    def mean(self,
+             parameters):
+        mu, sigma = parameters.unbind(-1)
+        return mu
+
+
+class SquashedGaussianEncoder(GaussianEncoder):
+
+    @torch.jit.ignore
+    def dist(self,
+             parameters: torch.Tensor) -> torch.distributions.Distribution:
+        mu, sigma = parameters.unbind(-1)
+        d = torch.distributions.Normal(loc=mu, scale=sigma)
+        d = torch.distributions.TransformedDistribution(d, [TanhBijector()])
+        d = torch.distributions.Independent(d, 1)
+        return d
+
+    @torch.jit.ignore
+    def sample(self,
+               parameters):
+        mu, sigma = parameters.unbind(-1)
+        d = torch.distributions.Normal(loc=mu, scale=sigma)
+        d = torch.distributions.TransformedDistribution(d, [TanhBijector()])
+        d = torch.distributions.Independent(d, 1)
+        s = d.rsample()
+        return s
+
+    @torch.jit.ignore
+    def mean(self,
+             parameters):
+        mu, sigma = parameters.unbind(-1)
+        return torch.nn.functional.tanh(mu)
+
+
 class OutputDecoder(torch.nn.Module, ABC):
 
     def __init__(self, s_x_orig: Union[int, Sequence[int]], d_x_encoded: int):
@@ -476,7 +556,6 @@ class BinomialDecoder(OutputDecoder):
             # s = d.mean
             s = self.mode(params)
             # s = d.params.round().to(torch.float32) + d.params - d.params.detach()
-
         return d, s
         # d = torch.distributions.Bernoulli(logits=params)
         # if sample:
@@ -509,7 +588,7 @@ class BinomialDecoder(OutputDecoder):
              parameters):
         # mode member of torch Bernoulli class intentionally returns nan for 0.5 probabilities, so we avoid using it
         probs = torch.nn.functional.sigmoid(parameters)
-        mode = (probs >= 0.5).to(probs) + probs - probs.detach()
+        mode = (probs >= 0.5).to(probs)# + probs - probs.detach()
         #d = torch.distributions.ContinuousBernoulli(probs=parameters)
         #d = torch.distributions.Bernoulli(logits=parameters)
         #s = d.mode + parameters - parameters.detach()
@@ -738,6 +817,33 @@ class PickOneUpwardsFilter(UpwardsFilter):
 
         return x_filtered
 
+
+class AutoencodingUpwardsFilter(UpwardsFilter):
+
+    def __init__(self,
+                 window_size: int,
+                 encoder: InputEncoder,
+                 decoder: OutputDecoder):
+        super(AutoencodingUpwardsFilter, self).__init__(window_size)
+        self.encoder = encoder
+        self.decoder = decoder
+
+    def forward(self,
+                x: torch.Tensor,
+                mask: Optional[torch.Tensor] = None,
+                context: Optional[torch.Tensor] = None,
+                window_size: Optional[int] = None) -> torch.Tensor:
+        x_padded, mask, n_pad = self._preproc(x=x, mask=mask, window_size=window_size)
+        x_permuted = torch.permute(x_padded, (0, 2, 1, 3))
+        _, x_enc = self.encoder(x_permuted, sample=False)
+        return x_enc
+
+    def train_step(self,
+                   x: torch.Tensor,
+                   mask: Optional[torch.Tensor] = None,
+                   context: Optional[torch.Tensor] = None,
+                   window_size: Optional[int] = None) -> torch.Tensor:
+        pass
 
 class LearnableUpwardsFilter(UpwardsFilter):
 
@@ -1049,12 +1155,14 @@ class RSSMCell(torch.nn.Module):
 
     def _lstm_forward(self,
                       inp: torch.Tensor,
-                      last_rnn_state: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        h, c = last_rnn_state.unbind(-1)
+                      last_det_state: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        h, c = last_det_state.unbind(-1)
         h_next, c_next = [], []
+        inp_layer = inp
         for i_l, layer in enumerate(self._lstm):
             h_layer, c_layer = h[:, i_l], c[:, i_l]
-            h_layer_next, c_layer_next = layer(inp, (h_layer, c_layer))
+            h_layer_next, c_layer_next = layer(inp_layer, (h_layer, c_layer))
+            inp_layer = h_layer_next
             h_next.append(h_layer_next)
             c_next.append(c_layer_next)
         h_next = torch.stack(h_next, 1)
@@ -1130,6 +1238,8 @@ class RSSMCell(torch.nn.Module):
                 last_state: Optional[RSSMStateType] = None,
                 use_posterior: bool = True,
                 sample_state: bool = True) -> RSSMStateType:
+        if torch.any(a > 1.0) or torch.any(a < -1.0):
+            raise ValueError('Found invalid actions outside of [-1, 1] interval')
         # if o is None and last_state is None:
         #    raise ValueError('Need at least "o" or "last_state"')
         # if o is None and use_posterior:
