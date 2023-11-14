@@ -588,7 +588,7 @@ class BinomialDecoder(OutputDecoder):
              parameters):
         # mode member of torch Bernoulli class intentionally returns nan for 0.5 probabilities, so we avoid using it
         probs = torch.nn.functional.sigmoid(parameters)
-        mode = (probs >= 0.5).to(probs)# + probs - probs.detach()
+        mode = (probs >= 0.5).to(probs) + probs - probs.detach()
         #d = torch.distributions.ContinuousBernoulli(probs=parameters)
         #d = torch.distributions.Bernoulli(logits=parameters)
         #s = d.mode + parameters - parameters.detach()
@@ -843,7 +843,12 @@ class AutoencodingUpwardsFilter(UpwardsFilter):
                    mask: Optional[torch.Tensor] = None,
                    context: Optional[torch.Tensor] = None,
                    window_size: Optional[int] = None) -> torch.Tensor:
-        pass
+        x_padded, mask, n_pad = self._preproc(x=x, mask=mask, window_size=window_size)
+        x_permuted = torch.permute(x_padded, (0, 2, 1, 3))
+        x_enc_dist, x_enc = self.encoder(x_permuted, sample=False)
+        x_rec_dist, x_rec = self.act_dec(x_enc)
+        x_rec_permuted = torch.permute(x_rec, (1, 0, 2))
+        raise NotImplementedError('has to be finished')
 
 class LearnableUpwardsFilter(UpwardsFilter):
 
