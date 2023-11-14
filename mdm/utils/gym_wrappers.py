@@ -284,6 +284,9 @@ def vec_env_worker_no_auto_reset(index, env_fn, pipe, parent_pipe, shared_memory
                 )
     except (KeyboardInterrupt, Exception):
         error_queue.put((index,) + sys.exc_info()[:2])
-        pipe.send((None, False))
+        try:
+            pipe.send((None, False))
+        except BrokenPipeError:
+            pass
     finally:
         env.close()
