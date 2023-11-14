@@ -22,7 +22,7 @@ from mdm.memory.trajectory_memory import flatten_and_unsqueeze
 from mdm.models.building_blocks import *
 # from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.logging.logger import Logger, Scope
-from mdm.utils.torch_tools import unsqueeze_right, stack_if_list
+from mdm.utils.torch_tools import compute_mask, unsqueeze_right, stack_if_list
 
 SliceType = TypeVar("SliceType", bound=Sequence)
 BasicDtype = TypeVar('BasicDtype', int, float, np.single, np.double, bool)
@@ -331,14 +331,23 @@ def join_trajectories(t1: Dict[str, np.ndarray], t2: Dict[str, np.ndarray]):
     return joined
 
 
-def trajectories_from_simulation(model_mem: Dict[str, List[torch.Tensor]]):
+def trajectories_from_simulation(model_mem: Dict[str, List[torch.Tensor]],
+                                 model: 'HierarchicalRSSM' = None,
+                                 level: int = 0):
     n_trajs = model_mem['o'][0].shape[0]
     if isinstance(model_mem['o'], list):  # time dimension is list
-        trajs = {k: torch.stack(model_mem[k]).detach().cpu().numpy() for k in ('o', 'a', 'r', 'terminal')}
+        trajs = {k: torch.stack(model_mem[k]) for k in ('o', 'a', 'r', 'terminal')}
     else:  # time dimension is tensor
-        trajs = {k: model_mem[k].detach().cpu().numpy() for k in ('o', 'a', 'r', 'terminal')}
+        trajs = {k: model_mem[k] for k in ('o', 'a', 'r', 'terminal')}
 
-    trajs = [{k: v[:, i] for k, v in trajs.items()} for i in range(n_trajs)]
+    if level > 0:
+        reconstr_goal = model.rssm_modules[level - 1].decode(trajs['o'], sample=False, reconstruct_observation=True)
+        trajs['o'] = reconstr_goal['o']
+        # to make reconstructed traj fit the original traj
+        n_repeat = model.strides[level]
+        trajs = {k: torch.repeat_interleave(v, n_repeat, dim=0) for k, v in trajs.items()}
+
+    trajs = [{k: v[:, i].detach().cpu().numpy() for k, v in trajs.items()} for i in range(n_trajs)]
     return trajs
 
 
@@ -460,6 +469,31 @@ def valid_subtrajectories(data: Dict[str, torch.Tensor],
         ret_data[k] = v_new.swapaxes(0, 1)
 
     return ret_data
+
+
+def add_no_ops(data: List[Dict[str, np.ndarray]],
+               chunk_length: int):
+    new_data = []
+    for traj in data:
+        traj_end = np.logical_or(traj['terminal'], traj['truncated'])
+        t_end = np.nonzero(traj_end)[0][0] + 1  # take first true terminal or truncated flag
+        overhang = t_end % chunk_length
+        n_pad = chunk_length - overhang
+        new_traj = {}
+        if n_pad > 0:
+            padding_timesteps = np.random.randint(1, t_end, size=(n_pad,))  # choose n_pad random time steps for padding
+            padding_timesteps = np.sort(padding_timesteps)[::-1]  # sort in reverse order
+            for t_pad in padding_timesteps:
+                # repeat previous observation, reward, terminal and truncated
+                for x in ('o', 'r', 'terminal', 'truncated'):
+                    new_traj[x] = np.concatenate([traj[x][:t_pad], traj[x][None, t_pad - 1], traj[x][t_pad:]], axis=0)
+                # add zero action
+                new_traj['a'] = np.concatenate([traj['a'][:t_pad], np.zeros_like(traj['a'][None, t_pad]),
+                                                traj['a'][t_pad:]], axis=0)
+        else:
+            new_traj = {k: np.copy(v) for k, v in traj.items()}
+        new_data.append(new_traj)
+    return new_data
 
 
 def valid_subtrajectories_unbiased_fast(data: Dict[str, torch.Tensor],
@@ -1022,6 +1056,28 @@ def extend_memory(memory: Dict[str, Sequence[Any]],
         data.extend(list(v))
         memory[k] = data
     return memory
+
+
+def get_base_env(env: gym.Env):
+    core_env = env.unwrapped
+    if getattr(core_env, 'is_vector_env', False):
+        env_creating_fn = core_env.env_fns[0]
+        dummy_env = env_creating_fn()
+    else:
+        dummy_env = gym.make(core_env.spec)
+    return dummy_env
+
+
+def env_class_is(env: gym.Env, other):
+    base_env = get_base_env(env)
+    if isinstance(other, str):
+        return base_env.spec.id == other
+    elif isinstance(other, gym.envs.registration.EnvSpec):
+        return base_env.spec.id == other.id
+    elif isinstance(other, gym.Env):
+        return base_env.spec.id == other.spec.id
+    else:
+        return isinstance(base_env, other)
 
 
 def numpyfy(x: torch.Tensor | List[torch.Tensor] | Tuple[torch.Tensor],
