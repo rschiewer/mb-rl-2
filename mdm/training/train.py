@@ -7,8 +7,6 @@ import time
 from math import floor, ceil
 from itertools import chain
 
-
-
 import gym_nav2d.envs
 import numpy as np
 import torch
@@ -29,11 +27,8 @@ from mdm.models.building_blocks import *
 from mdm.policies.predefined_policy import PredefinedPolicy
 from mdm.training.gym_driver import collect_data
 from mdm.utils.gym_wrappers import CacheLastStepEnv
-from mdm.utils.torch_tools import to_tensors, to_np, compute_mask, record_parameters
-from mdm.utils.utils import (prepare_data, TempFigure, trajectory_statistics, trajectories_from_simulation,
-                             anim_to_vid, rssm_states_seq_to_batch, log_params, InMemoryFile,
-                             fig_to_img, valid_subtrajectories, valid_subtrajectories_unbiased,
-                             valid_subtrajectories_unbiased_fast, valid_subtrajectories_2, append_memory, extend_memory)
+from mdm.utils.torch_tools import to_tensors, to_np, compute_mask, record_parameters, masked_mean
+from mdm.utils.utils import *
 from mdm.utils.gym_nav2d_tools import *
 
 
@@ -51,7 +46,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
 
     for i_step in tqdm(range(cfg['trainer']['n_train_steps']), desc='Training Progress'):
         batch = train_driver.interact(cfg['trainer']['d_batch'])
-        batch = to_tensors(batch, 'cuda')
+        batch = to_tensors(batch, device='cuda', padding='repeat')
         batch = prepare_data(batch)
 
         # _new_actor_params = np.sum(
@@ -63,7 +58,11 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
             # model_batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
             # model_batch = valid_subtrajectories_unbiased(batch, 15)
             # model_batch = valid_subtrajectories_unbiased_fast(batch, cfg['trainer']['subtrajectory_len'])
+            rand_number = random.randint(0, sys.maxsize)
+            random.seed(rand_number)
             model_batch = valid_subtrajectories_2(batch, cfg['trainer']['subtrajectory_len'])
+            random.seed(rand_number)
+            model_batch_2 = valid_subtrajectories_debug(batch, cfg['trainer']['subtrajectory_len'])
         else:
             model_batch = batch
 
@@ -73,14 +72,16 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
         # r_max_agents[0][1].zero_grad(set_to_none=True)
         # r_max_agents[0][2].zero_grad(set_to_none=True)
         if i_step < freeze_model:
-            train_losses, pred, targets, states_below = model.train_step(model_batch, opt_model,
-                                                                         model_steps=model_train_steps,
-                                                                         logger=logger)
+            train_losses, pred, targets = model.train_step(model_batch, opt_model,
+                                                           model_steps=model_train_steps,
+                                                           logger=logger)
         else:
-            train_losses, pred, targets, states_below = model.eval_step(model_batch, model_steps=model_train_steps,
-                                                                        force_warmup=[-1 for _ in
-                                                                                      range(model.levels)])
+            train_losses, pred, targets = model.eval_step(model_batch, model_steps=model_train_steps,
+                                                          force_warmup=[-1 for _ in
+                                                                        range(model.levels)])
             print('freezing model')
+        _, _, targets_2 = model.eval_step(model_batch_2, model_steps=model_train_steps,
+                                          force_warmup=[-1 for _ in model.rssm_modules])
 
         # all_losses = torch.stack([v for v in train_losses.values()]).mean()
         # make_dot(train_losses['o_0'], dict(model.named_parameters())).view()
@@ -106,9 +107,12 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
 
             for l in range(model.levels):
                 # use all time steps of teacher forcing rollout from model as starting point
-                start_state_lvl, start_state_mask = rssm_states_seq_to_batch(pred[l], targets[l]['terminal'])
+                start_state_lvl, start_state_mask = rssm_states_seq_to_batch(pred[l], targets[l]['mask'])
+                start_state_lvl_2, start_state_mask_2 = rssm_states_seq_to_batch(pred[l], targets_2[l]['mask'])
                 # prevent gradient flow into the start state
                 start_state_lvl = rssm_detach_state(*start_state_lvl)
+
+                assert torch.all(start_state_mask == start_state_mask_2)
 
                 # mask to eliminate training steps that start after an episode has already ended
 
@@ -116,17 +120,18 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 r_max_agent, r_max_actor_opt, r_max_critic_opt = model.r_max_agents[l]
                 abstract_level = l > 0
                 r_max_simulation = r_max_agent.act_in_sim(start_state_lvl, model, agent_model_steps[l],
+                                                          explore=True,
                                                           sample_states=sample_model, sample_actions=sample_agents,
-                                                          reconstruct=True)
+                                                          reconstruct=True, expl_noise=0.1)
                 r_max_losses = r_max_agent.update_step(r_max_simulation['agent'],
                                                        first_step_mask=start_state_mask.unsqueeze(0),
                                                        actor_optimizer=r_max_actor_opt,
                                                        critic_optimizer=r_max_critic_opt,
                                                        logger=logger)
 
-                #if i_step % cfg['trainer']['eval_interval'] == 0:
+                # if i_step % cfg['trainer']['eval_interval'] == 0:
                 #    plot_value_function(eval_env, model, r_max_agent, l, logger, i_step)
-                #if l > 0 and i_step % cfg['trainer']['eval_interval'] == 0:
+                # if l > 0 and i_step % cfg['trainer']['eval_interval'] == 0:
                 #    plot_goals(r_max_simulation, model, logger, i_step, l)
 
                 # action std
@@ -150,7 +155,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                         achieved_goals = model.filter_up(o=r_max_simulation['agent']['o_env_next'],
                                                          r=r_max_simulation['agent']['r'],
                                                          terminal=r_max_simulation['agent']['terminal'], level=l + 1,
-                                                         respect_terminal_flag=False)
+                                                         respect_mask=False)
                         chunk_size = model.strides[l + 1]
 
                         similarities = torch.zeros(len(r_max_simulation['agent']['o_env_next']),
@@ -387,7 +392,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
 
                         goal_simulation = goal_agent.act_in_sim(start_state, model, n_steps[i_goal], gsa_goals,
                                                                 sample_states=True, sample_actions=sample_agents,
-                                                                disable_exploration=False, reconstruct=True)
+                                                                explore=True, reconstruct=True)
                         agent_mem = goal_simulation['agent']
                         # agent_mem['o'].append(torch.zeros_like(agent_mem['o'][0]))
                         # agent_mem['r'].append(torch.zeros_like(agent_mem['r'][0]))
@@ -436,13 +441,11 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 batch = to_tensors(trajs_orig, model.device, padding='repeat')
                 batch = prepare_data(batch)
                 eval_steps = [-1] + cfg['trainer']['model_train_steps'][1:]
-                eval_losses, pred, targets, _ = model.eval_step(batch, model_steps=eval_steps, sample_state=False,
-                                                                sample_output=False,
-                                                                force_warmup=[-1 for _ in range(model.levels)])
+                eval_losses, pred, targets = model.eval_step(batch, model_steps=eval_steps, sample_state=False,
+                                                             sample_output=False,
+                                                             force_warmup=[-1 for _ in range(model.levels)])
                 logger.log(to_np(eval_losses), Scope.TEST(), i_step)
-
-                # test various model prediction lengths
-                log_prediction_error_plot(batch, cfg, i_step, logger, model, pred, targets)
+                log_prediction_error_plot(batch, cfg, i_step, logger, model)
 
                 if len(model.goal_seeking_agents) > 0 and isinstance(eval_env.env_fns[0]().unwrapped,
                                                                      gym_nav2d.envs.Nav2dEnv):
@@ -477,7 +480,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                     tmp_file_name = f'.{pid}_{timestamp}_agent_video.mp4'
 
                     clip = mp.VideoFileClip(video_path)
-                    #clip = clip.resize(width=80)
+                    # clip = clip.resize(width=80)
                     clip.write_videofile(tmp_file_name, preset='veryslow', verbose=False, logger=None)
                     try:
                         os.remove(video_path)  # delete original video file
@@ -578,7 +581,8 @@ def plot_goal_conditioned_value_function(eval_env, model, agent, level, logger, 
                                          sample_state=False, sample_output=False,
                                          force_warmup=[-1 for _ in range(model.levels)])
     s_embeddings = torch.stack(pred_grid[level]['s_embedding']).flatten(start_dim=0, end_dim=-2)
-    fig, axes = plt.subplots(n_rows, n_cols, subplot_kw={"projection": "3d", 'computed_zorder': False}, figsize=(10, 10))
+    fig, axes = plt.subplots(n_rows, n_cols, subplot_kw={"projection": "3d", 'computed_zorder': False},
+                             figsize=(10, 10))
     for ax in axes.ravel():
         i_goal = np.random.randint(s_embeddings.shape[0])
         ax.set_xlim([-1.1, 1.1])
@@ -624,7 +628,7 @@ def plot_goals(r_max_simulation, model, logger, i_step, l):
         # add reward location for reference
         ax.scatter(0, 0, label='reward', marker='x', c='red', s=45, alpha=0.2)
     plt.tight_layout()
-    #plt.show()
+    # plt.show()
 
     logger.log_plot(fig_to_img(fig),
                     Scope.TRAIN() / f'r_max_agent/{l}/goal_seeking_train_performance',
@@ -665,7 +669,7 @@ def nav2d_gsa_plot(cfg, eval_env, eval_steps, i_step, logger, model, train_drive
         # state = rssm_remove_labels({k: pred[0][k][i_state] for k in rssm_state_keys()})
         n_steps = np.minimum(total_steps_remaining, chunk_size)
         simulation = gsa.act_in_sim(env_start_state=state, sim_env=model, n_steps=n_steps, goal=goal,
-                                    sample_actions=False, disable_exploration=True, sample_states=False,
+                                    sample_actions=False, explore=False, sample_states=False,
                                     agent_memory=gsa_agent_mem)
         state = simulation['model_state']
         total_steps_remaining -= chunk_size
@@ -807,7 +811,7 @@ def update_model_chunk_distance(i_step, l, logger, model, r_max_simulation):
         chunk_size = model.strides[l + 1]
         goals = model.filter_up(o=r_max_simulation['model']['z'], r=r_max_simulation['model']['r'],
                                 terminal=r_max_simulation['model']['terminal'], level=l + 1,
-                                respect_terminal_flag=True)
+                                respect_mask=True)
         goals_mask = compute_mask(goals['terminal'])
         goals_mask = torch.maximum(goals_mask[:-1], goals_mask[1:])  # need valid start _and_ end goal
         goals_distance = torch.abs(goals['o'][:-1] - goals['o'][1:])
@@ -823,33 +827,68 @@ def update_model_chunk_distance(i_step, l, logger, model, r_max_simulation):
         logger.log(to_np(chunk_dist_stats), Scope.TRAIN() / f'model/{l}/average_chunk_length/', i_step)
 
 
-def log_prediction_error_plot(batch, cfg, i_step, logger, model, pred, targets):
+def log_prediction_error_plot(batch, cfg, i_step, logger, model):
     traj_len = 20
+    rand_number = random.randint(0, sys.maxsize)
+    random.seed(rand_number)
     trunc_test_batch = valid_subtrajectories_2(batch, traj_len)
+
+    # testing
+    random.seed(rand_number)
+    trunc_test_batch_2 = valid_subtrajectories_2(batch, traj_len)
+    random.seed(rand_number)
+    trunc_test_batch_3 = valid_subtrajectories_debug(batch, traj_len)
+    for k, v in trunc_test_batch.items():
+        assert torch.all(v == trunc_test_batch_2[k])
+        if k != 'terminal':
+            assert torch.all(v == trunc_test_batch_3[k])
+        else:
+            assert not torch.all(v == trunc_test_batch_3[k])
+    # testing end
+
     eval_steps = [-1] + cfg['trainer']['model_train_steps'][1:]
-    measurements = [{'o': [], 'r': [], 'terminal': [], 'n_warmup': []} for _ in range(model.levels)]
+    measurements = [{'o': [], 'r': [], 'terminal': [], 'n_warmup': [], 'perc_valid': None} for _ in range(model.levels)]
     for n_wu in range(1, traj_len, 3):
-        eval_losses, pred, targets, _ = model.eval_step(trunc_test_batch, model_steps=eval_steps,
+        eval_losses, pred, targets = model.eval_step(trunc_test_batch, model_steps=eval_steps,
+                                                     sample_state=False, sample_output=False,
+                                                     force_warmup=[n_wu for _ in range(model.levels)])
+        eval_losses2, pred2, targets2 = model.eval_step(trunc_test_batch_2, model_steps=eval_steps,
                                                         sample_state=False, sample_output=False,
                                                         force_warmup=[n_wu for _ in range(model.levels)])
+        for k, v in pred[0].items():
+            assert torch.all(torch.stack(v) == torch.stack(pred2[0][k])), f'mismatch in {k}'
+        for k, v in targets[0].items():
+            assert torch.all(v == targets2[0][k])
+
+
         for l in range(model.levels):
-            valid = 1 - compute_mask(targets[l]['terminal'])
-            denom = torch.sum(valid, dim=[1, 2]).to(torch.float32)
-            denom = torch.where(denom == 0, 1.0, denom)
-            denom_multidim = torch.sum(valid.repeat(1, 1, pred[l]['o'][0].shape[-1]), dim=[1, 2]).to(torch.float32)
-            denom_multidim = torch.where(denom_multidim == 0, 1.0, denom)
+            mask = compute_mask(targets[l]['terminal'])
+            mask_2 = compute_mask(targets2[l]['terminal'])
+
+            assert torch.all(mask == mask_2)
+
+            assert l == 0, 'Not implemented for hierarchical model'
+            mask = trunc_test_batch['mask']
 
             o_diff = torch.abs(torch.stack(pred[l]['o']) - targets[l]['o'])
-            o_diff = (o_diff * valid).sum(dim=[1, 2]) / denom_multidim
+            o_diff = masked_mean(o_diff, mask, dim=[1, 2])
             r_diff = torch.abs(torch.stack(pred[l]['r']) - targets[l]['r'])
-            r_diff = (r_diff * valid).sum(dim=[1, 2]) / denom
+            r_diff = masked_mean(r_diff, mask, dim=[1, 2])
             term_diff = torch.abs(torch.stack(pred[l]['terminal']) - targets[l]['terminal'])
-            term_diff = (term_diff * valid).sum(dim=[1, 2]) / denom
+            term_diff = masked_mean(term_diff, mask, dim=[1, 2])
+            term_diff_2 = torch.abs(torch.stack(pred2[l]['terminal']) - targets2[l]['terminal'])
+            term_diff_2 = masked_mean(term_diff_2, mask_2, dim=[1, 2])
+
 
             measurements[l]['n_warmup'].append(n_wu)
             measurements[l]['o'].append(o_diff.detach().cpu().numpy())
             measurements[l]['r'].append(r_diff.detach().cpu().numpy())
             measurements[l]['terminal'].append(term_diff.detach().cpu().numpy())
+
+    # get percentage of valid trajectories per time step
+    for l in range(model.levels):
+        perc_valid = (1 - targets[l]['mask']).mean(dim=1).squeeze().detach().cpu().numpy()
+        measurements[l]['perc_valid'] = perc_valid
 
     for l in range(model.levels):
         warmup_steps = measurements[l]['n_warmup']
@@ -859,14 +898,19 @@ def log_prediction_error_plot(batch, cfg, i_step, logger, model, pred, targets):
         with TempFigure(figsize=(13, 4)) as fig:
             for diff, title, pos in zip([o_diff, r_diff, term_diff], ('o', 'r', 'terminal'), (1, 2, 3)):
                 time_steps = list(range(len(diff[0])))
-                ax = fig.add_subplot(1, 3, pos, projection='3d')
+                ax = fig.add_subplot(1, 3, pos, projection='3d', computed_zorder=False)
                 ax.set_title(f'Prediction MAE {title}')
                 ax.set_xlabel('Time')
                 ax.set_ylabel('Warmup Steps')
                 ax.set_zlabel('Prediction MAE')
                 ax.set_xticks(time_steps[::2])
                 ax.set_yticks(warmup_steps)
+                ax.grid(which='major', linewidth=2.0)
+                ax.grid(which='minor', linewidth=0.5)
                 ax.invert_yaxis()
+                # plot percentage of valid trajectories in the background first
+                ax.bar(left=time_steps, height=np.ones_like(time_steps), zs=0, zdir='y', color='lightgrey', alpha=0.7)
+                ax.bar(left=time_steps, height=measurements[l]['perc_valid'], zs=0, zdir='y', color='grey', alpha=0.7)
                 for i_run, n_wu in enumerate(warmup_steps):
                     y_coord = [n_wu for _ in time_steps]
                     z_coord = diff[i_run]
@@ -877,8 +921,8 @@ def log_prediction_error_plot(batch, cfg, i_step, logger, model, pred, targets):
                     y_coord = [n_wu for _ in time_steps]
                     z_coord = diff[i_run]
                     ax.plot(time_steps, y_coord, z_coord, linewidth=2)
-            plt.tight_layout()
-            # plt.show()
+                plt.tight_layout()
+            #plt.show()
             logger.log_plot(fig_to_img(fig), Scope.TEST() / f'model/{l}/prediction_error', i_step)
 
 
@@ -937,10 +981,9 @@ def build_agents(cfg: dict,
 
     def gen_agent_fn(level: int, goal_seeking: bool, cfg) -> (
             ActorCriticAgent, torch.optim.Optimizer, torch.optim.Optimizer):
-        agent = ActorCriticAgent(level=level, observation_key='z', goal_seeking=goal_seeking, **cfg)
+        agent = ActorCriticAgent(level=level, observation_key=None, goal_seeking=goal_seeking, **cfg)
         agent = agent.to(device)
-        actor_params = chain.from_iterable([agent.actor_net.parameters(), agent.actor_net_sigma.parameters()])
-        actor_optimizer = torch.optim.Adam(actor_params, lr=cfg['lr_actor'])
+        actor_optimizer = torch.optim.Adam(agent.actor_net.parameters(), lr=cfg['lr_actor'])
         critic_optimizer = torch.optim.Adam(agent.critic_net.parameters(), lr=cfg['lr_critic'])
         return agent, actor_optimizer, critic_optimizer
 

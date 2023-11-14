@@ -692,6 +692,37 @@ def valid_subtrajectories_2(data: Dict[str, torch.Tensor],
     return ret_data
 
 
+def valid_subtrajectories_debug(data: Dict[str, torch.Tensor],
+                                length: int,
+                                make_shorter_if_required: bool = True):
+    if not make_shorter_if_required:
+        assert length < data['o'].shape[0]
+    else:
+        length = min(data['o'].shape[0], length)
+
+    n_trajs = data['o'].shape[1]
+
+    ret_data = {}
+    for k, v in data.items():
+        if k in ['mask', 'terminal']:
+            empty = torch.ones(length, n_trajs, *v.shape[2:], device=v.device, dtype=v.dtype)
+        else:
+            empty = torch.zeros(length, n_trajs, *v.shape[2:], device=v.device, dtype=v.dtype)
+        ret_data[k] = empty
+
+    for i_traj in range(n_trajs):
+        traj_len = (1 - data['mask'][:, i_traj]).sum().detach().cpu().numpy()
+        i_start = random.randint(- length + 1, traj_len - 1)
+        i_end = i_start + length
+        # clamp to obtain only valid trajectories
+        i_start = np.maximum(0, i_start).astype(int)
+        i_end = np.minimum(i_end, traj_len).astype(int)
+        for k, v in data.items():
+            ret_data[k][0: i_end - i_start, i_traj] = v[i_start:i_end, i_traj]
+
+    return ret_data
+
+
 """
 def subtrajectories(mem: List[Dict[str, DataType]],
                     length: int):
@@ -1036,7 +1067,7 @@ def random_walk_success_rate(env: gym.Env,
 
 
 def rssm_states_seq_to_batch(mem: Dict[str, List[torch.Tensor]],
-                             terminal_flags: List[torch.Tensor] | torch.Tensor,
+                             mask: List[torch.Tensor] | torch.Tensor,
                              i_start: int = 0,
                              i_end: int = None):
     if i_end is None:
@@ -1044,17 +1075,8 @@ def rssm_states_seq_to_batch(mem: Dict[str, List[torch.Tensor]],
 
     states = {k: v[i_start: i_end] for k, v in mem.items() if k in rssm_state_keys()}
     states = rssm_state_seq_to_batch(**states)
-    # states = (torch.concat(states['z'], dim=0), torch.concat(states['z_prior'], dim=0),
-    #          torch.concat(states['z_post'], dim=0), torch.concat(states['rnn_state'], dim=0))
-
-    # we can inject terminal flags from target data which are already stacked, so we use this convenience wrapper
-    terminal = stack_if_list(terminal_flags)
-    mask = compute_mask(terminal)  # take all terminal flags to compute maskt to not miss terminals before i_start
-    mask = mask[i_start:i_end]
-    #mask2 = torch.concat(mask.unbind(0), dim=0)
+    mask = stack_if_list(mask[i_start:i_end])
     mask = mask.reshape(mask.shape[0] * mask.shape[1], 1)
-
-    #assert torch.abs(mask - mask2).sum() < 0.01
 
     return states, mask
 
@@ -1107,3 +1129,13 @@ def extend_memory(memory: Dict[str, Sequence[Any]],
         data.extend(list(v))
         memory[k] = data
     return memory
+
+
+def numpyfy(x: torch.Tensor | List[torch.Tensor] | Tuple[torch.Tensor],
+            squeeze: bool = True):
+    if isinstance(x, (list, tuple)):
+        x = torch.stack(list(x))
+    x = x.detach().cpu().numpy()
+    if squeeze:
+        x = x.squeeze()
+    return x

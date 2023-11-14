@@ -567,7 +567,7 @@ class BinomialDecoder(OutputDecoder):
     @torch.jit.ignore
     def dist(self,
              parameters: torch.Tensor) -> torch.distributions.Distribution:
-        #d = torch.distributions.ContinuousBernoulli(probs=parameters)
+        #d = torch.distributions.ContinuousBernoulli(logits=parameters)
         d = torch.distributions.Bernoulli(logits=parameters)
         d = torch.distributions.Independent(d, 1)
         return d
@@ -575,7 +575,7 @@ class BinomialDecoder(OutputDecoder):
     @torch.jit.ignore
     def sample(self,
                parameters):
-        #d = torch.distributions.ContinuousBernoulli(probs=parameters)
+        #d = torch.distributions.ContinuousBernoulli(logits=parameters)
         d = torch.distributions.Bernoulli(logits=parameters)
         d = torch.distributions.Independent(d, 1)
         #s = d.rsample()
@@ -589,10 +589,11 @@ class BinomialDecoder(OutputDecoder):
         # mode member of torch Bernoulli class intentionally returns nan for 0.5 probabilities, so we avoid using it
         probs = torch.nn.functional.sigmoid(parameters)
         mode = (probs >= 0.5).to(probs) + probs - probs.detach()
-        #d = torch.distributions.ContinuousBernoulli(probs=parameters)
+        #d = torch.distributions.ContinuousBernoulli(logits=parameters)
         #d = torch.distributions.Bernoulli(logits=parameters)
         #s = d.mode + parameters - parameters.detach()
         #s = d.mode
+        #mode = probs
         # s = d.sample() + parameters - parameters.detach()
         return mode
 

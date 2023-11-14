@@ -1,6 +1,6 @@
 ---
 neptune_cfg: "../neptune_settings.yaml"
-env_name: "HalfCheetah-v4" #"dm_control/cheetah-run-v0"# "gym_nav2d:nav2dEasySparse-v0" #"HalfCheetah-v4"#"InvertedPendulum-v4" #"gym_nav2d:nav2dEasySparse-v0" #"gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-v0"
+env_name: "InvertedPendulum-v4" #"dm_control/cheetah-run-v0"# "gym_nav2d:nav2dEasySparse-v0" #"HalfCheetah-v4"#"InvertedPendulum-v4" #"gym_nav2d:nav2dEasySparse-v0" #"gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-v0"
 prefill_memory: "random" #"offline-dataset" # "random", False
 prefill_episodes: 100
 train_samples: null #"nav2d_Easy_train.samples" #"nav2d_Easy_train.samples"
@@ -68,12 +68,12 @@ optim:
    lr: 0.0002 #0.0002
 
 trainer:
-   n_train_steps: 15000
+   n_train_steps: 6000
    freeze_model: False
    stop_collect: False
    eval_interval: 50
    d_batch: 512
-   subtrajectory_len: 40
+   subtrajectory_len: 50
    collect_envs: 5
    collect_interval: 50
    agent_train_interval: 1
@@ -88,15 +88,15 @@ agents:
       # level 0
       -  observation_type: 's_embedding'
          eps_exploration_init: 0.9
-         eps_exploration_coeff: 0.998
-         eps_exploration_min: 0.10
-         act_entropy_exploration_coeff: 0.001
+         eps_exploration_coeff: 0.9992
+         eps_exploration_min: 0.05
+         act_entropy_exploration_coeff: 0.01
          learn_act_entropy_exploration_coeff: False
          novelty_exploration_coeff: 0.0
          tr_policy_kl_coeff: 0.1
          ema_update_coeff: 0.95
-         lr_actor: 0.0002
-         lr_critic: 0.0004
+         lr_actor: 0.0001
+         lr_critic: 0.0002
          min_a: <infer>
          max_a: <infer>
          min_scale: 0.1

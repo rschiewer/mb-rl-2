@@ -103,7 +103,7 @@ mdm:
          #   activation: "relu"
          #   model_type: "det_tanh"
          r:
-            class: "AvgUpwardsFilter"
+            class: "SumUpwardsFilter"  # sum makes resulting reward invariant w.r.t. chunk size for incomplete chunks
             window_size: 4
          terminal:
             class: "MaxUpwardsFilter"

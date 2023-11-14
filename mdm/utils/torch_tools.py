@@ -228,7 +228,7 @@ class RunningMeanStd(torch.jit.ScriptModule):
                   mean: torch.Tensor,
                   var: torch.Tensor):
         s_orig = x.shape
-        x_flat = torch.flatten(x, start_dim=0, end_dim=-(self._mean.ndim + 1))
+        x_flat = x.reshape(-1, *self._mean.shape)
         x_flat = (x_flat - mean.unsqueeze(0)) / var.unsqueeze(0)
         x = x_flat.reshape(s_orig)
         return x
@@ -239,11 +239,11 @@ class RunningMeanStd(torch.jit.ScriptModule):
                x: torch.Tensor,
                mask: Optional[torch.Tensor] = None):
         x = x.detach()
-        x = torch.flatten(x, start_dim=0, end_dim=-(self._mean.ndim + 1))
+        x = x.reshape(-1, *self._mean.shape)
         if mask is None:
             mask = torch.zeros_like(x)
         else:
-            mask = torch.flatten(mask, start_dim=0, end_dim=-(self._mean.ndim + 1)).detach()
+            mask = mask.reshape(-1, *self._mean.shape)
         batch_mean = masked_mean(x, mask, dim=0)
         batch_var = masked_var(x, mask, dim=0)
 
@@ -689,7 +689,6 @@ def pack_rnn_state(rnn_state: RnnStateType):
         return torch.stack([rnn_state.transpose(0, 1)], dim=-2)
 
 
-@torch.compile(disable=disable_torch_compile)
 def to_tensors(mem: List[Dict[str, int | float | np.single | np.double | bool | np.ndarray]],
                device: torch.device,
                dtypes: Union[List, Tuple] = None,
@@ -734,10 +733,13 @@ def to_tensors(mem: List[Dict[str, int | float | np.single | np.double | bool | 
                 cont[fid][flens[i]:, i] = cont[fid][flens[i] - 1, i].unsqueeze(0)
 
     # mask for longest field per trajectory (valid for o, a, r, term, trunc but not for higher level a)
+    #if padding is None:
     cont['mask'] = torch.full((max(longest.values()), n_traj), fill_value=True, dtype=torch.float32, device=device)
     for i in range(n_traj):
         longest_field = max([x[i] for x in lengths.values()])
         cont['mask'][0:longest_field, i] = False
+    #else:
+    #    cont['mask'] = torch.full((max(longest.values()), n_traj), fill_value=False, dtype=torch.float32, device=device)
 
     return cont
 
@@ -784,7 +786,7 @@ def masked_mean(x: torch.Tensor,
                 dim: int | Tuple[int] | List[int] | None = None,
                 keepdim: bool = False
                 ):
-    #assert x.shape[:mask.squeeze().ndim] == mask.squeeze().shape, 'Leading dimensions of x and mask mismatch'
+    # assert x.shape[:mask.squeeze().ndim] == mask.squeeze().shape, 'Leading dimensions of x and mask mismatch'
     valid = 1 - mask.to(dtype=torch.float32)
     valid = unsqueeze_right(valid, x)
     valid = valid.expand_as(x)
@@ -857,7 +859,7 @@ def compute_mask(terminals: Union[List[torch.Tensor], torch.Tensor],
         #                   torch.tensor(1.0, device=terminals.device, dtype=terminals.dtype),
         #                   torch.tensor(0.0, device=terminals.device, dtype=terminals.dtype))
 
-        #if disable:
+        # if disable:
         #    mask = torch.zeros_like(mask)
 
         return mask.detach()
@@ -1103,3 +1105,112 @@ def plot_grad_flow(named_parameters):
                 Line2D([0], [0], color="b", lw=4),
                 Line2D([0], [0], color="k", lw=4)], ['max-gradient', 'mean-gradient', 'zero-gradient'])
     plt.tight_layout()
+
+
+class Moments(torch.nn.Module):
+
+    def __init__(self, impl='mean_std', decay=0.99, max=1e8, eps=0.0, perclo=5, perchi=95):
+        super().__init__()
+        self.impl = impl
+        self.decay = torch.tensor(decay, dtype=torch.float32)
+        self.max = torch.tensor(max, dtype=torch.float32)
+        self.eps = torch.tensor(eps, dtype=torch.float32)
+        self.perclo = torch.tensor(perclo / 100, dtype=torch.float32)
+        self.perchi = torch.tensor(perchi / 100, dtype=torch.float32)
+        if self.impl == 'off':
+            pass
+        elif self.impl == 'mean_std':
+            self.step = torch.nn.parameter.Parameter(torch.tensor(0.0, dtype=torch.float32), requires_grad=False)
+            self.mean = torch.nn.parameter.Parameter(torch.tensor(0.0, dtype=torch.float32), requires_grad=False)
+            self.sqrs = torch.nn.parameter.Parameter(torch.tensor(0.0, dtype=torch.float32), requires_grad=False)
+        elif self.impl == 'min_max':
+            self.low = torch.nn.parameter.Parameter(torch.tensor(0.0, dtype=torch.float32), requires_grad=False)
+            self.high = torch.nn.parameter.Parameter(torch.tensor(0.0, dtype=torch.float32), requires_grad=False)
+        elif self.impl == 'perc_ema':
+            self.low = torch.nn.parameter.Parameter(torch.tensor(0.0, dtype=torch.float32), requires_grad=False)
+            self.high = torch.nn.parameter.Parameter(torch.tensor(0.0, dtype=torch.float32), requires_grad=False)
+        elif self.impl == 'perc_ema_corr':
+            self.step = torch.nn.parameter.Parameter(torch.tensor(0.0, dtype=torch.float32), requires_grad=False)
+            self.low = torch.nn.parameter.Parameter(torch.tensor(0.0, dtype=torch.float32), requires_grad=False)
+            self.high = torch.nn.parameter.Parameter(torch.tensor(0.0, dtype=torch.float32), requires_grad=False)
+        elif self.impl == 'mean_mag':
+            self.mag = torch.nn.parameter.Parameter(torch.tensor(0.0, dtype=torch.float32), requires_grad=False)
+        elif self.impl == 'max_mag':
+            self.mag = torch.nn.parameter.Parameter(torch.tensor(0.0, dtype=torch.float32), requires_grad=False)
+        else:
+            raise NotImplementedError(self.impl)
+
+    def __call__(self, x):
+        self.update(x)
+        return self.stats()
+
+    def update(self, x):
+        mean = torch.mean
+        min_ = torch.min
+        max_ = torch.max
+        per = torch.quantile  # was percentile
+
+        x = x.detach().to(torch.float32)
+        m = self.decay
+
+        if self.impl == 'off':
+            pass
+        elif self.impl == 'mean_std':
+            self.step.copy_(self.step + 1)
+            self.mean.copy_(m * self.mean + (1 - m) * mean(x))
+            self.sqrs.copy_(m * self.sqrs + (1 - m) * mean(x * x))
+        elif self.impl == 'min_max':
+            low, high = min_(x), max_(x)
+            self.low.copy_(m * torch.minimum(self.low, low) + (1 - m) * low)
+            self.high.copy_(m * torch.maximum(self.high, high) + (1 - m) * high)
+        elif self.impl == 'perc_ema':
+            low, high = per(x, self.perclo), per(x, self.perchi)
+            self.low.copy_(m * self.low + (1 - m) * low)
+            self.high.copy_(m * self.high + (1 - m) * high)
+        elif self.impl == 'perc_ema_corr':
+            self.step.copy_(self.step + 1)
+            low, high = per(x, self.perclo), per(x, self.perchi)
+            self.low.copy_(m * self.low + (1 - m) * low)
+            self.high.copy_(m * self.high + (1 - m) * high)
+        elif self.impl == 'mean_mag':
+            curr = mean(torch.abs(x))
+            self.mag.copy_(m * self.mag + (1 - m) * curr)
+        elif self.impl == 'max_mag':
+            curr = max_(torch.abs(x))
+            self.mag.copy_(m * torch.maximum(self.mag, curr) + (1 - m) * curr)
+        else:
+            raise NotImplementedError(self.impl)
+
+    def stats(self):
+        if self.impl == 'off':
+            return 0.0, 1.0
+        elif self.impl == 'mean_std':
+            corr = 1 - self.decay ** self.step.to(torch.float32)
+            mean = self.mean / corr
+            var = (self.sqrs / corr) - self.mean ** 2
+            std = torch.sqrt(torch.maximum(var, 1 / self.max ** 2) + self.eps)
+            return mean.detach(), std.detach()
+        elif self.impl == 'min_max':
+            offset = self.low
+            invscale = torch.maximum(1 / self.max, self.high - self.low)
+            return offset.detach(), invscale.detach()
+        elif self.impl == 'perc_ema':
+            offset = self.low
+            invscale = torch.maximum(1 / self.max, self.high - self.low)
+            return offset.detach(), invscale.detach()
+        elif self.impl == 'perc_ema_corr':
+            corr = 1 - self.decay ** self.step.to(torch.float32)
+            lo = self.low / corr
+            hi = self.high / corr
+            invscale = torch.maximum(1 / self.max, hi - lo)
+            return lo.detach(), invscale.detach()
+        elif self.impl == 'mean_mag':
+            offset = torch.tensor(0.0).to(dtype=torch.float32, device=self.max.device)
+            invscale = torch.maximum(1 / self.max, self.mag)
+            return offset.detach(), invscale.detach()
+        elif self.impl == 'max_mag':
+            offset = torch.tensor(0.0).to(dtype=torch.float32, device=self.max.device)
+            invscale = torch.maximum(1 / self.max, self.mag)
+            return offset.detach(), invscale.detach()
+        else:
+            raise NotImplementedError(self.impl)
