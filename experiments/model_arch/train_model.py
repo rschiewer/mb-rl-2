@@ -3,7 +3,7 @@ import argparse
 import neptune
 from tqdm import tqdm
 
-from mdm.training.train import build_rssms, build_model_opt
+from mdm.utils.build_models import build_model_opt, build_rssms
 #from mdm.utils.gym_nav2d_tools import visualize_overlaid_trajectories
 from mdm.utils.utils import *
 from mdm.utils.torch_tools import to_np, to_tensors

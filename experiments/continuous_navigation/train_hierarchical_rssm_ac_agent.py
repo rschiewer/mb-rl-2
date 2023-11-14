@@ -8,7 +8,8 @@ import neptune
 import numpy as np
 from torch.profiler import profile, record_function, ProfilerActivity
 
-from mdm.training.train import train_model, agent_eval_mode, build_rssms, build_agents, build_model_opt
+from mdm.training.train import train_model, agent_eval_mode
+from mdm.utils.build_models import build_model_opt, build_rssms, build_agents
 from mdm.utils.utils import *
 from mdm.training.offline_rl_driver import OfflineRLDriver, SamplingType
 from mdm.logging.neptune_logger import NeptuneLogger
@@ -34,7 +35,7 @@ def main():
     parser.add_argument('-n_collect', type=int)
     args = parser.parse_args()
 
-    cfg = load_yaml(here() / 'cfg_simple_rssm_train.yaml')
+    cfg = load_yaml(here() / 'cfg_rssm_train.yaml')
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
     if args.d_batch:

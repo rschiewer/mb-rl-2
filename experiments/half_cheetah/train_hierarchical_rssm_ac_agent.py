@@ -6,7 +6,8 @@ import gym.vector
 import envpool
 import neptune
 
-from mdm.training.train import train_model, agent_eval_mode, build_rssms, build_agents, build_model_opt
+from mdm.training.train import train_model, agent_eval_mode
+from mdm.utils.build_models import build_model_opt, build_rssms, build_agents
 from mdm.utils.gym_wrappers import CacheLastStepVecEnvPool
 from mdm.utils.utils import *
 from mdm.training.offline_rl_driver import OfflineRLDriver, SamplingType
