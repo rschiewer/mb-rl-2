@@ -13,7 +13,7 @@ import numpy as np
 from mdm.utils.torch_tools import (layers_with_activation as lwa, get_dist_params,
                                    sample_from_categorical, ManagedStatefulTrainingModule, detach_dist, concat_dists,
                                    disable_torch_compile, stack_tensor_dicts, concat_tensor_dicts,
-                                   CustomGRUCell, unsqueeze_right)
+                                   CustomGRUCell, unsqueeze_right, masked_mean, TanhBijector)
 from torch.profiler import record_function
 from mdm.models.fastrnns import LayerNormLSTMCell
 
@@ -541,33 +541,18 @@ class BinomialDecoder(OutputDecoder):
         params = self._mdl(x_enc)
         s_new = params.shape[:-1] + self.s_x_orig
         params = params.reshape(s_new)
-        #params = torch.nn.functional.sigmoid(params)
+        # params = torch.nn.functional.sigmoid(params)
         d = params
-        # d = torch.distributions.ContinuousBernoulli(params=params)
-        # d = torch.distributions.Bernoulli(params=params)
-        # d = torch.distributions.Independent(d, 1)
-        # temp = torch.tensor(0.1, dtype=x_enc.dtype, device=x_enc.device)
-        # d = torch.distributions.RelaxedBernoulli(temperature=temp, params=params)
         if sample:
             s = self.sample(params)
-            # s = d.sample()
-            # s = d.sample() + params - params.detach()
         else:
-            # s = d.mean
             s = self.mode(params)
-            # s = d.params.round().to(torch.float32) + d.params - d.params.detach()
         return d, s
-        # d = torch.distributions.Bernoulli(logits=params)
-        # if sample:
-        #    s = d.sample() + d.params - d.params.detach()
-        # else:
-        #    s = torch.argmax(d.params).round().to(torch.float32) + d.params - d.params.detach()
-        # return d, s
 
     @torch.jit.ignore
     def dist(self,
              parameters: torch.Tensor) -> torch.distributions.Distribution:
-        #d = torch.distributions.ContinuousBernoulli(logits=parameters)
+        # d = torch.distributions.ContinuousBernoulli(logits=parameters)
         d = torch.distributions.Bernoulli(logits=parameters)
         d = torch.distributions.Independent(d, 1)
         return d
@@ -575,10 +560,10 @@ class BinomialDecoder(OutputDecoder):
     @torch.jit.ignore
     def sample(self,
                parameters):
-        #d = torch.distributions.ContinuousBernoulli(logits=parameters)
+        # d = torch.distributions.ContinuousBernoulli(logits=parameters)
         d = torch.distributions.Bernoulli(logits=parameters)
         d = torch.distributions.Independent(d, 1)
-        #s = d.rsample()
+        # s = d.rsample()
         probs = torch.nn.functional.sigmoid(parameters)
         s = d.sample() + probs - probs.detach()
         return s
@@ -589,11 +574,11 @@ class BinomialDecoder(OutputDecoder):
         # mode member of torch Bernoulli class intentionally returns nan for 0.5 probabilities, so we avoid using it
         probs = torch.nn.functional.sigmoid(parameters)
         mode = (probs >= 0.5).to(probs) + probs - probs.detach()
-        #d = torch.distributions.ContinuousBernoulli(logits=parameters)
-        #d = torch.distributions.Bernoulli(logits=parameters)
-        #s = d.mode + parameters - parameters.detach()
-        #s = d.mode
-        #mode = probs
+        # d = torch.distributions.ContinuousBernoulli(logits=parameters)
+        # d = torch.distributions.Bernoulli(logits=parameters)
+        # s = d.mode + parameters - parameters.detach()
+        # s = d.mode
+        # mode = probs
         # s = d.sample() + parameters - parameters.detach()
         return mode
 
@@ -634,7 +619,8 @@ class UpwardsFilter(torch.nn.Module):
                  x: torch.Tensor,
                  mask: Optional[torch.Tensor] = None,
                  pad_value: float = 0,
-                 window_size: Optional[int] = None) -> Tuple[torch.Tensor, torch.Tensor, int]:
+                 window_size: Optional[int] = None,
+                 assert_binary_mask: bool = False) -> Tuple[torch.Tensor, torch.Tensor, int]:
         d_time, d_batch = x.shape[:2]
         if window_size is None:
             window_size = self.window_size
@@ -646,8 +632,9 @@ class UpwardsFilter(torch.nn.Module):
 
         if mask is None:
             mask = torch.zeros(d_time, d_batch, 1, dtype=torch.bool, device=x.device)
-        else:
-            assert mask.dtype == torch.bool, 'Need binary mask with bool dtype'
+        elif assert_binary_mask:
+            assert torch.allclose(torch.round(mask), mask), 'Binary mask required for this filter'
+            mask = mask.to(torch.bool)
 
         if n_pad > 0:
             pad_shp = list(x.shape)
@@ -668,7 +655,7 @@ class UpwardsFilter(torch.nn.Module):
                 mask: torch.Tensor | None = None,
                 context: torch.Tensor | None = None,
                 window_size: int | None = None) -> torch.Tensor:
-        x, mask, n_pad = self._preproc(x=x, mask=mask, window_size=window_size)
+        x, mask, n_pad = self._preproc(x=x, mask=mask, window_size=window_size, assert_binary_mask=False)
         return x
 
 
@@ -679,7 +666,7 @@ class SumUpwardsFilter(UpwardsFilter):
                 mask: torch.Tensor | None = None,
                 context: torch.Tensor | None = None,
                 window_size: int | None = None) -> torch.Tensor:
-        x, mask, _ = self._preproc(x, mask, 0.0, window_size)
+        x, mask, _ = self._preproc(x, mask, 0.0, window_size, assert_binary_mask=False)
         x = torch.sum(x * (1 - mask), dim=1)
         return x
 
@@ -691,7 +678,7 @@ class AvgUpwardsFilter(UpwardsFilter):
                 mask: Optional[torch.Tensor] = None,
                 context: Optional[torch.Tensor] = None,
                 window_size: Optional[int] = None) -> torch.Tensor:
-        x, mask, n_pad = self._preproc(x, mask, 0.0, window_size)
+        x, mask, n_pad = self._preproc(x, mask, 0.0, window_size, assert_binary_mask=False)
         nom = torch.sum(x * ~mask, dim=1)
         denom = torch.sum(~mask, dim=1).to(torch.float32)
         denom = torch.where(denom == 0, 1.0, denom)
@@ -709,7 +696,7 @@ class MaxUpwardsFilter(UpwardsFilter):
                 mask: Optional[torch.Tensor] = None,
                 context: Optional[torch.Tensor] = None,
                 window_size: Optional[int] = None) -> torch.Tensor:
-        x_rs, mask_rs, n_pad = self._preproc(x, mask, 0.0, window_size)
+        x_rs, mask_rs, n_pad = self._preproc(x, mask, 0.0, window_size, assert_binary_mask=True)
         x_rs = torch.where(mask_rs, -torch.inf, x_rs)
         x_rs = torch.max(x_rs, dim=1).values
         x_rs = torch.where(x_rs == -torch.inf, 0.0, x_rs)
@@ -726,7 +713,7 @@ class MinUpwardsFilter(UpwardsFilter):
                 mask: Optional[torch.Tensor] = None,
                 context: Optional[torch.Tensor] = None,
                 window_size: Optional[int] = None) -> torch.Tensor:
-        x, mask, n_pad = self._preproc(x, mask, 0.0, window_size)
+        x, mask, n_pad = self._preproc(x, mask, 0.0, window_size, assert_binary_mask=True)
         x = torch.where(mask, torch.inf, x)
         x = torch.min(x, dim=1).values
         x = torch.where(x == torch.inf, 0.0, x)
@@ -771,9 +758,8 @@ class PickOneUpwardsFilter(UpwardsFilter):
                 mask: Optional[torch.Tensor] = None,
                 context: Optional[torch.Tensor] = None,
                 window_size: Optional[int] = None) -> torch.Tensor:
-        x, mask, n_pad = self._preproc(x, mask, 0.0, window_size)
+        x, mask, n_pad = self._preproc(x, mask, 0.0, window_size, assert_binary_mask=True)
         n_chunks, d_chunk, d_batch = x.shape[:3]
-        # x_filtered_2 = self._check_slow(x, mask)
 
         if self.offset < 0:
             tmp_offset = d_chunk + self.offset
@@ -822,34 +808,61 @@ class PickOneUpwardsFilter(UpwardsFilter):
 class AutoencodingUpwardsFilter(UpwardsFilter):
 
     def __init__(self,
+                 s_x_orig: Tuple[int],
+                 d_x_enc: int,
                  window_size: int,
-                 encoder: InputEncoder,
-                 decoder: OutputDecoder):
+                 encoder_lws: List[int],
+                 decoder_lws: List[int],
+                 activation: str,
+                 layer_norm: bool):
         super(AutoencodingUpwardsFilter, self).__init__(window_size)
-        self.encoder = encoder
-        self.decoder = decoder
+        self.encoder = SquashedGaussianEncoder(s_x_orig=s_x_orig, d_x_encoded=d_x_enc, lws=encoder_lws,
+                                               activation=activation, layer_norm=layer_norm, epsilon=0.1)
+        self.decoder = MLPDecoder(s_x_orig=s_x_orig, d_x_encoded=d_x_enc, lws=decoder_lws, activation=activation,
+                                  layer_norm=layer_norm, final_activation='tanh')
+        self.mask_filter = MaxUpwardsFilter(window_size=window_size)
 
     def forward(self,
                 x: torch.Tensor,
                 mask: Optional[torch.Tensor] = None,
                 context: Optional[torch.Tensor] = None,
                 window_size: Optional[int] = None) -> torch.Tensor:
-        x_padded, mask, n_pad = self._preproc(x=x, mask=mask, window_size=window_size)
+        assert window_size in (self.window_size, None), 'Dynamic window size not supported by this class'
+        x_padded, mask, n_pad = self._preproc(x=x, mask=mask, pad_value=0.0, assert_binary_mask=True)
         x_permuted = torch.permute(x_padded, (0, 2, 1, 3))
         _, x_enc = self.encoder(x_permuted, sample=False)
         return x_enc
 
-    def train_step(self,
-                   x: torch.Tensor,
-                   mask: Optional[torch.Tensor] = None,
-                   context: Optional[torch.Tensor] = None,
-                   window_size: Optional[int] = None) -> torch.Tensor:
-        x_padded, mask, n_pad = self._preproc(x=x, mask=mask, window_size=window_size)
+    def eval_step(self,
+                  x: torch.Tensor,
+                  mask: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
+        if mask is None:
+            mask_x_enc = self.mask_filter(torch.zeros_like(x)[:, :, 0].unsqueeze(-1))
+        else:
+            mask_x_enc = self.mask_filter(mask).detach()
+
+        x_padded, _, _ = self._preproc(x=x, mask=mask)
         x_permuted = torch.permute(x_padded, (0, 2, 1, 3))
-        x_enc_dist, x_enc = self.encoder(x_permuted, sample=False)
-        x_rec_dist, x_rec = self.act_dec(x_enc)
-        x_rec_permuted = torch.permute(x_rec, (1, 0, 2))
-        raise NotImplementedError('has to be finished')
+        x_enc_dist_params, x_enc = self.encoder(x_permuted, sample=True)
+        x_enc_dist = self.encoder.dist(x_enc_dist_params)
+        _, x_rec = self.decoder(x_enc)
+        x_rec_permuted = torch.permute(x_rec, (0, 2, 1, 3))
+        x_rec_rs = x_rec_permuted.reshape(x_rec_permuted.shape[0] * x_rec_permuted.shape[1],
+                                          x_rec_permuted.shape[2], x_rec_permuted.shape[3])
+        x_rec_final = x_rec_rs[:len(x)]
+
+        recon_loss = torch.abs(x - x_rec_final) ** 2
+        recon_loss = masked_mean(recon_loss, mask)
+
+        reg_dist = torch.distributions.Normal(loc=torch.zeros_like(x_enc), scale=torch.ones_like(x_enc))
+        kl_loss = torch.distributions.kl_divergence(x_enc_dist.base_dist.base_dist, reg_dist)
+        kl_loss = kl_loss.sum(dim=-1, keepdim=True)
+        kl_loss = masked_mean(kl_loss, mask_x_enc)
+
+        total = recon_loss + kl_loss
+
+        return {'total': total, 'recon': recon_loss, 'kl': kl_loss}
+
 
 class LearnableUpwardsFilter(UpwardsFilter):
 
@@ -1005,11 +1018,11 @@ class RSSMCell(torch.nn.Module):
         # if latent_dist != 'normal':
         #    raise NotImplementedError('Check z_dist, z_dist_params, z_sample and z_mode methods first!')
 
-        #if latent_dist == 'normal':
+        # if latent_dist == 'normal':
         #    assert o_decoder.d_x_encoded == d_z + d_h
         #    assert r_decoder.d_x_encoded == d_z + d_h
         #    assert term_decoder.d_x_encoded == d_z + d_h
-        #elif latent_dist == 'categorical':
+        # elif latent_dist == 'categorical':
         #    assert o_decoder.d_x_encoded == d_z * n_latent_categories + d_h
         #    assert r_decoder.d_x_encoded == d_z * n_latent_categories + d_h
         #    assert term_decoder.d_x_encoded == d_z * n_latent_categories + d_h
