@@ -197,7 +197,7 @@ class ActorCriticAgent(torch.nn.Module):
                 timestep = {  # 'o_env': last_env_state[0],
                     # 'o_env_next': current_env_state[0],
                     # 'goal': goal,
-                    'o': self.o_from_state(current_env_state), #agent_o,  # self.o_from_state(current_env_state), #agent_o,
+                    'o': self.fuse_o_with_goal(current_env_state, goal), #agent_o,  # self.o_from_state(current_env_state), #agent_o,
                     'a': a,
                     'r': r,
                     # 'r_raw': pred['r'],

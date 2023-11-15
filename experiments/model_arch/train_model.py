@@ -3,7 +3,7 @@ import argparse
 import neptune
 from tqdm import tqdm
 
-from mdm.utils.build_models import build_model_opt, build_rssms
+from mdm.utils.build_models import build_model_opt, build_rssms, cfg_infer_missing_values
 #from mdm.utils.gym_nav2d_tools import visualize_overlaid_trajectories
 from mdm.utils.utils import *
 from mdm.utils.torch_tools import to_np, to_tensors
@@ -16,7 +16,6 @@ from mdm.policies.agent_policy import *
 from mdm.policies.expert_policies import get_expert_policy
 
 import gym
-import d4rl_pybullet
 
 
 def convert_offline_env(dataset_env):

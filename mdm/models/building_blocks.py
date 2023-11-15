@@ -631,9 +631,11 @@ class UpwardsFilter(torch.nn.Module):
             n_pad = window_size - overhang
 
         if mask is None:
-            mask = torch.zeros(d_time, d_batch, 1, dtype=torch.bool, device=x.device)
-        elif assert_binary_mask:
-            assert torch.allclose(torch.round(mask), mask), 'Binary mask required for this filter'
+            mask = torch.zeros(d_time, d_batch, 1, dtype=torch.float32, device=x.device)
+
+        if assert_binary_mask:
+            assert torch.allclose(mask.to(torch.float32).round(),
+                                  mask.to(torch.float32)), 'Binary mask required for this filter'
             mask = mask.to(torch.bool)
 
         if n_pad > 0:

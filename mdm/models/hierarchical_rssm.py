@@ -51,9 +51,16 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
         lvl_k_link = 'o'  # only here to make the loop in eval_step() method work
         lvl_0_filters = {k: IdentityUpwardsFilter() for k in self._filter_names}
-        for level in upwards_filters:
+        for i_level, level in enumerate(upwards_filters):
             assert level.keys() <= set(self._filter_names), (f'Allowed filter names: {self._filter_names}, found'
                                                              f'filter names: {level.keys()}')
+            d_a_below = rssm_modules[i_level].d_a
+            d_a_above = rssm_modules[i_level + 1].d_a
+            window_size = level['o'].window_size
+            level['a'] = AutoencodingUpwardsFilter(s_x_orig=(window_size, d_a_below), d_x_enc=d_a_above,
+                                                   window_size=window_size, encoder_lws=[64, 64, 64],
+                                                   decoder_lws=[64, 64, 64],
+                                                   activation='relu', layer_norm=True)
             # window_size = level['o'].window_size
             # mask_and_action_filters = {'mask': MinUpwardsFilter(window_size), 'a': ConstUpwardsFilter(window_size, 0)}
             # level.update(mask_and_action_filters)
@@ -99,13 +106,13 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         self.avg_chunk_dist_mid = ModuleList([RunningMeanStd(shape=(mod.d_z,)) for mod in self.rssm_modules[:-1]])
         self.avg_chunk_dist_late = ModuleList([RunningMeanStd(shape=(mod.d_z,)) for mod in self.rssm_modules[:-1]])
 
-        if self.levels > 1:
-            self.act_enc = SquashedGaussianEncoder(s_x_orig=(self.strides[1], self.rssm_modules[0].d_a),
-                                                   d_x_encoded=self.rssm_modules[1].d_a, lws=[64, 64, 64],
-                                                   activation='relu', epsilon=0.1, layer_norm=True)
-            self.act_dec = MLPDecoder(s_x_orig=(self.strides[1], self.rssm_modules[0].d_a),
-                                      d_x_encoded=self.rssm_modules[1].d_a, lws=[64, 64, 64], activation='relu',
-                                      layer_norm=True, final_activation='tanh')
+        #if self.levels > 1:
+        #    self.act_enc = SquashedGaussianEncoder(s_x_orig=(self.strides[1], self.rssm_modules[0].d_a),
+        #                                           d_x_encoded=self.rssm_modules[1].d_a, lws=[64, 64, 64],
+        #                                           activation='relu', epsilon=0.1, layer_norm=True)
+        #    self.act_dec = MLPDecoder(s_x_orig=(self.strides[1], self.rssm_modules[0].d_a),
+        #                              d_x_encoded=self.rssm_modules[1].d_a, lws=[64, 64, 64], activation='relu',
+        #                              layer_norm=True, final_activation='tanh')
 
     @property
     def current_device(self):
@@ -393,6 +400,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
         if respect_mask:
             assert mask is not None
+            assert torch.allclose(torch.round(mask), mask), 'Mask seems to contain values other than 1.0 and 0.0'
         else:
             mask = None
 
@@ -401,11 +409,13 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             simulated_ground_truth['o'] = flt['o'](stack_if_list(o[:n_steps]), mask=mask,
                                                    window_size=window_size).detach()
         if a is not None:
-            a_orig = stack_if_list(a[:n_steps])
-            if level > 0:
-                simulated_ground_truth['a'] = self.actions_up(a_orig, level, mask=mask).detach()
-            else:
-                simulated_ground_truth['a'] = a_orig.detach()
+            simulated_ground_truth['a'] = flt['a'](stack_if_list(a[:n_steps]), mask=mask,
+                                                   window_size=window_size).detach()
+            #a_orig = stack_if_list(a[:n_steps])
+            #if level > 0:
+            #    simulated_ground_truth['a'] = self.actions_up(a_orig, level, mask=mask).detach()
+            #else:
+            #    simulated_ground_truth['a'] = a_orig.detach()
 
         if r is not None:
             simulated_ground_truth['r'] = flt['r'](stack_if_list(r[:n_steps]), mask=mask,
@@ -704,10 +714,9 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             loss_level = self.rssm_loss(pred[level], pred_ema[level], targets[level], targets[level]['mask'],
                                         self.kl_betas[level], self.kl_reg_betas[level], level)
             if level < self.levels - 1:
-                pass
                 # action autoencoder with static upfiltered trajectory data
-                # loss_act_autoenc = self.action_autoencoder_loss(targets[level]['a'], mask_lvl, level + 1)
-                # loss_level.update(loss_act_autoenc)
+                loss_act_autoenc = self.action_autoencoder_loss(targets[level]['a'], targets[level]['mask'], level + 1)
+                loss_level.update(loss_act_autoenc)
 
                 # loss_level['total_a_rec'] = a_rec_loss
                 # loss_level.update(agent_model_exploration_loss)
@@ -753,15 +762,21 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
     def action_autoencoder_loss(self,
                                 a_orig: torch.Tensor | List[torch.Tensor],
                                 mask: torch.Tensor,
-                                a_target_level: int,
+                                target_lvl: int,
                                 a_enc_targets: None | torch.Tensor | List[torch.Tensor] = None):
-        mask_next_level = MaxUpwardsFilter(self.strides[a_target_level])(mask).detach()
+        a_orig = stack_if_list(a_orig).detach()
+        losses = self.upwards_filters[target_lvl]['a'].eval_step(a_orig, mask=mask)
+        losses = {f'{k}_act_autoencoder': v for k, v in losses.items()}
+        return losses
+
+        # actually don't need to re-compute this but we just do it anyways
+        mask_next_level = MaxUpwardsFilter(self.strides[target_lvl])(mask).detach()
         valid = 1 - mask
         valid_next_level = 1 - mask_next_level
 
         # a_enc from filter_up was detached so we need to re-encode the original actions
         a_orig = stack_if_list(a_orig).detach()
-        a_reshaped = UpwardsFilter(self.strides[a_target_level])(a_orig)
+        a_reshaped = UpwardsFilter(self.strides[target_lvl])(a_orig)
         a_reshaped = torch.permute(a_reshaped, (0, 2, 1, 3))
         a_enc_dist, a_enc = self.act_enc(a_reshaped, sample=True)
         a_enc_dist = self.act_enc.dist(a_enc_dist)
@@ -778,7 +793,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         kl = torchd.kl_divergence(a_enc_dist.base_dist.base_dist, reg_dist)
         # we removed the Independent() wrapper from a_enc_dist and have to manualls sum over event dimension
         kl = kl.sum(dim=-1, keepdim=True)
-        a_kl_loss = masked_mean(kl, valid_next_level)
+        a_kl_loss = masked_mean(kl, mask_next_level)
 
         if a_enc_targets is not None:
             a_enc_targets = stack_if_list(a_enc_targets).detach()
