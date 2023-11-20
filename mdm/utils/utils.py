@@ -1088,3 +1088,10 @@ def numpyfy(x: torch.Tensor | List[torch.Tensor] | Tuple[torch.Tensor],
     if squeeze:
         x = x.squeeze()
     return x
+
+
+def prepare_env(env: gym.Env):
+    env = gym.wrappers.RescaleAction(env, min_action=-1.0, max_action=1.0)
+    if isinstance(env.observation_space, gym.spaces.dict.Dict):
+        env = gym.wrappers.FlattenObservation(env)
+    return env
