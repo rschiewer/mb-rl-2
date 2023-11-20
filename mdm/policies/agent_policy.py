@@ -9,7 +9,7 @@ from mdm.policies.policy import Policy
 from mdm.models.hierarchical_rssm import HierarchicalRSSM
 from mdm.utils.utils import prepare_data, append_memory, extend_memory
 from mdm.utils.torch_tools import unsqueeze_right, compute_mask
-from mdm.utils.gym_wrappers import CacheLastStepEnv, CacheLastStepVecEnv, CacheLastStepVecEnvPool
+from mdm.utils.gym_wrappers import CacheLastStepEnv, CacheLastStepVecEnv
 
 
 class AgentPolicy(Policy):
@@ -57,7 +57,7 @@ class LatentAgentPolicy(Policy):
         self.agent.eval()
 
         if env.current_step == 0:
-            if isinstance(env, (CacheLastStepVecEnv, CacheLastStepVecEnvPool)):
+            if isinstance(env, (CacheLastStepVecEnv)):
                 d_batch = env.last_o.shape[0]
             else:
                 d_batch = 1
@@ -293,6 +293,7 @@ class HierarchicalLatentAgentPolicy(Policy):
                     simulation = agent.act_in_sim(env_start_state=state, sim_env=self.model, n_steps=n_steps, goal=goal,
                                                   sample_actions=self.explore, explore=self.explore,
                                                   sample_states=self.sample_world_model, reconstruct=i_lvl > 0)
+                    #simulation['agent']['a'] = [torch.zeros_like(x) for x in simulation['agent']['a']]
                     state = simulation['model_state']
                     self.act_cache[i_lvl] += simulation['agent']['a']
                     self.action_history[i_lvl] += simulation['agent']['a']
@@ -377,7 +378,7 @@ class HierarchicalLatentAgentPolicy(Policy):
             if agent is not None:
                 agent[0].eval()
 
-        #if isinstance(env, (CacheLastStepVecEnv, CacheLastStepVecEnvPool)):
+        #if isinstance(env, (CacheLastStepVecEnv)):
         #    d_batch = env.last_o.shape[0]
         #else:
         #    d_batch = 1

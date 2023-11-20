@@ -1,4 +1,4 @@
-import gym
+import gymnasium as gym
 
 from mdm.policies.policy import Policy
 

@@ -4,7 +4,7 @@ from typing import Union, Iterable, Sequence
 from tkinter import Canvas, Tk, Toplevel
 from time import sleep
 
-import gym
+import gymnasium as gym
 import numpy as np
 
 

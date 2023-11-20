@@ -4,9 +4,6 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 from gymnasium.core import ObsType, ActType
-import envpool
-from envpool.python.gym_envpool import GymEnvPoolMeta
-from envpool.python.gymnasium_envpool import GymnasiumEnvPoolMeta
 from gymnasium.vector.utils import write_to_shared_memory
 import sys
 
@@ -142,6 +139,7 @@ class CacheLastStepVecEnv(gym.Wrapper):
         return None, None, None, None, None
 
 
+"""
 class CacheLastStepVecEnvPool:
 
     def __init__(self,
@@ -214,6 +212,7 @@ class CacheLastStepVecEnvPool:
 
         # return o, r, term, trunc, infos
         return None, None, None, None, None
+"""
 
 
 def vec_env_worker_no_auto_reset(index, env_fn, pipe, parent_pipe, shared_memory, error_queue):

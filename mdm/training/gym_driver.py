@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 from mdm.training.driver import Driver
 from mdm.policies.random_policy import RandomPolicy
-from mdm.utils.gym_wrappers import CacheLastStepEnv, CacheLastStepVecEnv, CacheLastStepVecEnvPool
+from mdm.utils.gym_wrappers import CacheLastStepEnv, CacheLastStepVecEnv
 
 DataType = TypeVar('DataType', np.ndarray, int, float, bool)
 
@@ -29,7 +29,7 @@ class GymEpisodeDriver(Driver):
                  env: CacheLastStepEnv | CacheLastStepVecEnv,
                  policy: Callable):
         super(GymEpisodeDriver, self).__init__()
-        if not isinstance(env, (CacheLastStepEnv, CacheLastStepVecEnv, CacheLastStepVecEnvPool)):
+        if not isinstance(env, (CacheLastStepEnv, CacheLastStepVecEnv)):
             raise ValueError(f'Provided environment needs to be wrapped in {CacheLastStepEnv.__class__} ',
                              f'or {CacheLastStepVecEnv.__class__}')
         self.env = env
@@ -70,10 +70,9 @@ class GymEpisodeDriver(Driver):
 
 def collect_data(env: Union[CacheLastStepEnv, CacheLastStepVecEnv], n_steps: int, policy: callable = None,
                  seed: int = None, options: dict = None):
-    if not isinstance(env, (CacheLastStepEnv, CacheLastStepVecEnv, CacheLastStepVecEnvPool)):
+    if not isinstance(env, (CacheLastStepEnv, CacheLastStepVecEnv)):
         print(f'Normal gym envs need to be wrapped in {CacheLastStepEnv.__class__.__name__} and ',
-              f'vectorized environments need to be wrapped in {CacheLastStepVecEnv.__class__.__name__}',
-              f' or {CacheLastStepVecEnvPool.__class__.__name__}')
+              f'vectorized environments need to be wrapped in {CacheLastStepVecEnv.__class__.__name__}')
 
     if policy is None:
         policy = RandomPolicy(env)
@@ -82,7 +81,7 @@ def collect_data(env: Union[CacheLastStepEnv, CacheLastStepVecEnv], n_steps: int
     if isinstance(env, CacheLastStepEnv):
         act_in_env(env, policy, n_steps, traj_o, traj_a, traj_r, traj_term, traj_trunc, traj_mask, seed=seed,
                    options=options)
-    elif isinstance(env, (CacheLastStepVecEnv, CacheLastStepVecEnvPool)):
+    elif isinstance(env, (CacheLastStepVecEnv)):
         act_in_vector_env(env, policy, n_steps, traj_o, traj_a, traj_r, traj_term, traj_trunc, traj_mask, seed=seed,
                           options=options)
 
@@ -102,7 +101,7 @@ def collect_data(env: Union[CacheLastStepEnv, CacheLastStepVecEnv], n_steps: int
         trunc = trunc[:, None]
         l_trajs = [l_trajs]
         n_trajs = 1
-    elif isinstance(env, (CacheLastStepVecEnv, CacheLastStepVecEnvPool)):
+    elif isinstance(env, (CacheLastStepVecEnv)):
         n_trajs = env.unwrapped.num_envs
 
     mem = []
