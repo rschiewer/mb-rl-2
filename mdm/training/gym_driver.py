@@ -51,6 +51,10 @@ class GymEpisodeDriver(Driver):
 
         self.env.reset(seed=seed)
         while ep_iter.n < n_episodes:
+            # reset stateful policy if possible
+            if hasattr(self.policy, 'reset'):
+                self.policy.reset()
+            # collect one trajectory or more if env is vectorized
             trajectories = collect_data(self.env, -1, self.policy)
             mem.extend(trajectories)
             ep_iter.n += len(trajectories)
@@ -101,7 +105,7 @@ def collect_data(env: Union[CacheLastStepEnv, CacheLastStepVecEnv], n_steps: int
         trunc = trunc[:, None]
         l_trajs = [l_trajs]
         n_trajs = 1
-    elif isinstance(env, (CacheLastStepVecEnv)):
+    elif isinstance(env, CacheLastStepVecEnv):
         n_trajs = env.unwrapped.num_envs
 
     mem = []
