@@ -5,7 +5,7 @@ import torch
 
 from mdm.models.hierarchical_rssm import HierarchicalRSSM
 from mdm.models.building_blocks import *
-from mdm.utils.utils import rssm_states_seq_to_batch
+from mdm.utils.utils import filter_mem_state_seq_to_batch
 from mdm.utils.torch_tools import stack_dists, masked_mean
 
 
@@ -88,7 +88,7 @@ class RSSMTest(unittest.TestCase):
         d_batch = 32
         seq = self._gen_seq(self.rssm_cell, d_batch, seq_len)
 
-        batched_seq, _ = rssm_states_seq_to_batch(mem=seq, rssm_instance=self.rssm_cell)
+        batched_seq, _ = filter_mem_state_seq_to_batch(mem=seq, rssm_instance=self.rssm_cell)
 
         # plt.matshow(batched_seq['z'])
         # plt.tight_layout()
@@ -107,7 +107,7 @@ class RSSMTest(unittest.TestCase):
         offset = 10
         seq = self._gen_seq(self.rssm_cell, d_batch, seq_len)
 
-        batched_seq, _ = rssm_states_seq_to_batch(mem=seq, rssm_instance=self.rssm_cell, i_end=-offset)
+        batched_seq, _ = filter_mem_state_seq_to_batch(mem=seq, rssm_instance=self.rssm_cell, i_end=-offset)
         self.assertEqual((seq_len - offset) * d_batch, batched_seq['z'].shape[0])
 
         for t in range(seq_len - offset):
@@ -123,7 +123,7 @@ class RSSMTest(unittest.TestCase):
         offset = 10
         seq = self._gen_seq(self.rssm_cell, d_batch, seq_len)
 
-        batched_seq, mask = rssm_states_seq_to_batch(mem=seq, rssm_instance=self.rssm_cell, i_end=-offset)
+        batched_seq, mask = filter_mem_state_seq_to_batch(mem=seq, rssm_instance=self.rssm_cell, i_end=-offset)
 
 
     def test_latent_overshooting(self):
@@ -132,7 +132,7 @@ class RSSMTest(unittest.TestCase):
         n_latent_steps = 10
         seq = self._gen_seq(self.rssm_cell, d_batch, seq_len)
 
-        start_states, _ = rssm_states_seq_to_batch(mem=seq, rssm_instance=self.rssm_cell, i_end=-n_latent_steps)
+        start_states, _ = filter_mem_state_seq_to_batch(mem=seq, rssm_instance=self.rssm_cell, i_end=-n_latent_steps)
         actions = torch.stack(seq['a'])
         terminals = torch.stack(seq['terminal'])
         zs = torch.stack(seq['z'])

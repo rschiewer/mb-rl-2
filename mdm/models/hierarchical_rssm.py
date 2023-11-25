@@ -18,7 +18,7 @@ from mdm.models.building_blocks import *
 from mdm.models.dynamics_model import DynamicsModel
 from mdm.policies.actor_critic_agent import ActorCriticAgent, calc_lambda_returns
 from mdm.utils.torch_tools import *
-from mdm.utils.utils import rssm_states_seq_to_batch, fig_to_img, append_memory, extend_memory, TempFigure, numpyfy
+from mdm.utils.utils import filter_mem_state_seq_to_batch, fig_to_img, append_memory, extend_memory, TempFigure, numpyfy
 from mdm.logging.logger import GlobalLogger, Scope
 from mdm.utils.gym_nav2d_tools import *
 
@@ -535,7 +535,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         return memory, memory_ema, targets
 
     def pessimistic_loss(self, memory, targets, level):
-        start_state, start_state_mask = rssm_states_seq_to_batch(memory[level], targets[level]['mask'])
+        start_state, start_state_mask = filter_mem_state_seq_to_batch(memory[level], targets[level]['mask'])
         start_state = rssm_detach_state(*start_state)
         rma, _, _ = self.r_max_agents[level]
         world = self.rssm_modules[level]
@@ -570,8 +570,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                                 level: int):
         # posterior start states for current level are in current level's predictions
         # posterior start states for level below are in predictions one level below and just have to be filtered
-        start_state, start_state_mask = rssm_states_seq_to_batch(model_predictions[level],
-                                                                 targets[level]['terminal'])
+        start_state, start_state_mask = filter_mem_state_seq_to_batch(model_predictions[level],
+                                                                      targets[level]['terminal'])
         start_state = rssm_detach_state(*start_state)
         start_state_below = {k: torch.stack(v) for k, v in model_predictions[level - 1].items() if
                              k in rssm_state_keys()}
@@ -580,7 +580,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         # TODO: the original start states are in the targets, we don't need to re-calculate them
         start_state_below = {k: self.upwards_filters[level]['o'](v) for k, v in start_state_below.items()}
         start_state_below = {k: list(v.unbind(0)) for k, v in start_state_below.items()}  # need lists
-        start_state_below, _ = rssm_states_seq_to_batch(start_state_below, model_predictions[level - 1]['terminal'])
+        start_state_below, _ = filter_mem_state_seq_to_batch(start_state_below, model_predictions[level - 1]['terminal'])
         start_state_below = rssm_detach_state(*start_state_below)
 
         mem, mem_other, mem_targets, mem_below, state = self.forward_dynamic_action_autoenc(start_state,
@@ -671,7 +671,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             offset = n_lo[l]
             # prepare start states for latent overshooting (we us our own hand-made masks)
             with torch.no_grad():
-                start_state, _ = rssm_states_seq_to_batch(pred_tf[l], targets[l]['terminal'], i_end=-offset)
+                start_state, _ = filter_mem_state_seq_to_batch(pred_tf[l], targets[l]['terminal'], i_end=-offset)
                 start_state_detached = rssm_detach_state(*start_state)
                 # prepare action, posterior and mask windows that contain for every start state the next n_lo time steps
                 actions = torch.stack(pred_tf[l]['a']).detach()  # make tensor (time x batch x d_a)

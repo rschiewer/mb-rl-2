@@ -993,10 +993,10 @@ def random_walk_success_rate(env: gym.Env,
     return success, ep_returns, ep_lens
 
 
-def rssm_states_seq_to_batch(mem: Dict[str, List[torch.Tensor]],
-                             mask: List[torch.Tensor] | torch.Tensor,
-                             i_start: int = 0,
-                             i_end: int = None):
+def filter_mem_state_seq_to_batch(mem: Dict[str, List[torch.Tensor]],
+                                  mask: List[torch.Tensor] | torch.Tensor,
+                                  i_start: int = 0,
+                                  i_end: int = None):
     if i_end is None:
         i_end = len(mem['z'])
 

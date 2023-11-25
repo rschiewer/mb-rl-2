@@ -234,7 +234,7 @@ def decoding_err_diff(model, pred, targets, level, n_steps, sample_model, sample
     rma, rma_act_opt, rma_crit_opt = model.r_max_agents[level]
     gsa, gsa_act_opt, gsa_crit_opt = model.goal_seeking_agents[level - 1]
     # omit first time step as we don't get a starting and end state for below model
-    start_state_lvl, start_state_mask = rssm_states_seq_to_batch(pred[level], targets[level]['mask'])
+    start_state_lvl, start_state_mask = filter_mem_state_seq_to_batch(pred[level], targets[level]['mask'])
     start_state_lvl = rssm_detach_state(*start_state_lvl)
     # take every k-th model state from below trajectory
     flt = PickOneUpwardsFilter(model.strides[level], offset=-1)
@@ -246,7 +246,7 @@ def decoding_err_diff(model, pred, targets, level, n_steps, sample_model, sample
     # unstack output of filtering process into lists since we need this format for rssm_state_seq_to_batch() function
     pred_flt_below = {k: list(v.unbind(0)) for k, v in pred_flt_below.items()}
     # fold time into batch dim to do rollout starting from every batch item and time step at once
-    start_state_below, start_state_below_mask = rssm_states_seq_to_batch(pred_flt_below, mask_flt_below)
+    start_state_below, start_state_below_mask = filter_mem_state_seq_to_batch(pred_flt_below, mask_flt_below)
     start_state_below = rssm_detach_state(*start_state_below)
     # do one step rollout for abstract agent
     rma_simulation = rma.act_in_sim(start_state_lvl, sim_env=model, n_steps=n_steps,
@@ -303,7 +303,7 @@ def imitation_learning(model, pred, targets, level, n_steps, sample_model, sampl
     rma, rma_act_opt, rma_crit_opt = model.r_max_agents[level]
     gsa, gsa_act_opt, gsa_crit_opt = model.goal_seeking_agents[level - 1]
     # omit first time step as we don't get a starting and end state for below model
-    start_state_lvl, start_state_mask = rssm_states_seq_to_batch(pred[level], targets[level]['mask'])
+    start_state_lvl, start_state_mask = filter_mem_state_seq_to_batch(pred[level], targets[level]['mask'])
     start_state_lvl = rssm_detach_state(*start_state_lvl)
     # take every k-th model state from below trajectory
     flt = PickOneUpwardsFilter(model.strides[level], offset=-1)
@@ -315,7 +315,7 @@ def imitation_learning(model, pred, targets, level, n_steps, sample_model, sampl
     # unstack output of filtering process into lists since we need this format for rssm_state_seq_to_batch() function
     pred_flt_below = {k: list(v.unbind(0)) for k, v in pred_flt_below.items()}
     # fold time into batch dim to do rollout starting from every batch item and time step at once
-    start_state_below, start_state_below_mask = rssm_states_seq_to_batch(pred_flt_below, mask_flt_below)
+    start_state_below, start_state_below_mask = filter_mem_state_seq_to_batch(pred_flt_below, mask_flt_below)
     start_state_below = rssm_detach_state(*start_state_below)
     # do one step rollout for abstract agent
     rma_simulation = rma.act_in_sim(start_state_lvl, sim_env=model, n_steps=n_steps,
@@ -365,7 +365,7 @@ def pessimistic_model_training(model, opt_model, pred, targets, level, n_steps, 
     world = model.rssm_modules[level]
 
     # fold batch dimension into time dimension to start simulation for all time steps in parallel
-    start_state, start_state_mask = rssm_states_seq_to_batch(pred[level], targets[level]['mask'])
+    start_state, start_state_mask = filter_mem_state_seq_to_batch(pred[level], targets[level]['mask'])
     start_state = rssm_detach_state(*start_state)
 
     model_mem = {}
@@ -407,7 +407,7 @@ def train_rmax_agent(agent_model_steps, cfg, eval_env, i_step, level, logger, mo
                      targets):
     r_max_agent, r_max_actor_opt, r_max_critic_opt = model.r_max_agents[level]
     # use all time steps of teacher forcing rollout from model as starting point
-    start_state_lvl, start_state_mask = rssm_states_seq_to_batch(pred[level], targets[level]['mask'])
+    start_state_lvl, start_state_mask = filter_mem_state_seq_to_batch(pred[level], targets[level]['mask'])
     # prevent gradient flow into the start state
     start_state_lvl = rssm_detach_state(*start_state_lvl)
     abstract_level = level > 0
@@ -539,9 +539,9 @@ def train_goal_seeking_agent_one_step(model, level, pred, targets, eval_env, cfg
         return
 
     # get starting states, leave enough states out at the end to collect goals
-    start_state, start_state_mask = rssm_states_seq_to_batch(trajectories, mask, i_start=0, i_end=-2)
+    start_state, start_state_mask = filter_mem_state_seq_to_batch(trajectories, mask, i_start=0, i_end=-2)
     start_state = rssm_detach_state(*start_state)
-    goal_state, goal_state_mask = rssm_states_seq_to_batch(trajectories, mask, i_start=2)  # i_end == len(sequence)
+    goal_state, goal_state_mask = filter_mem_state_seq_to_batch(trajectories, mask, i_start=2)  # i_end == len(sequence)
     goal_state = rssm_detach_state(*goal_state)
 
     goal = goal_agent.o_from_state(goal_state)
@@ -572,7 +572,7 @@ def train_goal_seeking_agent_same_level(model, level, pred, targets, eval_env, c
         # TODO: re-sample all states from distributions
 
     # get starting states, leave enough states out at the end to collect goals
-    first_start_state, first_step_mask = rssm_states_seq_to_batch(trajectories, mask, i_end=-(1 + n_goals * chunk_size))
+    first_start_state, first_step_mask = filter_mem_state_seq_to_batch(trajectories, mask, i_end=-(1 + n_goals * chunk_size))
     first_start_state = rssm_detach_state(*first_start_state)
 
     # get goal states
@@ -581,7 +581,7 @@ def train_goal_seeking_agent_same_level(model, level, pred, targets, eval_env, c
         start_offset = chunk_size * i
         start_offset += 1  # very first state is start state, from there on we need to go chunk_size steps to next goal
         end_offset = start_offset + train_traj_len
-        g, _ = rssm_states_seq_to_batch(trajectories, mask, i_start=start_offset, i_end=end_offset)
+        g, _ = filter_mem_state_seq_to_batch(trajectories, mask, i_start=start_offset, i_end=end_offset)
         g = rssm_detach_state(*g)
         goal_states.append(g)
 
@@ -796,7 +796,7 @@ def train_goal_seeking_agent_rand(model, level, pred, targets, eval_env, cfg, i_
     # take completely random start and goal states for the GSA to train on
     chunk_size = model.strides[level + 1]
     goal_agent, goal_actor_opt, goal_critic_opt = model.goal_seeking_agents[level]
-    gsa_start_states, gsa_first_step_mask = rssm_states_seq_to_batch(pred[level], targets[level]['mask'])
+    gsa_start_states, gsa_first_step_mask = filter_mem_state_seq_to_batch(pred[level], targets[level]['mask'])
     gsa_start_states = rssm_detach_state(*gsa_start_states)
     # this avoids start states if the mask value is high
     probs = 1 - gsa_first_step_mask.squeeze()
