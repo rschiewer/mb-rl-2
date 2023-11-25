@@ -21,14 +21,13 @@ from mdm.utils.gym_wrappers import vec_env_worker_no_auto_reset
 
 
 def main():
-    simplefilter(action='ignore', category=DeprecationWarning)  # numpy deprecation warning from outdated gym lib
     parser = argparse.ArgumentParser()
     parser.add_argument('-log', default=False, action='store_true')
     parser.add_argument('-d_batch', type=int)
     parser.add_argument('-n_collect', type=int)
     args = parser.parse_args()
 
-    cfg = load_yaml(here() / 'cfg_simple_rssm_train.yaml')
+    cfg = load_yaml(here() / 'cfg_rssm_train.yaml')
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
     if args.d_batch:
@@ -49,9 +48,7 @@ def main():
 
     def make_env_fn():
         _env = gym.make(cfg['env_name'])
-        _env = gym.wrappers.RescaleAction(_env, min_action=-1.0, max_action=1.0)
-        # if isinstance(_env.observation_space, gym.spaces.dict.Dict):
-        #    _env = gym.wrappers.FlattenObservation(_env)
+        _env = prepare_env(_env)
         return _env
 
     env = make_env_fn()
@@ -90,22 +87,15 @@ def main():
     # opt_model = torch.optim.Adam(params, **cfg['optim'])
     # temporary hack end
 
-    collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['trainer']['collect_envs'],
-                                            worker=vec_env_worker_no_auto_reset)
+    collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['trainer']['collect_envs'])
     collect_env = CacheLastStepVecEnv(collect_env)
-    #collect_env = CacheLastStepEnv(make_env_fn())
-    eval_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['eval']['eval_envs'],
-                                         worker=vec_env_worker_no_auto_reset)
+    # collect_env = CacheLastStepEnv(make_env_fn())
+    eval_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['eval']['eval_envs'])
     eval_env = CacheLastStepVecEnv(eval_env)
-    #eval_env = CacheLastStepEnv(make_env_fn())
-    video_env = gym.make(cfg['env_name'], render_mode='rgb_array')
-    video_env = gym.wrappers.RescaleAction(video_env, min_action=-1.0, max_action=1.0)
+    # eval_env = CacheLastStepEnv(make_env_fn())
 
-    #def make_video_env_fn():
-    #    _env = gym.make(cfg['env_name'], render_mode='rgb_array')
-    #    _env = gym.wrappers.RescaleAction(_env, min_action=-1.0, max_action=1.0)
-    #    return _env
-    #video_env = gym.vector.AsyncVectorEnv([make_video_env_fn] * cfg['eval']['eval_envs'])
+    video_env = gym.make(cfg['env_name'], render_mode='rgb_array')
+    video_env = prepare_env(video_env)
     video_env = gym.wrappers.RecordVideo(video_env, video_folder='videos', name_prefix=f'{os.getpid()}',
                                          disable_logger=True)
     video_env = CacheLastStepEnv(video_env)
@@ -145,25 +135,25 @@ def main():
         policy = LatentAgentPolicy(agent, model, explore=explore)
         d = GymEpisodeDriver(collect_env, policy)
         d.interact(10, train_mem)
-        #collected_data_trajectories = collect_data(collect_env, -1, policy)
-        #train_mem.extend(collected_data_trajectories)
+        # collected_data_trajectories = collect_data(collect_env, -1, policy)
+        # train_mem.extend(collected_data_trajectories)
 
     def collect_fn(explore: bool):
         agent = r_max_agents[0][0]
         agent.eval()
         collect_env.reset()
-        policy = LatentAgentPolicy(agent, model, explore=explore)
-        #collected_data_trajectories = collect_data(collect_env, -1, policy)
-        #train_mem.extend(collected_data_trajectories)
-        #train_mem.extend(collected_data_trajectories)
+        policy = HierarchicalLatentAgentPolicy(model, explore=explore)
+        # collected_data_trajectories = collect_data(collect_env, -1, policy)
+        # train_mem.extend(collected_data_trajectories)
+        # train_mem.extend(collected_data_trajectories)
         d = GymEpisodeDriver(collect_env, policy)
         d.interact(10, train_mem)
 
-        #collect_env.reset()
-        #agent_eval_mode(r_max_agents + goal_seeking_agents)
-        #policy = HierarchicalLatentAgentPolicy(model, explore=explore)
-        #collected_data_trajectories = collect_data(collect_env, -1, policy)
-        #train_mem.extend(collected_data_trajectories)
+        # collect_env.reset()
+        # agent_eval_mode(r_max_agents + goal_seeking_agents)
+        # policy = HierarchicalLatentAgentPolicy(model, explore=explore)
+        # collected_data_trajectories = collect_data(collect_env, -1, policy)
+        # train_mem.extend(collected_data_trajectories)
         # visualize_trajectory(collected_data_trajectories[0])
 
         """
@@ -180,7 +170,7 @@ def main():
                 time_steps_lvl = time_steps_lvl.detach().cpu().numpy()
 
                 pca = PCA(n_components=3)
-                states_trans = pca.fit_transform(states_lvl)
+                states_trans = pca.fit_transform(states_lv)
                 states_trans = states_trans.reshape((d_time, d_batch, -1))
                 colors = np.concatenate([time_steps_lvl, np.zeros((d_time, d_batch, 2))], axis=-1)
 
@@ -204,7 +194,6 @@ def main():
             #plt.show()
             logger.log_plot(fig_to_img(fig), Scope.TEST() / f'model/latent_state_pca')
         """
-
 
     print('Starting Training')
     # with torch.autograd.detect_anomaly(check_nan=True):

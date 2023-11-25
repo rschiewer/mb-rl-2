@@ -693,6 +693,8 @@ def to_tensors(mem: List[Dict[str, int | float | np.single | np.double | bool | 
                device: torch.device,
                dtypes: Union[List, Tuple] = None,
                padding: Union[List, Tuple, str] = None):
+    assert padding is None, 'padding argument is deprecated'
+
     if len(mem) > 1:
         fids = reduce(lambda a, b: set(a) | set(b), mem)
     else:

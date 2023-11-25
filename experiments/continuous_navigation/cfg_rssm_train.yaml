@@ -1,6 +1,6 @@
 ---
 neptune_cfg: "../neptune_settings.yaml"
-env_name: "InvertedPendulum-v4" #"InvertedPendulum-v4"# "gym_nav2d:nav2dEasySparse-v0" #"gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-v0"
+env_name: "PointMaze_UMaze-v3" #"PointMaze_UMaze-v3" #"InvertedPendulum-v4"# "gym_nav2d:nav2dEasySparse-v0" #"gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-v0"
 prefill_memory: "random" #"offline-dataset" # "random", False
 prefill_episodes: 100
 train_samples: null #"nav2d_Easy_train.samples" #"nav2d_Easy_train.samples"
@@ -16,7 +16,7 @@ mdm:
       -  d_z: 20
          d_h: 200
          d_a: <infer>
-         d_s_embedding: null
+         d_s_embedding: 10
          s_embedding_lws: [128, 64, 64]
          n_hidden_layers: 1
          hidden_dropout: 0.1
@@ -54,8 +54,8 @@ mdm:
       # RSSM no. 2
       -  d_z: 20
          d_h: 200
-         d_a: 2
-         d_s_embedding: 25
+         d_a: 5
+         d_s_embedding: 20
          n_hidden_layers: 1
          hidden_dropout: 0.1
          epsilon: 0.1
@@ -93,7 +93,7 @@ mdm:
       # Connection between RSSM1 and RSSM2
       -  o:
             class: "PickOneUpwardsFilter"
-            window_size: 4
+            window_size: 3
             offset: -1
          #a:
          #   class: "LearnableUpwardsFilter"
@@ -103,14 +103,14 @@ mdm:
          #   activation: "relu"
          #   model_type: "det_tanh"
          r:
-            class: "SumUpwardsFilter"  # sum makes resulting reward invariant w.r.t. chunk size for incomplete chunks
-            window_size: 4
+            class: "AvgUpwardsFilter"  # sum makes resulting reward invariant w.r.t. chunk size for incomplete chunks
+            window_size: 3
          terminal:
             class: "MaxUpwardsFilter"
-            window_size: 4
+            window_size: 3
          mask:
-            class: "MaxUpwardsFilter"
-            window_size: 4
+            class: "MinUpwardsFilter"
+            window_size: 3
    warmup_steps: [ 'rand', 'rand' ]
    kl_betas: [ 0.5, 0.5 ]
    kl_reg_betas: [ 0.0, 0.0 ]
@@ -118,7 +118,7 @@ mdm:
    ema_coeff: 0.95
    ema_update_interval: 10
    latent_overshooting: [ ] #[14, 9]
-   temporal_activation_regularization: 1.0
+   temporal_activation_regularization: 0.0
    kl_balance: 0.8
 
 optim:
@@ -171,8 +171,8 @@ agents:
       # level 1
       -  observation_type: 's_embedding'
          eps_exploration_init: 0.9
-         eps_exploration_coeff: 0.999
-         eps_exploration_min: 0.3
+         eps_exploration_coeff: 0.9992
+         eps_exploration_min: 0.05
          act_entropy_exploration_coeff: 0.01
          learn_act_entropy_exploration_coeff: False
          novelty_exploration_coeff: 0.00
@@ -198,8 +198,8 @@ agents:
       -  observation_type: 's_embedding'
          eps_exploration_init: 0.3
          eps_exploration_coeff: 0.999
-         eps_exploration_min: 0.1
-         act_entropy_exploration_coeff: 0.01
+         eps_exploration_min: 0.05
+         act_entropy_exploration_coeff: 0.001
          learn_act_entropy_exploration_coeff: False
          novelty_exploration_coeff: 0.0
          tr_policy_kl_coeff: 0.1
@@ -217,7 +217,7 @@ agents:
          normalize_observations: False
          normalize_rewards: False
          dynamics_loss: True
-         use_slow_value_target: False
+         use_slow_value_target: True
          use_slow_world_model: False
 eval:
    eval_envs: 20

@@ -347,12 +347,13 @@ class GaussianEncoder(InputEncoder):
         o = torch.flatten(o, start_dim=-len(self.s_x_orig))
         params = self._mdl(o)
         mu, logvar = torch.tensor_split(params, 2, dim=-1)
+        logvar = logvar - 3.0  # makes initial variance after softplus close to zero
         sigma = torch.nn.functional.softplus(logvar) + self.epsilon
         d = torch.stack([mu, sigma], dim=-1)
         if sample:
             s = self.sample(d)
         else:
-            s = self.mean(d)
+            s = self.mode(d)
         return d, s
 
     @torch.jit.ignore
@@ -373,7 +374,7 @@ class GaussianEncoder(InputEncoder):
         return s
 
     @torch.jit.ignore
-    def mean(self,
+    def mode(self,
              parameters):
         mu, sigma = parameters.unbind(-1)
         return mu
@@ -401,7 +402,7 @@ class SquashedGaussianEncoder(GaussianEncoder):
         return s
 
     @torch.jit.ignore
-    def mean(self,
+    def mode(self,
              parameters):
         mu, sigma = parameters.unbind(-1)
         return torch.nn.functional.tanh(mu)
@@ -442,12 +443,18 @@ class GaussianDecoder(OutputDecoder):
     def forward(self, x_enc: torch.Tensor, sample: bool = True):
         params = self._mdl(x_enc)
         mu, logvar = torch.tensor_split(params, 2, dim=-1)
+        logvar = logvar - 3.0  # makes initial variance after softplus close to zero
         sigma = torch.nn.functional.softplus(logvar) + self.epsilon
+
+        # reshape dist params to desired output shape
+        mu = mu.reshape(*x_enc.shape[:-1], *self.s_x_orig)
+        sigma = sigma.reshape(*x_enc.shape[:-1], *self.s_x_orig)
+
         d = torch.stack([mu, sigma], dim=-1)
         if sample:
             s = self.sample(d)
         else:
-            s = mu
+            s = self.mode(d)
         return d, s
 
     @torch.jit.ignore
@@ -466,6 +473,40 @@ class GaussianDecoder(OutputDecoder):
         d = torch.distributions.Independent(d, 1)
         s = d.rsample()
         return s
+
+    @torch.jit.ignore
+    def mode(self,
+             parameters: torch.Tensor) -> torch.Tensor:
+        mu, _ = parameters.unbind(-1)
+        return mu
+
+
+class SquashedGaussianDecoder(GaussianDecoder):
+
+    @torch.jit.ignore
+    def dist(self,
+             parameters: torch.Tensor) -> torch.distributions.Distribution:
+        mu, sigma = parameters.unbind(-1)
+        d = torch.distributions.Normal(loc=mu, scale=sigma)
+        d = torch.distributions.TransformedDistribution(d, [TanhBijector()])
+        d = torch.distributions.Independent(d, 1)
+        return d
+
+    @torch.jit.ignore
+    def sample(self,
+               parameters):
+        mu, sigma = parameters.unbind(-1)
+        d = torch.distributions.Normal(loc=mu, scale=sigma)
+        d = torch.distributions.TransformedDistribution(d, [TanhBijector()])
+        d = torch.distributions.Independent(d, 1)
+        s = d.rsample()
+        return s
+
+    @torch.jit.ignore
+    def mode(self,
+             parameters):
+        mu, sigma = parameters.unbind(-1)
+        return torch.nn.functional.tanh(mu)
 
 
 class OneHotDecoder(OutputDecoder, ManagedStatefulTrainingModule):
@@ -681,8 +722,8 @@ class AvgUpwardsFilter(UpwardsFilter):
                 context: Optional[torch.Tensor] = None,
                 window_size: Optional[int] = None) -> torch.Tensor:
         x, mask, n_pad = self._preproc(x, mask, 0.0, window_size, assert_binary_mask=False)
-        nom = torch.sum(x * ~mask, dim=1)
-        denom = torch.sum(~mask, dim=1).to(torch.float32)
+        nom = torch.sum(x * (1 - mask), dim=1)
+        denom = torch.sum((1 - mask), dim=1).to(torch.float32)
         denom = torch.where(denom == 0, 1.0, denom)
         x = nom / denom
         # if n_pad:
@@ -816,13 +857,45 @@ class AutoencodingUpwardsFilter(UpwardsFilter):
                  encoder_lws: List[int],
                  decoder_lws: List[int],
                  activation: str,
-                 layer_norm: bool):
+                 layer_norm: bool,
+                 epsilon: float,
+                 beta: float,
+                 reg_sigma: float):
         super(AutoencodingUpwardsFilter, self).__init__(window_size)
         self.encoder = SquashedGaussianEncoder(s_x_orig=s_x_orig, d_x_encoded=d_x_enc, lws=encoder_lws,
-                                               activation=activation, layer_norm=layer_norm, epsilon=0.1)
-        self.decoder = MLPDecoder(s_x_orig=s_x_orig, d_x_encoded=d_x_enc, lws=decoder_lws, activation=activation,
-                                  layer_norm=layer_norm, final_activation='tanh')
+                                               activation=activation, layer_norm=layer_norm, epsilon=epsilon)
+        # self.decoder = MLPDecoder(s_x_orig=s_x_orig, d_x_encoded=d_x_enc, lws=decoder_lws, activation=activation,
+        #                          layer_norm=layer_norm, final_activation='tanh')
+        self.decoder = SquashedGaussianDecoder(s_x_orig=s_x_orig, d_x_encoded=d_x_enc, lws=decoder_lws,
+                                               activation=activation, layer_norm=layer_norm, epsilon=epsilon)
         self.mask_filter = MaxUpwardsFilter(window_size=window_size)
+        self.beta = beta
+        self.reg_sigma = reg_sigma
+
+    def decode_det(self,
+                   x_enc: torch.Tensor,
+                   mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        x_rec_dist_params, x_rec = self.decoder(x_enc, sample=False)
+        x_rec_final = self._postproc_dec(x_rec)
+        return x_rec_final
+
+    def _preproc_enc(self,
+                     x: torch.Tensor,
+                     mask: Optional[torch.Tensor] = None):
+        # chunk and pad x, shape goes from (T, B, D) to (T', T_chunk, B, D)
+        x_pad, _, _ = self._preproc(x=x, mask=mask)
+        # shift chunk time dim (1) to become new first data dim (2), afterwards shape is (T', B, T_chunk, D)
+        x_perm = torch.permute(x_pad, (0, 2, 1, 3))
+        return x_perm
+
+    def _postproc_dec(self,
+                      x_rec: torch.Tensor):
+        # shift first data dim (2) to become T_chunk again (1)
+        x_rec_permuted = torch.permute(x_rec, (0, 2, 1, 3))
+        # fold T_chunk into T' to obtain a single time dimension again, write all dimensions explicitly for clarity
+        x_rec_rs = x_rec_permuted.reshape(x_rec_permuted.shape[0] * x_rec_permuted.shape[1],
+                                          x_rec_permuted.shape[2], x_rec_permuted.shape[3])
+        return x_rec_rs
 
     def forward(self,
                 x: torch.Tensor,
@@ -830,40 +903,101 @@ class AutoencodingUpwardsFilter(UpwardsFilter):
                 context: Optional[torch.Tensor] = None,
                 window_size: Optional[int] = None) -> torch.Tensor:
         assert window_size in (self.window_size, None), 'Dynamic window size not supported by this class'
-        x_padded, mask, n_pad = self._preproc(x=x, mask=mask, pad_value=0.0, assert_binary_mask=True)
-        x_permuted = torch.permute(x_padded, (0, 2, 1, 3))
-        _, x_enc = self.encoder(x_permuted, sample=False)
+        x_perm = self._preproc_enc(x, mask)
+        _, x_enc = self.encoder(x_perm, sample=True)
         return x_enc
 
     def eval_step(self,
                   x: torch.Tensor,
                   mask: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
         if mask is None:
-            mask_x_enc = self.mask_filter(torch.zeros_like(x)[:, :, 0].unsqueeze(-1))
+            mask_x_enc = self.mask_filter(torch.zeros(x.shape[0], x.shape[1], 1).to(x))
         else:
             mask_x_enc = self.mask_filter(mask).detach()
 
-        x_padded, _, _ = self._preproc(x=x, mask=mask)
-        x_permuted = torch.permute(x_padded, (0, 2, 1, 3))
-        x_enc_dist_params, x_enc = self.encoder(x_permuted, sample=True)
-        x_enc_dist = self.encoder.dist(x_enc_dist_params)
-        _, x_rec = self.decoder(x_enc)
-        x_rec_permuted = torch.permute(x_rec, (0, 2, 1, 3))
-        x_rec_rs = x_rec_permuted.reshape(x_rec_permuted.shape[0] * x_rec_permuted.shape[1],
-                                          x_rec_permuted.shape[2], x_rec_permuted.shape[3])
-        x_rec_final = x_rec_rs[:len(x)]
+        x_perm = self._preproc_enc(x, mask)
+        # encoder expects 2D x of shape (T_chunk, D) i.e. T_chunk became new data dimension
+        x_enc_dist_params, x_enc = self.encoder(x_perm, sample=True)
+        x_rec_dist_params, _ = self.decoder(x_enc)
 
-        recon_loss = torch.abs(x - x_rec_final) ** 2
+        # MAX LOG PROB RECONSTRUCTION LOSS
+        # shift first data dim (2) to become T_chunk again (1), we have 3 data dims now as the last one, the last one
+        # represents [mu, sigma] for every element
+        x_rec_dist_params_perm = torch.permute(x_rec_dist_params, (0, 2, 1, 3, 4))
+        # fold T_chunk into T' to obtain a single time dimension again, write all dimensions explicitly for safety
+        x_rex_dist_params_rs = x_rec_dist_params_perm.reshape(
+            x_rec_dist_params_perm.shape[0] * x_rec_dist_params_perm.shape[1],
+            x_rec_dist_params_perm.shape[2], x_rec_dist_params_perm.shape[3], x_rec_dist_params_perm.shape[4])
+        # cut the padding of the reconstructed sequence if necessary
+        x_rec_dist_params_final = x_rex_dist_params_rs[:len(x)]
+        x_rec_dist = self.decoder.dist(x_rec_dist_params_final)
+        # unsqueeze to add explicit data dimension to reconstruction loss as log_prob removes it
+        recon_loss = -x_rec_dist.log_prob(x).unsqueeze(-1)
         recon_loss = masked_mean(recon_loss, mask)
 
-        reg_dist = torch.distributions.Normal(loc=torch.zeros_like(x_enc), scale=torch.ones_like(x_enc))
+        # BOTTLENECK KL DIVERGENCE
+        reg_dist = torch.distributions.Normal(loc=torch.zeros_like(x_enc), scale=torch.full_like(x_enc, self.reg_sigma))
+        x_enc_dist = self.encoder.dist(x_enc_dist_params)
         kl_loss = torch.distributions.kl_divergence(x_enc_dist.base_dist.base_dist, reg_dist)
-        kl_loss = kl_loss.sum(dim=-1, keepdim=True)
-        kl_loss = masked_mean(kl_loss, mask_x_enc)
+        # kl_loss = kl_loss.sum(dim=-1, keepdim=True)
+        # use free nats to prioritize reconstruction loss if kl is low
+        # kl_loss = torch.maximum(kl_loss, torch.tensor(1.0).to(kl_loss))
+        kl_loss = self.beta * masked_mean(kl_loss, mask_x_enc)
 
         total = recon_loss + kl_loss
 
-        return {'total': total, 'recon': recon_loss, 'kl': kl_loss}
+        # MAE RECONSTRUCTION ERROR
+        with torch.no_grad():
+            # shift first data dim (2) to become T_chunk again (1)
+            _, x_enc_det = self.encoder(x_perm, sample=False)
+            _, x_rec_det = self.decoder(x_enc_det, sample=False)
+            x_rec_det_rs = self._postproc_dec(x_rec_det)
+            # cut the padding of the reconstructed sequence if necessary
+            x_rec_det_final = x_rec_det_rs[:len(x)]
+            recon_mae = torch.abs(x - x_rec_det_final)
+            recon_mae = masked_mean(recon_mae, mask)
+
+        return {'total': total, 'recon': recon_loss, 'kl': kl_loss, 'monitoring_recon_mae': recon_mae}
+
+    def x_logprob(self,
+                  x: torch.Tensor,
+                  mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+        # chunk and pad x, shape goes from (T, B, D) to (T', T_chunk, B, D)
+        x_padded, _, _ = self._preproc(x=x, mask=mask)
+        # shift chunk time dim (1) to become new first data dim (2), afterwards shape is (T', B, T_chunk, D)
+        x_permuted = torch.permute(x_padded, (0, 2, 1, 3))
+        # encoder expects 2D x of shape (T_chunk, D) i.e. T_chunk became new data dimension
+        _, x_enc = self.encoder(x_permuted, sample=False)
+        x_rec_dist_params, _ = self.decoder(x_enc)
+        # shift first data dim (2) to become T_chunk again (1), we have 3 data dims now as the last one, the last one
+        # represents [mu, sigma] for every element
+        x_rec_dist_params_perm = torch.permute(x_rec_dist_params, (0, 2, 1, 3, 4))
+        # fold T_chunk into T' to obtain a single time dimension again, write all dimensions explicitly for safety
+        x_rex_dist_params_rs = x_rec_dist_params_perm.reshape(
+            x_rec_dist_params_perm.shape[0] * x_rec_dist_params_perm.shape[1],
+            x_rec_dist_params_perm.shape[2], x_rec_dist_params_perm.shape[3], x_rec_dist_params_perm.shape[4])
+        # cut the padding of the reconstructed sequence if necessary
+        x_rec_dist_params_final = x_rex_dist_params_rs[:len(x)]
+        x_rec_dist = self.decoder.dist(x_rec_dist_params_final)
+        # unsqueeze to add explicit data dimension to reconstruction loss as log_prob removes it
+        x_logprob = x_rec_dist.log_prob(x).unsqueeze(-1) * (1 - mask)
+        return x_logprob
+
+    def decoding_uncertainty(self,
+                             x_enc: torch.Tensor,
+                             mask_x_orig: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+        x_rec_dist_params, _ = self.decoder(x_enc)
+        # shift first data dim (2) to become T_chunk again (1), we have 3 data dims now as the last one, the last one
+        # represents [mu, sigma] for every element
+        x_rec_dist_params_perm = torch.permute(x_rec_dist_params, (0, 2, 1, 3, 4))
+        # fold T_chunk into T' to obtain a single time dimension again, write all dimensions explicitly for safety
+        x_rex_dist_params_rs = x_rec_dist_params_perm.reshape(
+            x_rec_dist_params_perm.shape[0] * x_rec_dist_params_perm.shape[1],
+            x_rec_dist_params_perm.shape[2], x_rec_dist_params_perm.shape[3], x_rec_dist_params_perm.shape[4])
+        # cut the padding of the reconstructed sequence if necessary
+        x_rec_dist_params_final = x_rex_dist_params_rs[:len(mask_x_orig)]
+        uncertainty = x_rec_dist_params_final[..., 1] * (1 - mask_x_orig)
+        return uncertainty
 
 
 class LearnableUpwardsFilter(UpwardsFilter):

@@ -98,9 +98,9 @@ class ActorCriticAgent(torch.nn.Module):
                                                   layer_norm=critic_layer_norm, name='critic_net'))
 
         self._ema_actor_net = copy.deepcopy(self.actor_net)
-        self._ema_critic_net = copy.deepcopy(self.critic_net)
+        self.ema_critic_net = copy.deepcopy(self.critic_net)
         for param in self._ema_actor_net.parameters(): param.requires_grad = False
-        for param in self._ema_critic_net.parameters(): param.requires_grad = False
+        for param in self.ema_critic_net.parameters(): param.requires_grad = False
         self._current_train_step = 0
         self.dynamics_loss = dynamics_loss
         self.normalize_observations = normalize_observations
@@ -238,7 +238,7 @@ class ActorCriticAgent(torch.nn.Module):
         # sigma = torch.nn.functional.sigmoid(logvar) + self.min_scale # + logvar - logvar.detach()
         # sigma = torch.nn.functional.softplus(logvar) + 0.1
         mu = torch.tanh(mu)
-        sigma = torch.sigmoid(logvar) + 0.1
+        sigma = torch.sigmoid(logvar) + 0.05
         d = torch.stack([mu, sigma], dim=-1)
         return d
 
@@ -329,8 +329,8 @@ class ActorCriticAgent(torch.nn.Module):
         with FreezeParameters([self.critic_net]):
             v_actor = self.critic_net(o)
         if self.use_slow_value_target:
-            with FreezeParameters([self._ema_critic_net]):
-                v_actor_slow = self._ema_critic_net(o)
+            with FreezeParameters([self.ema_critic_net]):
+                v_actor_slow = self.ema_critic_net(o)
             v_actor = torch.minimum(v_actor, v_actor_slow)
 
         a = torch.stack(a)
@@ -343,7 +343,7 @@ class ActorCriticAgent(torch.nn.Module):
             # we only train a single chunk, no bootstrapping needed beyond that
             # CAUTION: we don't train the last step and should get one step more than chunk size
             # bootstrap = (1 - mask)[-1] * r[-1]  # (1 - mask[-1]) * v_actor[-1]
-            gamma = 0.98
+            gamma = 1.0
             # lambda_returns = calc_returns_simple(r[:-1], terminal[:-1], bootstrap, gamma=gamma)
             # bootstrap = torch.zeros_like(r[-1])  # (1 - mask[-1]) * v_actor[-1]
             # lambda_returns = calc_lambda_returns(r, terminal, v_actor, bootstrap, gamma, 0.95)
@@ -354,7 +354,8 @@ class ActorCriticAgent(torch.nn.Module):
             # bootstrap = (1 - mask)[-1] * v_actor[-1]  # (1 - mask[-1]) * v_actor[-1]
         bootstrap = v_actor[-1]
         # bootstrap = (1 - terminal)[-1] * v_actor[-1] + terminal[-1] * r[-1]
-        lambda_returns = calc_lambda_returns(r[:-1], terminal[:-1], v_actor[:-1], bootstrap, gamma, 0.99)
+        # changed lambda from 0.99 to 0.95 24.11.23
+        lambda_returns = calc_lambda_returns(r[1:], terminal[1:], v_actor[:-1], bootstrap, gamma, 0.95)
         #lambda_returns = calc_returns_simple(r[:-1], terminal[:-1], bootstrap, 0.99)
         # bootstrap = (1 - mask)[-1] * v_actor[-1]  # (1 - mask[-1]) * v_actor[-1]
         # bootstrap = (1 - mask)[-1] * (((1 - terminal) * v_actor + terminal * r))[-1]
@@ -370,6 +371,9 @@ class ActorCriticAgent(torch.nn.Module):
         r = r[:-1]
 
         # normalize returns and state values
+        #if self.goal_seeking:
+        #    advantage_actor = lambda_returns - v_actor
+        #else:
         ret_mean, ret_std = self.return_running_average(lambda_returns, mask)  # update and return stats
         lambda_returns_actor = self.return_running_average.normalize(lambda_returns, ret_mean, ret_std)
         v_actor = self.return_running_average.normalize(v_actor, ret_mean, ret_std)
@@ -400,7 +404,7 @@ class ActorCriticAgent(torch.nn.Module):
         # CRITIC
         with torch.no_grad():
             value_target = lambda_returns
-            v_ema_critic = self._ema_critic_net(o.detach())
+            v_ema_critic = self.ema_critic_net(o.detach())
             ema_value_loss = torch.nn.functional.smooth_l1_loss(v_ema_critic, value_target.detach(), reduction='none')
             ema_value_loss = torch.sum(ema_value_loss * valid)
 
@@ -428,6 +432,11 @@ class ActorCriticAgent(torch.nn.Module):
             v_result_mean = masked_mean(v_actor, mask)
             lambda_returns_mean = masked_mean(lambda_returns, mask)
             mu, sigma = a_dist.unbind(-1)
+
+        if self.goal_seeking:
+            step_r = (r * (1 - mask)).mean(dim=1).detach().cpu().numpy().squeeze(-1)
+            print(step_r / (step_r[0] - 1e-5))
+            #print(step_r)
 
         losses = {'total': loss,
                   'policy': policy_loss,
@@ -532,7 +541,7 @@ class ActorCriticAgent(torch.nn.Module):
             params = chain.from_iterable([m.parameters() for m in self.actor_net] +
                                          [m.parameters() for m in self.critic_net])
             ema_params = chain.from_iterable([m.parameters() for m in self._ema_actor_net] +
-                                             [m.parameters() for m in self._ema_critic_net])
+                                             [m.parameters() for m in self.ema_critic_net])
             for param, ema_param in zip(params, ema_params):
                 ema_param[:] = self.ema_coeff * ema_param + (1 - self.ema_coeff) * param
 

@@ -33,7 +33,7 @@ class LatentAgentPolicy(Policy):
                  explore: bool = False,
                  init_data: Dict[str, torch.Tensor] = None):
         super().__init__()
-        #assert np.prod(agent.d_o) == model.rssm_modules[agent.level].d_z_smpl
+        # assert np.prod(agent.d_o) == model.rssm_modules[agent.level].d_z_smpl
 
         self.agent = agent
         self.model = model
@@ -212,12 +212,12 @@ class HierarchicalLatentAgentPolicy(Policy):
             # self.env_data_below_cache[i_lvl]['terminal'] = self.env_data_below_cache[i_lvl]['terminal'][n_steps:]
 
             # take real actions from this level instead of the ones from action autoencoder if they are available
-            if len(self.act_cache[i_lvl]) > 0:
-                data_filtered['a'] = self.act_cache[i_lvl].pop(0).unsqueeze(0)  # take oldest action from cache
-            else:
-                self.action_history[i_lvl].append(data_filtered['a'][0])  # add filtered up action + remove time dim
             # if len(self.act_cache[i_lvl]) > 0:
-            #    self.act_cache[i_lvl].pop(0)  # remove oldest action from action cache
+            #    data_filtered['a'] = self.act_cache[i_lvl].pop(0).unsqueeze(0)  # take oldest action from cache
+            # else:
+            #    self.action_history[i_lvl].append(data_filtered['a'][0])  # add filtered up action + remove time dim
+            if len(self.act_cache[i_lvl]) > 0:
+                self.act_cache[i_lvl].pop(0)  # remove oldest action from action cache
 
             # memorize the latest inputs the model has seen as they are needed for the agent during planning
             state = self.grounded_env_states[i_lvl]
@@ -281,6 +281,7 @@ class HierarchicalLatentAgentPolicy(Policy):
         self.act_cache[i_highest] += simulation['agent']['a']
         self.action_history[i_highest] += simulation['agent']['a']
 
+        """
         # act with goal seeking agents
         if i_highest > 0:
             goals_from_above = simulation['model']['o']
@@ -293,7 +294,7 @@ class HierarchicalLatentAgentPolicy(Policy):
                     simulation = agent.act_in_sim(env_start_state=state, sim_env=self.model, n_steps=n_steps, goal=goal,
                                                   sample_actions=self.explore, explore=self.explore,
                                                   sample_states=self.sample_world_model, reconstruct=i_lvl > 0)
-                    #simulation['agent']['a'] = [torch.zeros_like(x) for x in simulation['agent']['a']]
+                    # simulation['agent']['a'] = [torch.zeros_like(x) for x in simulation['agent']['a']]
                     state = simulation['model_state']
                     self.act_cache[i_lvl] += simulation['agent']['a']
                     self.action_history[i_lvl] += simulation['agent']['a']
@@ -302,16 +303,16 @@ class HierarchicalLatentAgentPolicy(Policy):
                 goals_from_above = new_goals
 
         self.action_queue += self.act_cache[0]
-
         """
         # act with action autoencoder
         if i_highest > 0:
             agent_a = torch.stack(simulation['agent']['a'])
-            _, a = self.model.act_dec(agent_a)
-            a = torch.permute(a, (0, 2, 1, 3))
-            a = a.reshape(a.shape[0] * a.shape[1], a.shape[2], a.shape[3])
-            self._action_queue += list(a.unbind(0))
-        """
+            a = self.model.upwards_filters[1]['a'].decode_det(agent_a)
+            #a = torch.permute(a, (0, 2, 1, 3))
+            #a = a.reshape(a.shape[0] * a.shape[1], a.shape[2], a.shape[3])
+            self.action_queue += list(a.unbind(0))
+        else:
+            self.action_queue += self.act_cache[0]
 
         """
         # act with identity high level actions
@@ -370,7 +371,7 @@ class HierarchicalLatentAgentPolicy(Policy):
     @torch.no_grad()
     def __call__(self,
                  env: Union[CacheLastStepEnv, CacheLastStepVecEnv]):
-        #if env.current_step > 0 and self.grounded_env_states[0] is None:
+        # if env.current_step > 0 and self.grounded_env_states[0] is None:
         #    raise RuntimeError(f'Env is already in step {env.current_step} but there\'s no recorded previous state')
 
         self.model.eval()
@@ -378,11 +379,11 @@ class HierarchicalLatentAgentPolicy(Policy):
             if agent is not None:
                 agent[0].eval()
 
-        #if isinstance(env, (CacheLastStepVecEnv)):
+        # if isinstance(env, (CacheLastStepVecEnv)):
         #    d_batch = env.last_o.shape[0]
-        #else:
+        # else:
         #    d_batch = 1
-        #if env.current_step == 0:
+        # if env.current_step == 0:
         #    self.reset(d_batch)
 
         # first step: store current env ground truth data to cache
