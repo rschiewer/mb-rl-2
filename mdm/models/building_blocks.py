@@ -1215,7 +1215,7 @@ class RSSMCell(torch.nn.Module):
         if d_s_embedding is None:
             self.s_embedding = lambda x: x
         else:
-            s_embedding_lws = (d_h + d_z, *s_embedding_lws, d_s_embedding)
+            s_embedding_lws = (d_h + d_z_smpl, *s_embedding_lws, d_s_embedding)
             self.s_embedding = torch.nn.Sequential(lwa(s_embedding_lws, activation, layer_norm=layer_norm,
                                                        name=f'{name}_s_embedding'))
 
