@@ -4,7 +4,7 @@ from warnings import simplefilter
 
 import neptune
 
-from mdm.training.train import train_model
+from mdm.training.train import train_model, agent_eval_mode
 from mdm.utils.build_models import build_model_opt, build_rssms, build_agents, cfg_infer_missing_values
 from mdm.utils.utils import *
 from mdm.training.offline_rl_driver import OfflineRLDriver, SamplingType
@@ -13,6 +13,7 @@ from mdm.logging.not_logger import NotLogger
 from mdm.logging.logger import Scope, GlobalLogger
 from mdm.policies.agent_policy import *
 from mdm.policies.expert_policies import *
+from mdm.utils.customized_gym_envs import *
 from mdm.utils.gym_wrappers import vec_env_worker_no_auto_reset
 
 
@@ -139,8 +140,7 @@ def main():
         # train_mem.extend(collected_data_trajectories)
 
     def collect_fn(explore: bool):
-        agent = r_max_agents[0][0]
-        agent.eval()
+        agent_eval_mode(r_max_agents + goal_seeking_agents)
         collect_env.reset()
         policy = HierarchicalLatentAgentPolicy(model, explore=explore)
         # collected_data_trajectories = collect_data(collect_env, -1, policy)
