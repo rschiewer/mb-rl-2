@@ -130,9 +130,9 @@ def cfg_infer_missing_values(cfg: dict,
         d_h = cfg['mdm']['rssm_modules'][agent_lvl]['d_h']
 
         cfg_r_max = cfg['agents']['r_max'][agent_lvl]
-        if agent_lvl == 0:
-            cfg_r_max['min_a'] = tuple(env.action_space.low)
-            cfg_r_max['max_a'] = tuple(env.action_space.high)
+        #if agent_lvl == 0:
+        #    cfg_r_max['min_a'] = tuple(env.action_space.low)
+        #    cfg_r_max['max_a'] = tuple(env.action_space.high)
         cfg_r_max['d_a'] = cfg['mdm']['rssm_modules'][agent_lvl]['d_a']
         if cfg_r_max['observation_type'] == 'z':
             cfg_r_max['d_o'] = d_z
@@ -143,9 +143,9 @@ def cfg_infer_missing_values(cfg: dict,
 
         if agent_lvl < len(cfg['mdm']['rssm_modules']) - 1:
             cfg_goal_seeking = cfg['agents']['goal_seeking'][agent_lvl]
-            if agent_lvl == 0:
-                cfg_goal_seeking['min_a'] = tuple(env.action_space.low)
-                cfg_goal_seeking['max_a'] = tuple(env.action_space.high)
+            #if agent_lvl == 0:
+            #    cfg_goal_seeking['min_a'] = tuple(env.action_space.low)
+            #    cfg_goal_seeking['max_a'] = tuple(env.action_space.high)
             cfg_goal_seeking['d_a'] = cfg['mdm']['rssm_modules'][agent_lvl]['d_a']
             if cfg_goal_seeking['observation_type'] == 'z':
                 cfg_goal_seeking['d_o'] = d_z
