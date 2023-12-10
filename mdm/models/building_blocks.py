@@ -918,8 +918,10 @@ class AutoencodingUpwardsFilter(UpwardsFilter):
         x_perm = self._preproc_enc(x, mask)
         # encoder expects 2D x of shape (T_chunk, D) i.e. T_chunk became new data dimension
         x_enc_dist_params, x_enc = self.encoder(x_perm, sample=True)
-        x_rec_dist_params, _ = self.decoder(x_enc)
+        x_rec_dist_params, x_rec = self.decoder(x_enc, sample=True)
 
+        """
+        # NOTE: this seems to consistently lead to worse reconstruction performance compared to MSE recon loss below
         # MAX LOG PROB RECONSTRUCTION LOSS
         # shift first data dim (2) to become T_chunk again (1), we have 3 data dims now as the last one, the last one
         # represents [mu, sigma] for every element
@@ -933,6 +935,13 @@ class AutoencodingUpwardsFilter(UpwardsFilter):
         x_rec_dist = self.decoder.dist(x_rec_dist_params_final)
         # unsqueeze to add explicit data dimension to reconstruction loss as log_prob removes it
         recon_loss = -x_rec_dist.log_prob(x).unsqueeze(-1)
+        recon_loss = masked_mean(recon_loss, mask)
+        """
+
+        # MSE RECONSTRUCTION LOSS
+        x_rec_perm_rs = self._postproc_dec(x_rec)
+        x_rec_final = x_rec_perm_rs[:len(x)]
+        recon_loss = (x_rec_final - x) ** 2
         recon_loss = masked_mean(recon_loss, mask)
 
         # BOTTLENECK KL DIVERGENCE
@@ -1118,7 +1127,7 @@ class ConstUpwardsFilter(UpwardsFilter):
                 mask: torch.Tensor | None = None,
                 context: torch.Tensor | None = None,
                 window_size: int | None = None) -> torch.Tensor:
-        x, n_pad = self._preproc(x, mask, 0.0, window_size)
+        x, mask, n_pad = self._preproc(x, mask, 0.0, window_size)
         x = x[:, 0]
         return torch.zeros_like(x)
 
@@ -1212,7 +1221,7 @@ class RSSMCell(torch.nn.Module):
         self._z_prior = torch.nn.Sequential(lwa(z_prior_lws, activation, layer_norm=layer_norm, name=f'{name}_z_prior'))
         self._z_post = torch.nn.Sequential(lwa(z_post_lws, activation, layer_norm=layer_norm, name=f'{name}_z_post'))
 
-        if d_s_embedding is None:
+        if d_s_embedding == d_h + d_z:
             self.s_embedding = lambda x: x
         else:
             s_embedding_lws = (d_h + d_z_smpl, *s_embedding_lws, d_s_embedding)

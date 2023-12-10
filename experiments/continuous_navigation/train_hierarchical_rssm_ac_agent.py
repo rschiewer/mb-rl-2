@@ -7,13 +7,14 @@ import neptune
 from mdm.training.train import train_model, agent_eval_mode
 from mdm.utils.build_models import build_model_opt, build_rssms, build_agents, cfg_infer_missing_values
 from mdm.utils.utils import *
+from mdm.utils.torch_tools import to_tensors
 from mdm.training.offline_rl_driver import OfflineRLDriver, SamplingType
 from mdm.logging.neptune_logger import NeptuneLogger
 from mdm.logging.not_logger import NotLogger
 from mdm.logging.logger import Scope, GlobalLogger
 from mdm.policies.agent_policy import *
 from mdm.policies.expert_policies import *
-from mdm.utils.customized_gym_envs import *
+import mdm.utils.customized_gym_envs
 from mdm.utils.gym_wrappers import vec_env_worker_no_auto_reset
 
 
@@ -28,7 +29,7 @@ def main():
     parser.add_argument('-n_collect', type=int)
     args = parser.parse_args()
 
-    cfg = load_yaml(here() / 'cfg_rssm_train.yaml')
+    cfg = load_yaml(here() / 'cfg_simple_rssm_train.yaml')
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
     if args.d_batch:
@@ -48,7 +49,7 @@ def main():
                                '_sanity_check_goal_computation': 50})
 
     def make_env_fn():
-        _env = gym.make(cfg['env_name'])
+        _env = mdm.utils.customized_gym_envs.gym.make(cfg['env_name'])
         _env = prepare_env(_env)
         return _env
 
@@ -88,17 +89,17 @@ def main():
     # opt_model = torch.optim.Adam(params, **cfg['optim'])
     # temporary hack end
 
-    collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['trainer']['collect_envs'])
+    collect_env = mdm.utils.customized_gym_envs.gym.vector.AsyncVectorEnv([make_env_fn] * cfg['trainer']['collect_envs'])
     collect_env = CacheLastStepVecEnv(collect_env)
     # collect_env = CacheLastStepEnv(make_env_fn())
-    eval_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['eval']['eval_envs'])
+    eval_env = mdm.utils.customized_gym_envs.gym.vector.AsyncVectorEnv([make_env_fn] * cfg['eval']['eval_envs'])
     eval_env = CacheLastStepVecEnv(eval_env)
     # eval_env = CacheLastStepEnv(make_env_fn())
 
-    video_env = gym.make(cfg['env_name'], render_mode='rgb_array')
+    video_env = mdm.utils.customized_gym_envs.gym.make(cfg['env_name'], render_mode='rgb_array')
     video_env = prepare_env(video_env)
-    video_env = gym.wrappers.RecordVideo(video_env, video_folder='videos', name_prefix=f'{os.getpid()}',
-                                         disable_logger=True)
+    video_env = mdm.utils.customized_gym_envs.gym.wrappers.RecordVideo(video_env, video_folder='videos', name_prefix=f'{os.getpid()}',
+                                                                       disable_logger=True)
     video_env = CacheLastStepEnv(video_env)
 
     train_mem = []
@@ -122,6 +123,11 @@ def main():
         collect_driver = GymEpisodeDriver(collect_env, policy)
         collect_driver.interact(100, test_mem, progress_bar=True)
     test_driver = OfflineRLDriver(test_mem, sampling_type=SamplingType.RANDOM)
+
+
+    prep = to_tensors(train_mem, device='cpu')
+    prep = prepare_data(prep)
+    instance = make_env_fn()
 
     # fig, ani = visualize_trajectory(train_mem[0])
     # gif = anim_to_gif(ani)

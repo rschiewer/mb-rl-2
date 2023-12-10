@@ -69,8 +69,8 @@ class ActorCriticAgent(torch.nn.Module):
         self.eps_mul = torch.nn.Parameter(torch.tensor(eps_exploration_coeff, dtype=torch.float32), requires_grad=False)
         self.eps_min = torch.nn.Parameter(torch.tensor(eps_exploration_min, dtype=torch.float32, requires_grad=False))
         self.alpha = torch.nn.Parameter(torch.tensor(act_entropy_exploration_coeff, dtype=torch.float32))
-        if not learn_act_entropy_exploration_coeff:
-            self.alpha.requires_grad = False
+        #if not learn_act_entropy_exploration_coeff:
+        #    self.alpha.requires_grad = False
         self.mu = novelty_exploration_coeff
         self.min_scale = min_scale
         self.use_slow_world_model = use_slow_world_model
@@ -255,8 +255,8 @@ class ActorCriticAgent(torch.nn.Module):
                 sigma: torch.Tensor):
         # sigma = torch.full_like(sigma, 0.1)
         d = torch.distributions.Normal(loc=mu, scale=sigma)
-        # d = torch.distributions.TransformedDistribution(d, [TanhBijector()])
-        # d = torch.distributions.Independent(d, 1)
+        d = torch.distributions.TransformedDistribution(d, [TanhBijector()])
+        #d = torch.distributions.Independent(d, 1)
         return d
 
     @torch.jit.ignore
@@ -266,21 +266,25 @@ class ActorCriticAgent(torch.nn.Module):
                 explore: bool,
                 noise: float):
         mu, sigma = dist_params.unbind(-1)
+
+        #if explore:
+        #    sigma = sigma + noise + self.eps
+
         d = self._a_dist(mu, sigma)
 
         if sample:
             s = d.rsample()
         else:
-            # s = torch.nn.functional.tanh(mu)
-            s = mu
+            s = torch.nn.functional.tanh(mu)
+            #s = mu
 
-        if explore:
-            noise_sigma = self.eps.data + noise
-            noise = torch.distributions.Normal(torch.zeros_like(s), torch.full_like(sigma, noise_sigma)).sample()
-            s = s + noise
+        #if explore:
+        #    noise_sigma = self.eps.data + noise
+        #    noise = torch.distributions.Normal(torch.zeros_like(s), torch.full_like(sigma, noise_sigma)).sample()
+        #    s = s + noise
 
-        clipped = torch.clamp(s, -1.0 + 1e-6, 1.0 - 1e-6)
-        s = clipped.detach() + s - s.detach()
+        #clipped = torch.clamp(s, -1.0 + 1e-6, 1.0 - 1e-6)
+        #s = clipped.detach() + s - s.detach()
         #s = clipped
         #s = torch.tanh(s)
 
@@ -403,16 +407,21 @@ class ActorCriticAgent(torch.nn.Module):
             #policy_loss = -a_log_prob * advantage_actor.detach() * valid
             # policy_loss = -advantage_actor
         else:
+            #policy_loss = -a_log_prob[:-1] * advantage_actor[1:].detach() * valid[:-1]
             # advantage = (lambda_returns - (v_actor * valid)[:-1]).detach()
             #policy_loss = -a_log_prob * advantage_actor.detach() * valid
             policy_loss = -a_log_prob[1:] * advantage_actor[:-1].detach() * valid[:-1]
         policy_loss = torch.sum(policy_loss)
 
-        # last state is not recorded, last action doesn't lead anywhere
+        # ACTION ENTROPY LOSS
         act_entropy = self._a_dist_entropy(a_dist)
         act_entropy_loss = torch.sum(act_entropy, dim=-1, keepdim=True)  # sum over action dim
         act_entropy_loss = torch.sum(act_entropy_loss * valid)  # sum over T and B
-        act_entropy_loss = self.alpha * act_entropy_loss
+        act_entropy_loss = - self.alpha.detach() * act_entropy_loss
+
+        # ALPHA LOSS
+        alpha_loss = self.alpha * (a_log_prob.detach() + 0.1)
+        alpha_loss = - 2.0 * torch.sum(alpha_loss * valid)
 
         # CRITIC
         with torch.no_grad():
@@ -425,10 +434,11 @@ class ActorCriticAgent(torch.nn.Module):
         value_loss = torch.nn.functional.smooth_l1_loss(v_critic, value_target.detach(), reduction='none')
         value_loss = torch.sum(value_loss * valid)
 
+
         # TODO: currently last action is not trained, we can change that and record last state in act_in_sim as well
 
         ppo_loss = torch.zeros_like(value_loss)  # torch.mean(ppo_loss)
-        loss = policy_loss + value_loss - act_entropy_loss  # + ppo_loss
+        loss = policy_loss + value_loss + act_entropy_loss + alpha_loss # + ppo_loss
 
         # log statistics
         with torch.no_grad():
@@ -459,9 +469,11 @@ class ActorCriticAgent(torch.nn.Module):
                   'policy': policy_loss,
                   'value': value_loss,
                   'ema_value': ema_value_loss,
+                  'alpha': self.alpha,
                   'policy_trust_region_loss': ppo_loss,
                   'action_entropy_reward_aug': act_entropy_loss,
                   'eps_exploration': self.eps,
+                  'alpha_loss': alpha_loss,
                   'monitoring_a_dist_mean': a_dist_mean,
                   'monitoring_a_dist_std': a_dist_std,
                   'monitoring_a_min': a_min,

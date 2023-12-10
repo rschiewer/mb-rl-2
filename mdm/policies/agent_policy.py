@@ -1,4 +1,5 @@
 import itertools
+import random
 from typing import Dict, Union, Sequence
 
 import torch
@@ -136,6 +137,7 @@ class HierarchicalLatentAgentPolicy(Policy):
         self.level_active = [None for _ in range(model.levels)]
         self.flight_record = [{} for _ in range(model.levels)]
         self.action_history = [[] for _ in range(model.levels)]
+        self.chunk_history = []
 
         use_slow_world_model = []
         o_key = []
@@ -166,6 +168,7 @@ class HierarchicalLatentAgentPolicy(Policy):
         self.flight_record = [{'z': [], 'o': [], 'a': [], 'r': [], 'terminal': [], 'time_step': [], 'z_post': []}
                               for _ in self.model.rssm_modules]
         self.action_queue = []
+        self.chunk_history = []
 
     @torch.no_grad()
     def _prep_step(self,
@@ -281,10 +284,10 @@ class HierarchicalLatentAgentPolicy(Policy):
         self.act_cache[i_highest] += simulation['agent']['a']
         self.action_history[i_highest] += simulation['agent']['a']
 
-        """
         # act with goal seeking agents
         if i_highest > 0:
             goals_from_above = simulation['model']['o']
+            chunk_id = random.randint(0, 100000)
             for i_lvl in reversed(range(0, i_highest)):
                 state = self.grounded_env_states[i_lvl]
                 agent = self.model.goal_seeking_agents[i_lvl][0]
@@ -292,15 +295,18 @@ class HierarchicalLatentAgentPolicy(Policy):
                 new_goals = []
                 for goal in goals_from_above:
                     simulation = agent.act_in_sim(env_start_state=state, sim_env=self.model, n_steps=n_steps, goal=goal,
-                                                  sample_actions=self.explore, explore=self.explore,
+                                                  sample_actions=False, explore=False,
                                                   sample_states=self.sample_world_model, reconstruct=i_lvl > 0)
                     # simulation['agent']['a'] = [torch.zeros_like(x) for x in simulation['agent']['a']]
                     state = simulation['model_state']
                     self.act_cache[i_lvl] += simulation['agent']['a']
                     self.action_history[i_lvl] += simulation['agent']['a']
+                    self.chunk_history.extend([chunk_id for _ in simulation['agent']['a']])
                     if i_lvl > 0:
                         new_goals += simulation['model']['o']
                 goals_from_above = new_goals
+        else:
+            self.chunk_history.append(-1)
 
         self.action_queue += self.act_cache[0]
         """
@@ -313,6 +319,7 @@ class HierarchicalLatentAgentPolicy(Policy):
             self.action_queue += list(a.unbind(0))
         else:
             self.action_queue += self.act_cache[0]
+        """
 
         """
         # act with identity high level actions

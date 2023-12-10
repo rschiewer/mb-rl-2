@@ -1008,6 +1008,18 @@ def filter_mem_state_seq_to_batch(mem: Dict[str, List[torch.Tensor]],
     return states, mask
 
 
+def seq_to_batch(mem: Dict[str, torch.Tensor | List[torch.Tensor]],
+                 i_start: int = 0,
+                 i_end: int = None):
+    if i_end is None:
+        first_elem = next(iter(mem.values()))
+        i_end = len(first_elem)
+
+    mem = {k: stack_if_list(v[i_start: i_end]) for k, v in mem.items()}
+    mem = {k: v.reshape(v.shape[0] * v.shape[1], *v.shape[2:]) for k, v in mem.items()}
+
+    return mem
+
 def log_params(model: torch.nn.Module,
                logger: Logger,
                scope: Scope,
@@ -1058,7 +1070,7 @@ def extend_memory(memory: Dict[str, Sequence[Any]],
     return memory
 
 
-def get_base_env(env: gym.Env):
+def get_env_instance(env: gym.Env):
     core_env = env.unwrapped
     if getattr(core_env, 'is_vector_env', False):
         env_creating_fn = core_env.env_fns[0]
@@ -1069,7 +1081,8 @@ def get_base_env(env: gym.Env):
 
 
 def env_class_is(env: gym.Env, other):
-    base_env = get_base_env(env)
+    base_env = get_env_instance(env)
+    base_env = base_env.unwrapped
     if isinstance(other, str):
         return base_env.spec.id == other
     elif isinstance(other, gym.envs.registration.EnvSpec):
@@ -1077,7 +1090,7 @@ def env_class_is(env: gym.Env, other):
     elif isinstance(other, gym.Env):
         return base_env.spec.id == other.spec.id
     else:
-        return isinstance(base_env, other)
+        return issubclass(type(base_env), other)
 
 
 def numpyfy(x: torch.Tensor | List[torch.Tensor] | Tuple[torch.Tensor],

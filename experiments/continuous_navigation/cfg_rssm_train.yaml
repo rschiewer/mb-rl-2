@@ -149,6 +149,7 @@ agents:
          eps_exploration_init: 0.9
          eps_exploration_coeff: 0.9999
          eps_exploration_min: 0.05
+         min_scale: 0.1
          act_entropy_exploration_coeff: 0.0000
          learn_act_entropy_exploration_coeff: False
          novelty_exploration_coeff: 0.00
@@ -172,6 +173,7 @@ agents:
          eps_exploration_init: 0.9
          eps_exploration_coeff: 0.9992
          eps_exploration_min: 0.05
+         min_scale: 0.1
          act_entropy_exploration_coeff: 0.0000
          learn_act_entropy_exploration_coeff: False
          novelty_exploration_coeff: 0.00
@@ -196,6 +198,7 @@ agents:
          eps_exploration_init: 0.3
          eps_exploration_coeff: 0.999
          eps_exploration_min: 0.05
+         min_scale: 0.001
          act_entropy_exploration_coeff: 0.0000
          learn_act_entropy_exploration_coeff: False
          novelty_exploration_coeff: 0.0
@@ -211,7 +214,7 @@ agents:
          critic_layer_norm: True
          normalize_observations: False
          normalize_rewards: False
-         dynamics_loss: True
+         dynamics_loss: False
          use_slow_value_target: True
          use_slow_world_model: False
 eval:

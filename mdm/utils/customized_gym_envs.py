@@ -2,7 +2,7 @@ import gymnasium as gym
 
 static_u_maze_map_small = [[1, 1, 1, 1, 1],
                            [1, 'g', 0, 0, 1],
-                           [1, 1, 1, 0, 1],
+                           [1, 1, 1, 'r', 1],
                            [1, 'r', 0, 0, 1],
                            [1, 1, 1, 1, 1]]
 
