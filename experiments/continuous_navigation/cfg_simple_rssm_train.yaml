@@ -97,6 +97,7 @@ agents:
          ema_update_coeff: 0.95
          lr_actor: 0.0001
          lr_critic: 0.0002
+         lr_other: 0.00001
          min_scale: 0.1
          actor_lws: [ 100, 200, 100 ]
          critic_lws: [ 100, 200, 100 ]

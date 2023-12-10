@@ -50,7 +50,20 @@ def build_agents(cfg: dict,
         agent = agent.to(device)
         actor_optimizer = torch.optim.Adam(agent.actor_net.parameters(), lr=cfg['lr_actor'])
         critic_optimizer = torch.optim.Adam(agent.critic_net.parameters(), lr=cfg['lr_critic'])
-        return agent, actor_optimizer, critic_optimizer
+        # make one optimizer for all parameters not actor or critic net related
+        exclude_params = list(agent.actor_net.parameters()) + list(agent.critic_net.parameters())
+        remaining_params = []
+        for p in agent.parameters():  # parameters need to be explicitly compared with 'is'
+            found = False
+            for p_other in exclude_params:
+                if torch.equal(p, p_other):
+                    found = True
+                    break
+            if not found:
+                remaining_params.append(p)
+        other_params_optimizer = torch.optim.Adam(remaining_params, lr=cfg['lr_other'])
+        return agent, {'actor_optimizer': actor_optimizer, 'critic_optimizer': critic_optimizer,
+                       'other_optimizer': other_params_optimizer}
 
     r_max_agents = []
     goal_seeking_agents = []

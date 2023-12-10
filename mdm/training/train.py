@@ -277,8 +277,8 @@ def plot_latent_state_differences(pred, logger, i_step, major_scope):
 
 
 def decoding_err_diff(model, pred, targets, level, n_steps, sample_model, sample_agents, i_step, logger):
-    rma, rma_act_opt, rma_crit_opt = model.r_max_agents[level]
-    gsa, gsa_act_opt, gsa_crit_opt = model.goal_seeking_agents[level - 1]
+    rma, rma_optimizers = model.r_max_agents[level]
+    gsa, gsa_optimizers = model.goal_seeking_agents[level - 1]
     # omit first time step as we don't get a starting and end state for below model
     start_state_lvl, start_state_mask = filter_mem_state_seq_to_batch(pred[level], targets[level]['mask'])
     start_state_lvl = rssm_detach_state(*start_state_lvl)
@@ -346,8 +346,8 @@ def decoding_err_diff(model, pred, targets, level, n_steps, sample_model, sample
 
 
 def imitation_learning(model, pred, targets, level, n_steps, sample_model, sample_agents, i_step, logger):
-    rma, rma_act_opt, rma_crit_opt = model.r_max_agents[level]
-    gsa, gsa_act_opt, gsa_crit_opt = model.goal_seeking_agents[level - 1]
+    rma, rma_optimizers = model.r_max_agents[level]
+    gsa, gsa_optimizers = model.goal_seeking_agents[level - 1]
     # omit first time step as we don't get a starting and end state for below model
     start_state_lvl, start_state_mask = filter_mem_state_seq_to_batch(pred[level], targets[level]['mask'])
     start_state_lvl = rssm_detach_state(*start_state_lvl)
@@ -396,10 +396,10 @@ def imitation_learning(model, pred, targets, level, n_steps, sample_model, sampl
     diff = (torch.stack(rma_simulation['agent']['a']) - a_filtered) ** 2
     diff = torch.sum(diff * (1 - loss_mask))
     # do train step
-    rma_act_opt.zero_grad(set_to_none=True)
+    rma_optimizers['actor_optimizer'].zero_grad(set_to_none=True)
     diff.backward()
     torch.nn.utils.clip_grad_norm_(rma.parameters(), 100.0)
-    rma_act_opt.step()
+    rma_optimizers['actor_optimizer'].step()
     # logging
     message = {'imitation_learning_loss': diff}
     logger.log(to_np(message), Scope.TRAIN() / f'r_max_agent/{level}/', i_step)
@@ -407,7 +407,7 @@ def imitation_learning(model, pred, targets, level, n_steps, sample_model, sampl
 
 def pessimistic_model_training(model, opt_model, pred, targets, level, n_steps, sample_model, sample_agents, i_step,
                                logger):
-    rma, rma_act_opt, rma_crit_opt = model.r_max_agents[level]
+    rma, _ = model.r_max_agents[level]
     world = model.rssm_modules[level]
 
     # fold batch dimension into time dimension to start simulation for all time steps in parallel
@@ -451,33 +451,32 @@ def pessimistic_model_training(model, opt_model, pred, targets, level, n_steps, 
 
 def train_rmax_agent(agent_model_steps, cfg, eval_env, i_step, level, logger, model, pred, sample_agents, sample_model,
                      targets):
-    r_max_agent, r_max_actor_opt, r_max_critic_opt = model.r_max_agents[level]
+    rma, optimizers = model.r_max_agents[level]
     # use all time steps of teacher forcing rollout from model as starting point
     start_state_lvl, start_state_mask = filter_mem_state_seq_to_batch(pred[level], targets[level]['mask'])
     # prevent gradient flow into the start state
     start_state_lvl = rssm_detach_state(*start_state_lvl)
     abstract_level = level > 0
-    r_max_simulation = r_max_agent.act_in_sim(start_state_lvl, model, agent_model_steps[level],
-                                              sample_states=sample_model, sample_actions=sample_agents,
-                                              explore=True, expl_noise=0.0, reconstruct=True)
-    r_max_losses = r_max_agent.update_step(r_max_simulation['agent'],
-                                           first_step_mask=start_state_mask.unsqueeze(0),
-                                           actor_optimizer=r_max_actor_opt,
-                                           critic_optimizer=r_max_critic_opt,
-                                           logger=logger)
+    rma_simulation = rma.act_in_sim(start_state_lvl, model, agent_model_steps[level],
+                                    sample_states=sample_model, sample_actions=sample_agents,
+                                    explore=True, expl_noise=0.0, reconstruct=True)
+    r_max_losses = rma.update_step(rma_simulation['agent'],
+                                   first_step_mask=start_state_mask.unsqueeze(0),
+                                   **optimizers,
+                                   logger=logger)
     logger.log(to_np(r_max_losses), Scope.TRAIN() / f'r_max_agent/{level}/', i_step)
     # debugging and inspection
     if i_step % cfg['trainer']['eval_interval'] == 0 and env_class_is(eval_env, Nav2dEnv):
-        plot_value_function(eval_env, model, r_max_agent, level, logger, i_step)
+        plot_value_function(eval_env, model, rma, level, logger, i_step)
         plot_rewards(eval_env, model, level, logger, i_step)
     if level > 0 and i_step % cfg['trainer']['eval_interval'] == 0 and env_class_is(eval_env, Nav2dEnv):
-        plot_goals(r_max_simulation, model, logger, i_step, level)
+        plot_goals(rma_simulation, model, logger, i_step, level)
     if GlobalLogger.can_log('sanity_check_goal_computation', i_step) and level < model.levels - 1:
-        plot_goals_fancy(i_step, level, logger, model, r_max_agent, r_max_simulation)
+        plot_goals_fancy(i_step, level, logger, model, rma, rma_simulation)
 
     if level < model.levels - 1:
         pass
-        # update_model_chunk_distance(i_step, level, logger, model, r_max_simulation)
+        # update_model_chunk_distance(i_step, level, logger, model, rma_simulation)
 
 
 def plot_goals_fancy(i_step, l, logger, model, r_max_agent, r_max_simulation):
@@ -633,8 +632,8 @@ def train_goal_seeking_agent_goals_above_with_agent(model, level, pred, targets,
     n_generated_goals = 2
     chunk_size = model.strides[level + 1]
     n_goals_total = len(targets[level + 1]['o'])
-    gsa, actor_opt, critic_opt = model.goal_seeking_agents[level]
-    rma, _, _ = model.r_max_agents[level + 1]
+    gsa, gsa_optimizers = model.goal_seeking_agents[level]
+    rma, _ = model.r_max_agents[level + 1]
 
     if len(pred[level]['a']) <= chunk_size * n_groundtruth_goals + 1:
         return
@@ -699,7 +698,7 @@ def train_goal_seeking_agent_goals_above_with_agent(model, level, pred, targets,
         # vary step count to give the agent some slack sometimes
         n_steps = random.randint(math.ceil(0.5 * chunk_size), 3 * chunk_size)
         # n_steps = random.randint(chunk_size, chunk_size + 1)
-        #n_steps = chunk_size
+        # n_steps = chunk_size
 
         explore = random.random() > 0.75
         if explore:
@@ -718,8 +717,7 @@ def train_goal_seeking_agent_goals_above_with_agent(model, level, pred, targets,
         agent_mem = goal_simulation['agent']
         loss = gsa.update_step(agent_mem,
                                first_step_mask=start_state_mask,
-                               actor_optimizer=actor_opt,
-                               critic_optimizer=critic_opt)
+                               **gsa_optimizers)
         # loss = {f'{k}_{i_goal}': v for i, (k, v) in enumerate(loss.items())}
         # gsa_losses.update(loss)
         for k in loss:
@@ -774,7 +772,7 @@ def train_goal_seeking_agent_goals_above_with_agent(model, level, pred, targets,
 def train_goal_seeking_agent_goals_above(model, level, pred, targets, eval_env, cfg, i_step, logger, sample_agents):
     n_goals = 3
     chunk_size = model.strides[level + 1]
-    goal_agent, goal_actor_opt, goal_critic_opt = model.goal_seeking_agents[level]
+    gsa, gsa_optimizers = model.goal_seeking_agents[level]
     n_goals_total = len(targets[level + 1]['o'])
 
     if len(pred[level]['a']) <= chunk_size * n_goals + 1:
@@ -817,14 +815,13 @@ def train_goal_seeking_agent_goals_above(model, level, pred, targets, eval_env, 
         # n_steps = chunk_size
 
         start_state = rssm_detach_state(*start_state)  # prevent gradients to flow into previous chunk
-        goal_simulation = goal_agent.act_in_sim(env_start_state=start_state, sim_env=model, n_steps=n_steps,
-                                                explore=True, goal=goal, sample_states=False,
-                                                sample_actions=sample_agents, expl_noise=0.1, reconstruct=True)
+        goal_simulation = gsa.act_in_sim(env_start_state=start_state, sim_env=model, n_steps=n_steps,
+                                         explore=True, goal=goal, sample_states=False,
+                                         sample_actions=sample_agents, expl_noise=0.1, reconstruct=True)
         agent_mem = goal_simulation['agent']
-        loss = goal_agent.update_step(agent_mem,
-                                      first_step_mask=start_state_mask,
-                                      actor_optimizer=goal_actor_opt,
-                                      critic_optimizer=goal_critic_opt)
+        loss = gsa.update_step(agent_mem,
+                               first_step_mask=start_state_mask,
+                               **gsa_optimizers)
         # loss = {f'{k}_{i_goal}': v for i, (k, v) in enumerate(loss.items())}
         # gsa_losses.update(loss)
         for k in loss:
@@ -847,8 +844,8 @@ def train_goal_seeking_agent_goals_above(model, level, pred, targets, eval_env, 
     logger.log(to_np(gsa_losses), Scope.TRAIN() / f'goal_seeking_agent/{level}/', i_step)
 
     if i_step % cfg['trainer']['eval_interval'] == 0 and level == 0 and env_class_is(eval_env, Nav2dEnv):
-        plot_goal_conditioned_value_function(eval_env, model, goal_agent, level, logger, i_step, 3, 3)
-        plot_goal_seeking_performance(goal_agent, gsa_model_mem, gsa_agent_mem, goals, first_start_state, model,
+        plot_goal_conditioned_value_function(eval_env, model, gsa, level, logger, i_step, 3, 3)
+        plot_goal_seeking_performance(gsa, gsa_model_mem, gsa_agent_mem, goals, first_start_state, model,
                                       [chunk_size for _ in goals], logger, i_step, level)
 
 
@@ -856,7 +853,7 @@ def train_goal_seeking_agent_same_level(model, level, pred, targets, eval_env, c
                                         perturb=False):
     n_goals = 3
     chunk_size = model.strides[level + 1]
-    goal_agent, goal_actor_opt, goal_critic_opt = model.goal_seeking_agents[level]
+    gsa, gsa_optimizers = model.goal_seeking_agents[level]
     trajectories = pred[level]
     mask = targets[level]['mask']
     train_traj_len = len(mask) - (1 + n_goals * chunk_size)
@@ -888,7 +885,7 @@ def train_goal_seeking_agent_same_level(model, level, pred, targets, eval_env, c
     start_state = first_start_state
     start_state_mask = first_step_mask
     for goal_state in goal_states:
-        goal = goal_agent.o_from_state(goal_state)
+        goal = gsa.o_from_state(goal_state)
         goal_mem.append(goal)
 
         # vary step count to give the agent some slack sometimes
@@ -896,14 +893,11 @@ def train_goal_seeking_agent_same_level(model, level, pred, targets, eval_env, c
         # n_steps = random.randint(chunk_size, chunk_size + 1)
         # n_steps = chunk_size
 
-        goal_simulation = goal_agent.act_in_sim(env_start_state=start_state, sim_env=model, n_steps=n_steps,
-                                                explore=True, goal=goal, sample_states=False,
-                                                sample_actions=sample_agents, expl_noise=0.5, reconstruct=True)
+        goal_simulation = gsa.act_in_sim(env_start_state=start_state, sim_env=model, n_steps=n_steps,
+                                         explore=True, goal=goal, sample_states=False,
+                                         sample_actions=sample_agents, expl_noise=0.0, reconstruct=True)
         agent_mem = goal_simulation['agent']
-        loss = goal_agent.update_step(agent_mem,
-                                      first_step_mask=start_state_mask,
-                                      actor_optimizer=goal_actor_opt,
-                                      critic_optimizer=goal_critic_opt)
+        loss = gsa.update_step(agent_mem, first_step_mask=start_state_mask, **gsa_optimizers)
         # loss = {f'{k}_{i_goal}': v for i, (k, v) in enumerate(loss.items())}
         # gsa_losses.update(loss)
         for k in loss:
@@ -926,8 +920,8 @@ def train_goal_seeking_agent_same_level(model, level, pred, targets, eval_env, c
     logger.log(to_np(gsa_losses), Scope.TRAIN() / f'goal_seeking_agent/{level}/', i_step)
 
     if i_step % cfg['trainer']['eval_interval'] == 0 and level == 0 and env_class_is(eval_env, Nav2dEnv):
-        plot_goal_conditioned_value_function(eval_env, model, goal_agent, level, logger, i_step, 3, 3)
-        plot_goal_seeking_performance(goal_agent, gsa_model_mem, gsa_agent_mem, goal_mem, first_start_state, model,
+        plot_goal_conditioned_value_function(eval_env, model, gsa, level, logger, i_step, 3, 3)
+        plot_goal_seeking_performance(gsa, gsa_model_mem, gsa_agent_mem, goal_mem, first_start_state, model,
                                       [chunk_size for _ in goal_states], logger, i_step, level)
 
 

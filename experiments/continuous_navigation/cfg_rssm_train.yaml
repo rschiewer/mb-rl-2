@@ -157,6 +157,7 @@ agents:
          tr_policy_ema_update_coeff: 0.95
          lr_actor: 0.0001
          lr_critic: 0.0002
+         lr_other: 0.00001
          actor_lws: [ 100, 200, 100 ]
          critic_lws: [ 100, 200, 100 ]
          actor_act_fn: "relu"
@@ -181,6 +182,7 @@ agents:
          tr_policy_ema_update_coeff: 0.95
          lr_actor: 0.0001
          lr_critic: 0.0002
+         lr_other: 0.00001
          actor_lws: [ 100, 200, 100 ]
          critic_lws: [ 100, 200, 100 ]
          actor_act_fn: "relu"
@@ -206,6 +208,7 @@ agents:
          tr_policy_ema_update_coeff: 0.95
          lr_actor: 0.0001
          lr_critic: 0.0002
+         lr_other: 0.00001
          actor_lws: [ 100, 200, 100 ]
          critic_lws: [ 100, 200, 100 ]
          actor_act_fn: "relu"

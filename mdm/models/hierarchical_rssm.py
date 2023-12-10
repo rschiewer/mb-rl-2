@@ -94,7 +94,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         self.warmup_steps = tuple(warmup_steps)
         self.kl_betas = tuple(kl_betas)
         self.kl_reg_betas = tuple(kl_reg_betas)
-        self.r_max_agents = tuple(r_max_agents)  # no module list to shield the agents from any pytorch functions
+        self.r_max_agents = tuple(r_max_agents)  # no module list to prevent agent parameter being part of .parameters()
         self.goal_seeking_agents = tuple(goal_seeking_agents)
         self.latent_overshooting = latent_overshooting if latent_overshooting else []
         self.ema_regularization = ema_regularization
@@ -541,7 +541,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
     def pessimistic_loss(self, memory, targets, level):
         start_state, start_state_mask = filter_mem_state_seq_to_batch(memory[level], targets[level]['mask'])
         start_state = rssm_detach_state(*start_state)
-        rma, _, _ = self.r_max_agents[level]
+        rma, _ = self.r_max_agents[level]
         world = self.rssm_modules[level]
         mem = {}
 

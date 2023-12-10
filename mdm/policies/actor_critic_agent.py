@@ -421,7 +421,7 @@ class ActorCriticAgent(torch.nn.Module):
 
         # ALPHA LOSS
         alpha_loss = self.alpha * (a_log_prob.detach() + 0.1)
-        alpha_loss = - 2.0 * torch.sum(alpha_loss * valid)
+        alpha_loss = - torch.sum(alpha_loss * valid)
 
         # CRITIC
         with torch.no_grad():
@@ -433,7 +433,6 @@ class ActorCriticAgent(torch.nn.Module):
         v_critic = self.critic_net(o.detach())
         value_loss = torch.nn.functional.smooth_l1_loss(v_critic, value_target.detach(), reduction='none')
         value_loss = torch.sum(value_loss * valid)
-
 
         # TODO: currently last action is not trained, we can change that and record last state in act_in_sim as well
 
@@ -508,6 +507,7 @@ class ActorCriticAgent(torch.nn.Module):
                     first_step_mask: Optional[torch.Tensor],
                     actor_optimizer: torch.optim.Optimizer,
                     critic_optimizer: torch.optim.Optimizer,
+                    other_optimizer: torch.optim.Optimizer,
                     logger: Logger = None):
         losses = self.eval_step(a_dist=simulation_data['a_dist'],
                                 ema_a_dist=simulation_data['ema_a_dist'],
@@ -526,6 +526,7 @@ class ActorCriticAgent(torch.nn.Module):
 
         actor_optimizer.zero_grad(set_to_none=True)
         critic_optimizer.zero_grad(set_to_none=True)
+        other_optimizer.zero_grad(set_to_none=True)
 
         # val_bef = np.sum([p.detach().cpu().numpy().mean() for p in self.critic_net.parameters()])
         # pol_bef = np.sum([p.detach().cpu().numpy().mean() for p in self.actor_net.parameters()])
@@ -548,6 +549,7 @@ class ActorCriticAgent(torch.nn.Module):
 
         actor_optimizer.step()
         critic_optimizer.step()
+        other_optimizer.step()
 
         # val_aftr = np.sum([p.detach().cpu().numpy().mean() for p in self.critic_net.parameters()])
         # pol_aftr = np.sum([p.detach().cpu().numpy().mean() for p in self.actor_net.parameters()])
