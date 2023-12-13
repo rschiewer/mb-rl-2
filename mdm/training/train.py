@@ -1,4 +1,5 @@
 import math
+import textwrap
 from math import ceil
 
 import gym_nav2d.envs
@@ -11,6 +12,8 @@ from matplotlib.colors import hsv_to_rgb, to_rgba
 from matplotlib.patches import Rectangle
 from tqdm import tqdm
 import moviepy.editor as mp
+import cv2
+from moviepy.video.tools.subtitles import SubtitlesClip
 
 from mdm.logging.logger import Scope, GlobalLogger
 from mdm.policies.actor_critic_agent import ActorCriticAgent
@@ -161,7 +164,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 # hierarchical agent
                 eval_mem_hierarchical = []
                 eval_env.reset()
-                hierarchical_policy = HierarchicalLatentAgentPolicy(model, explore=False)
+                hierarchical_policy = HierarchicalLatentAgentPolicy(model, explore=False, stochastic=True)
                 d = GymEpisodeDriver(eval_env, hierarchical_policy)
                 d.interact(10, eval_mem_hierarchical)
                 # eval_mem_hierarchical += collect_data(eval_env, cfg['eval']['eval_steps'], hierarchical_policy)
@@ -459,7 +462,7 @@ def train_rmax_agent(agent_model_steps, cfg, eval_env, i_step, level, logger, mo
     abstract_level = level > 0
     rma_simulation = rma.act_in_sim(start_state_lvl, model, agent_model_steps[level],
                                     sample_states=sample_model, sample_actions=sample_agents,
-                                    explore=True, expl_noise=0.0, reconstruct=True)
+                                    explore=True, reconstruct=True)
     r_max_losses = rma.update_step(rma_simulation['agent'],
                                    first_step_mask=start_state_mask.unsqueeze(0),
                                    **optimizers,
@@ -1158,9 +1161,10 @@ def record_episode(cfg, i_step, logger, model, video_env):
     # record an episode
     video_env.reset()
     video_env.get_wrapper_attr('start_video_recorder')()
-    policy = HierarchicalLatentAgentPolicy(model, explore=False)
+    policy = HierarchicalLatentAgentPolicy(model, explore=False, stochastic=True)
     # policy = LatentAgentPolicy(model.r_max_agents[0][0], model, explore=False)
-    _ = collect_data(video_env, cfg['eval']['eval_steps'], policy)
+    traj = collect_data(video_env, cfg['eval']['eval_steps'], policy)
+    traj = traj[0]  # we collect only a single trajectory, remove list wrapper
     video_env.get_wrapper_attr('close_video_recorder')()
     # make video smaller
     # video_name = f'{video_env.name_prefix}-episode-{video_env.episode_id-1}.mp4'
@@ -1171,8 +1175,40 @@ def record_episode(cfg, i_step, logger, model, video_env):
     pid = os.getpid()
     tmp_file_name = f'.{pid}_{timestamp}_agent_video.mp4'
     clip = mp.VideoFileClip(video_path)
-    # clip = clip.resize(width=80)
-    clip.write_videofile(tmp_file_name, preset='veryslow', verbose=False, logger=None)
+
+    # resizing the video and printing action values on top
+    font = cv2.FONT_HERSHEY_PLAIN
+    font_scale = 0.7
+    text_color = (255, 0, 0)
+    char_height, char_width = cv2.getTextSize(text='X', fontFace=font, fontScale=font_scale, thickness=1)[0]
+    current_frame = 0  # keep track of frame number as moviepy uses seconds as time format
+
+    def print_action_on_frame(get_frame, t):
+        nonlocal current_frame
+        frame = get_frame(t)
+        frame = cv2.resize(frame, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
+        # for some reason, the rendered video seems to have more frames than the resulting trajectory has time steps so
+        # we can only assign actions to frames as long as we have some
+        if current_frame < len(traj['a']):
+            a = np.round(traj['a'][current_frame], decimals=4)  # make numbers shorter for printing
+            available_columns = frame.shape[1] // char_width  # calculate roughly how many characters fit in a line
+            wrapped_a_txt = textwrap.wrap(str(a), width=available_columns)  # wrap action text if necessary
+            y = 20  # specify start y-coordinate for printing action
+            for a_txt in wrapped_a_txt:  # print action text line by line
+                cv2.putText(img=frame, text=a_txt, org=(10, y), fontFace=font, fontScale=font_scale, color=text_color,
+                            thickness=1, lineType=cv2.LINE_AA)
+                # update the y-coordinate for the next line
+                textsize = cv2.getTextSize(text=a_txt, fontFace=font, fontScale=font_scale, thickness=1)[0]
+                y += textsize[1] + 5  # add 5 pixels of margin between the lines
+            plt.imshow(frame)
+            plt.show()
+        current_frame += 1
+        return frame
+
+    clip = clip.fl(print_action_on_frame)
+    #clip = clip.resize(width=120)
+
+    clip.write_videofile(tmp_file_name, preset='fast', verbose=False, logger=None)
     try:
         os.remove(video_path)  # delete original video file
         os.remove(metadata_path)
