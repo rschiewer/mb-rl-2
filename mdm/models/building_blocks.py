@@ -1207,9 +1207,10 @@ class RSSMCell(torch.nn.Module):
 
         d_det_core = d_z_smpl + d_a
         # need both to satisfy torch script
-        self._lstm = ModuleList([torch.nn.LSTMCell(d_det_core, hidden_size=d_h) for _ in range(n_hidden_layers)])
-        # self._lstm = LayerNormLSTMCell(d_det_core, hidden_size=d_h)
-        self._gru = ModuleList([torch.nn.GRUCell(d_det_core, hidden_size=d_h) for _ in range(n_hidden_layers)])
+        self._lstm = ModuleList([torch.nn.LSTMCell(d_det_core, hidden_size=d_h)]
+                                + [torch.nn.LSTMCell(d_h, hidden_size=d_h) for _ in range(n_hidden_layers - 1)])
+        self._gru = ModuleList([torch.nn.GRUCell(d_det_core, hidden_size=d_h)]
+                               + [torch.nn.GRUCell(d_h, hidden_size=d_h) for _ in range(n_hidden_layers - 1)])
 
         if self.rnn_type == 'lstm':
             for p in self._gru.parameters():
@@ -1466,6 +1467,9 @@ class RSSMCell(torch.nn.Module):
         else:  # categorical
             net_output = net_output.reshape((net_output.shape[0], self.d_z, self.n_latent_categories))
             probs = torch.nn.functional.softmax(net_output, dim=-1)
+            # This ensures that the kl divergence and log probabilities stay well behaved
+            # see https://github.com/ray-project/ray/blob/0b0431cad08cb56ce09921f47903eda525dd3e21/rllib/algorithms/dreamerv3/tf/models/components/representation_layer.py#L105C9-L105C79
+            probs = 0.99 * probs + 0.01 * (1.0 / self.n_latent_categories)
             z_dist = probs.reshape(probs.shape[0], self.d_z * self.n_latent_categories)
         return z_dist
 
