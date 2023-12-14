@@ -19,28 +19,7 @@ def check_action(action: np.ndarray, env: gym.Env):
         raise ValueError(f'Invalid action {action} for action space {env.action_space}')
 
 
-class StepCountEnv(gym.Wrapper):
-
-    def __init__(self,
-                 env: gym.Env):
-        super(StepCountEnv, self).__init__(env)
-        self.current_step = 0
-
-    def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None) -> Tuple[ObsType, dict]:
-        self.current_step = 0
-        return super(StepCountEnv, self).reset(seed=seed, options=options)
-
-    def step(self,
-             action: ActType) -> Tuple[ObsType, float, bool, bool, dict]:
-        o, r, term, trunc, info = self.env.step(action)
-        if term or trunc:
-            self.current_step = 0
-        else:
-            self.current_step += 1
-        return o, r, term, trunc, info
-
-
-class CacheLastStepEnv(StepCountEnv):
+class CacheLastStepEnv(gym.Wrapper):
 
     def __init__(self,
                  env: gym.Env):
@@ -51,6 +30,7 @@ class CacheLastStepEnv(StepCountEnv):
         self.last_term = None
         self.last_trunc = None
         self.last_info = None
+        self.current_step = 0
 
     def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None) -> Tuple[ObsType, dict]:
         o, info = self.env.reset(seed=seed, options=options)
@@ -60,6 +40,7 @@ class CacheLastStepEnv(StepCountEnv):
         self.last_term = False
         self.last_trunc = False
         self.last_info = info
+        self.current_step = 0
         return o, info
 
     def step(self,
@@ -71,6 +52,7 @@ class CacheLastStepEnv(StepCountEnv):
         self.last_term = term
         self.last_trunc = trunc
         self.last_info = info
+        self.current_step += 1
         return o, r, term, trunc, info
 
 
@@ -131,10 +113,11 @@ class CacheLastStepVecEnv(gym.Wrapper):
         #    # self.last_o = np.where(~mask, expand_shape_right(infos['final_observation'], o), o)  # TODO: check this
         self.envs_done = np.bitwise_or(self.envs_done, done_now)
 
-        if self.envs_done.all():
-            self.current_step = 0
-        else:
-            self.current_step += 1
+        #if self.envs_done.all():
+        #    self.current_step = 0
+        #else:
+        #    self.current_step += 1
+        self.current_step += 1
 
         return None, None, None, None, None
 
