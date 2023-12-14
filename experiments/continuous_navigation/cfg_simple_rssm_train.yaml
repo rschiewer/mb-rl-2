@@ -109,7 +109,7 @@ agents:
          critic_layer_norm: True
          normalize_observations: False #'running_average'
          normalize_rewards: False #'running_average'
-         dynamics_loss: True
+         dynamics_loss: False
          use_slow_value_target: True
          use_slow_world_model: False
 

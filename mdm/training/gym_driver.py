@@ -56,8 +56,18 @@ class GymEpisodeDriver(Driver):
                 self.policy.reset()
             # collect one trajectory or more if env is vectorized
             trajectories = collect_data(self.env, -1, self.policy)
+
+            # count number of collected trajectories and update counter
+            n_collected = len(trajectories)
+            ep_iter.n += n_collected
+
+            # If too many trajectories were collected, throw away the difference. This is ok as we consider efficiency
+            # only in terms of the amount of env interactions the agent uses for training.
+            if ep_iter.n > n_episodes:
+                diff = ep_iter.n - n_episodes
+                trajectories = trajectories[:-diff]
+
             mem.extend(trajectories)
-            ep_iter.n += len(trajectories)
             ep_iter.refresh()
             self.env.reset()
 
