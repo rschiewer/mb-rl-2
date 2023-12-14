@@ -44,6 +44,7 @@ class ActorCriticAgent(torch.nn.Module):
                  eps_exploration_min: float = 0,
                  act_entropy_exploration_coeff: float = 0.0,
                  learn_act_entropy_exploration_coeff: bool = False,
+                 target_act_entropy: str | float = 'auto',
                  novelty_exploration_coeff: float = 0.0,
                  min_scale: float = 0.1,
                  use_slow_world_model: bool = False,
@@ -69,7 +70,12 @@ class ActorCriticAgent(torch.nn.Module):
         self.eps_mul = torch.nn.Parameter(torch.tensor(eps_exploration_coeff, dtype=torch.float32), requires_grad=False)
         self.eps_min = torch.nn.Parameter(torch.tensor(eps_exploration_min, dtype=torch.float32, requires_grad=False))
         self.alpha = torch.nn.Parameter(torch.tensor(act_entropy_exploration_coeff, dtype=torch.float32))
-        #if not learn_act_entropy_exploration_coeff:
+        self.learn_aplha = learn_act_entropy_exploration_coeff
+        # see https://github.com/ray-project/ray/blob/5edabc7b2f92712982b0e590f739eb0110d80176/rllib/algorithms/sac/sac.py#L165
+        if target_act_entropy == 'auto':
+            target_act_entropy = float(-d_a)
+        self.target_act_entropy = target_act_entropy
+        # if not learn_act_entropy_exploration_coeff:
         #    self.alpha.requires_grad = False
         self.mu = novelty_exploration_coeff
         self.min_scale = min_scale
@@ -101,14 +107,13 @@ class ActorCriticAgent(torch.nn.Module):
                 o: torch.Tensor,
                 use_ema_modules: bool = False,
                 sample: bool = True,
-                explore: bool = True,
                 expl_noise: float = 0.0):
         o = o.detach()
         if o.shape == self.d_o:  # add batch dim if not there already
             o = o.unsqueeze(0)
 
         a_dist = self._a_dist_params(o)
-        a_smpl = self._a_smpl(dist_params=a_dist, sample=sample, explore=explore, noise=expl_noise)
+        a_smpl = self._a_smpl(dist_params=a_dist, sample=sample, noise=expl_noise)
 
         return a_dist, a_smpl
 
@@ -117,7 +122,6 @@ class ActorCriticAgent(torch.nn.Module):
                    env_start_state: RSSMStateType,
                    sim_env: 'HierarchicalRSSM',
                    n_steps: int,
-                   explore: bool,
                    goal: torch.Tensor = None,
                    agent_memory: Optional[Dict[str, List[torch.Tensor]]] = None,
                    env_memory: Optional[Dict[str, List[torch.Tensor]]] = None,
@@ -138,10 +142,10 @@ class ActorCriticAgent(torch.nn.Module):
 
         if goal is None:  # for torchscript
             goal = torch.zeros_like(env_start_state[-1])
-        #goal = goal.detach()# goal is absolute and should not be altered through gradients
+        # goal = goal.detach()# goal is absolute and should not be altered through gradients
 
         # pad encoded goal with zeros
-        #if self.goal_seeking:
+        # if self.goal_seeking:
         #    with FreezeParameters([sim_env]):
         #        _, goal_enc = sim_env.goal_autoencoder.encode(goal, sample=False)
         #        goal_enc = goal_enc.detach()
@@ -153,7 +157,7 @@ class ActorCriticAgent(torch.nn.Module):
         with FreezeParameters([sim_env, sim_env.rssm_modules[self.level]]):
             for t in range(n_steps):
                 agent_o = self.fuse_o_with_goal(last_env_state, goal)
-                a_dist, a = self(agent_o, sample=sample_actions, explore=explore, expl_noise=expl_noise)
+                a_dist, a = self(agent_o, sample=sample_actions, expl_noise=expl_noise)
                 # ema_a_dist, _, ema_v = self(agent_o, use_ema_modules=True, sample=sample_actions,
                 #                            disable_exploration=disable_exploration)
                 ema_a_dist = torch.ones_like(a_dist)
@@ -180,23 +184,23 @@ class ActorCriticAgent(torch.nn.Module):
                 #    novelty = kl_divergence(z_dist, slow_z_dist).detach()
                 novelty = torch.zeros_like(agent_o[:, 0])
                 # TODO: check if correct time step's z is used for calc rewards and if correct time step's z is stored
-                #if self.goal_seeking:
+                # if self.goal_seeking:
                 #    _, current_o_enc = sim_env.goal_autoencoder.encode(current_env_state[-1], sample=False)
                 #    r = self.goal_similarity(current_o_enc, goal_enc)
-                #else:
+                # else:
                 #    r = pred['r']
                 r = self.build_step_reward(step=current_env_state, r=pred['r'], goal=goal,
                                            use_goal_reward=self.goal_seeking, prev_similarity=None)
                 prev_similarity = r
                 terminal = self.build_step_terminal(current_env_state, goal, pred['terminal'])
 
-                #if self.level > 0:
+                # if self.level > 0:
                 #    _, _, _, s_rec = sim_env.goal_autoencoder(pred['o'], sample=False)
                 #    r_expl = torch.mean((pred['o'] - s_rec) ** 2, dim=-1, keepdim=True)
-                #else:
+                # else:
                 r_expl = torch.zeros_like(r)
 
-                #if self.goal_seeking:
+                # if self.goal_seeking:
                 #    params = {**dict(self.named_parameters()), **dict(world.named_parameters())}
                 #    make_dot(r, params).view()
                 #    quit()
@@ -204,7 +208,8 @@ class ActorCriticAgent(torch.nn.Module):
                 timestep = {  # 'o_env': last_env_state[0],
                     # 'o_env_next': current_env_state[0],
                     # 'goal': goal,
-                    'o': self.fuse_o_with_goal(current_env_state, goal), #agent_o,  # self.o_from_state(current_env_state), #agent_o,
+                    'o': self.fuse_o_with_goal(current_env_state, goal),
+                    # agent_o,  # self.o_from_state(current_env_state), #agent_o,
                     'a': a,
                     'r': r,
                     'r_expl': r_expl,
@@ -241,12 +246,10 @@ class ActorCriticAgent(torch.nn.Module):
                        o: torch.Tensor):
         params = self.actor_net(o)
         mu, logvar = torch.tensor_split(params, 2, -1)
-        # mu, logvar = torch.tensor_split(params, 2, dim=-1)
-        # mu = torch.nn.functional.tanh(mu) # + mu - mu.detach()
-        # sigma = torch.nn.functional.sigmoid(logvar) + self.min_scale # + logvar - logvar.detach()
-        sigma = torch.nn.functional.softplus(logvar) + self.min_scale
-        #mu = torch.tanh(mu)
-        #sigma = torch.sigmoid(logvar) + 0.05
+        mu = torch.tanh(mu) * 5.0  # limit total range of mu but make it easy for the actor net to saturate it
+        logvar = logvar + 5.0  # make initial variance high
+        #sigma = torch.nn.functional.softplus(logvar) + self.min_scale
+        sigma = torch.nn.functional.sigmoid(logvar) * 10.0  # limit total range of sigma
         d = torch.stack([mu, sigma], dim=-1)
         return d
 
@@ -256,19 +259,15 @@ class ActorCriticAgent(torch.nn.Module):
         # sigma = torch.full_like(sigma, 0.1)
         d = torch.distributions.Normal(loc=mu, scale=sigma)
         d = torch.distributions.TransformedDistribution(d, [TanhBijector()])
-        #d = torch.distributions.Independent(d, 1)
+        # d = torch.distributions.Independent(d, 1)
         return d
 
     @torch.jit.ignore
     def _a_smpl(self,
                 dist_params: torch.Tensor,
                 sample: bool,
-                explore: bool,
                 noise: float):
         mu, sigma = dist_params.unbind(-1)
-
-        #if explore:
-        #    sigma = sigma + noise + self.eps
 
         d = self._a_dist(mu, sigma)
 
@@ -276,17 +275,24 @@ class ActorCriticAgent(torch.nn.Module):
             s = d.rsample()
         else:
             s = torch.nn.functional.tanh(mu)
-            #s = mu
+            # s = mu
 
-        #if explore:
+        if noise > 0.0:
+            s = torch.distributions.Normal(loc=s, scale=torch.full_like(s, noise)).rsample()
+            s = torch.clamp(s, -1.0, 1.0)
+
+        if torch.any(s > 1.0) or torch.any(s < -1.0):
+            raise RuntimeError(f'Invalid action: {s}')
+
+        # if explore:
         #    noise_sigma = self.eps.data + noise
         #    noise = torch.distributions.Normal(torch.zeros_like(s), torch.full_like(sigma, noise_sigma)).sample()
         #    s = s + noise
 
-        #clipped = torch.clamp(s, -1.0 + 1e-6, 1.0 - 1e-6)
-        #s = clipped.detach() + s - s.detach()
-        #s = clipped
-        #s = torch.tanh(s)
+        # clipped = torch.clamp(s, -1.0 + 1e-6, 1.0 - 1e-6)
+        # s = clipped.detach() + s - s.detach()
+        # s = clipped
+        # s = torch.tanh(s)
 
         return s
 
@@ -335,8 +341,9 @@ class ActorCriticAgent(torch.nn.Module):
 
         # use compute_mask to produce validity matrix that honors first_step_mask, which might mean to make a complete
         # trajectory invalid if the first time step is already after a terminal step.
-        mask = compute_mask(terminal, first_step_mask=first_step_mask, disable=False)
-        valid = 1 - mask
+        with torch.no_grad():
+            mask = compute_mask(terminal, first_step_mask=first_step_mask, disable=False)
+            valid = 1 - mask
 
         # prevent critic net parameters from being updated through policy loss but let gradients of policy loss flow
         # through value network back into simulated environment
@@ -372,7 +379,7 @@ class ActorCriticAgent(torch.nn.Module):
         # bootstrap = (1 - terminal)[-1] * v_actor[-1] + terminal[-1] * r[-1]
         # changed lambda from 0.99 to 0.95 24.11.23
         lambda_returns = calc_lambda_returns(r[1:] + r_expl[1:], terminal[1:], v_actor[:-1], bootstrap, gamma, 0.95)
-        #lambda_returns = calc_returns_simple(r[:-1], terminal[:-1], bootstrap, 0.99)
+        # lambda_returns = calc_returns_simple(r[:-1], terminal[:-1], bootstrap, 0.99)
         # bootstrap = (1 - mask)[-1] * v_actor[-1]  # (1 - mask[-1]) * v_actor[-1]
         # bootstrap = (1 - mask)[-1] * (((1 - terminal) * v_actor + terminal * r))[-1]
 
@@ -388,56 +395,66 @@ class ActorCriticAgent(torch.nn.Module):
         r_expl = r_expl[:-1]
 
         # normalize returns and state values
-        #if self.goal_seeking:
+        # if self.goal_seeking:
         #    advantage_actor = lambda_returns# - v_actor
-        #else:
+        # else:
         ret_mean, ret_std = self.return_running_average(lambda_returns, mask)  # update and return stats
         lambda_returns_actor = self.return_running_average.normalize(lambda_returns, ret_mean, ret_std)
         v_actor = self.return_running_average.normalize(v_actor, ret_mean, ret_std)
         advantage_actor = lambda_returns_actor - v_actor
 
-        #params = {**dict(self.named_parameters())}
-        #make_dot(advantage_actor, params).view()
-        #quit()
+        # params = {**dict(self.named_parameters())}
+        # make_dot(advantage_actor, params).view()
+        # quit()
 
         # ACTOR
         if self.dynamics_loss:
             # we can't optimize return for first state, as it comes from replay buffer
             policy_loss = -advantage_actor * valid
-            #policy_loss = -a_log_prob * advantage_actor.detach() * valid
+            # policy_loss = -a_log_prob * advantage_actor.detach() * valid
             # policy_loss = -advantage_actor
+            policy_loss = masked_mean(-advantage_actor, mask)
         else:
-            #policy_loss = -a_log_prob[:-1] * advantage_actor[1:].detach() * valid[:-1]
+            # policy_loss = -a_log_prob[:-1] * advantage_actor[1:].detach() * valid[:-1]
             # advantage = (lambda_returns - (v_actor * valid)[:-1]).detach()
-            #policy_loss = -a_log_prob * advantage_actor.detach() * valid
+            # policy_loss = -a_log_prob * advantage_actor.detach() * valid
             policy_loss = -a_log_prob[1:] * advantage_actor[:-1].detach() * valid[:-1]
-        policy_loss = torch.sum(policy_loss)
+            policy_loss = masked_mean(-a_log_prob[1:] * advantage_actor[:-1].detach(), mask[:-1])
+        # policy_loss = torch.sum(policy_loss)
 
         # ACTION ENTROPY LOSS
         act_entropy = self._a_dist_entropy(a_dist)
-        act_entropy_loss = torch.sum(act_entropy, dim=-1, keepdim=True)  # sum over action dim
-        act_entropy_loss = torch.sum(act_entropy_loss * valid)  # sum over T and B
-        act_entropy_loss = - self.alpha.detach() * act_entropy_loss
+        act_entropy = torch.sum(act_entropy, dim=-1, keepdim=True)  # sum over action dim
+        # act_entropy_loss = torch.sum(act_entropy_loss * valid)  # sum over T and B
+        act_entropy_loss = masked_mean(act_entropy, mask)
+        act_entropy_loss = - torch.maximum(self.alpha.detach(), torch.zeros_like(self.alpha)) * act_entropy_loss
 
         # ALPHA LOSS
-        alpha_loss = self.alpha * (a_log_prob.detach() + 0.1)
-        alpha_loss = - torch.sum(alpha_loss * valid)
+        # see https://github.com/ray-project/ray/blob/cb5bb4e7763994db4f4e765ce9dc74376d7eedca/rllib/algorithms/sac/sac_tf_policy.py#L415
+        if self.learn_aplha:
+            alpha_loss = self.alpha * (a_log_prob.detach() + self.target_act_entropy)
+            # alpha_loss = - torch.sum(alpha_loss * valid)
+            alpha_loss = - masked_mean(alpha_loss, mask)
+        else:
+            alpha_loss = torch.zeros_like(policy_loss)
 
         # CRITIC
         with torch.no_grad():
             value_target = lambda_returns
             v_ema_critic = self.ema_critic_net(o.detach())
             ema_value_loss = torch.nn.functional.smooth_l1_loss(v_ema_critic, value_target.detach(), reduction='none')
-            ema_value_loss = torch.sum(ema_value_loss * valid)
+            # ema_value_loss = torch.sum(ema_value_loss * valid)
+            ema_value_loss = masked_mean(ema_value_loss, mask)
 
         v_critic = self.critic_net(o.detach())
         value_loss = torch.nn.functional.smooth_l1_loss(v_critic, value_target.detach(), reduction='none')
-        value_loss = torch.sum(value_loss * valid)
+        # value_loss = torch.sum(value_loss * valid)
+        value_loss = masked_mean(value_loss, mask)
 
         # TODO: currently last action is not trained, we can change that and record last state in act_in_sim as well
 
         ppo_loss = torch.zeros_like(value_loss)  # torch.mean(ppo_loss)
-        loss = policy_loss + value_loss + act_entropy_loss + alpha_loss # + ppo_loss
+        loss = policy_loss + value_loss + act_entropy_loss + alpha_loss  # + ppo_loss
 
         # log statistics
         with torch.no_grad():
@@ -460,7 +477,7 @@ class ActorCriticAgent(torch.nn.Module):
         if self.goal_seeking:
             step_r = masked_mean(r, mask, dim=1).detach().cpu().numpy().squeeze()
             step_a_magnitude = a.abs().mean(dim=[0, 1]).detach().cpu().numpy()
-            #print(step_r / (step_r[0] - 1e-5))
+            # print(step_r / (step_r[0] - 1e-5))
             print(step_r, end=' | ')
             print(step_a_magnitude)
 
@@ -477,6 +494,7 @@ class ActorCriticAgent(torch.nn.Module):
                   'monitoring_a_dist_std': a_dist_std,
                   'monitoring_a_min': a_min,
                   'monitoring_a_max': a_max,
+                  'monitoring_a_entropy': masked_mean(act_entropy, mask),
                   'monitoring_obtained_reward': valid_r,
                   'monitoring_obtained_exploration_reward': valid_r_expl,
                   'monitoring_a_log_prob': a_log_prob_mean,
@@ -489,7 +507,7 @@ class ActorCriticAgent(torch.nn.Module):
                   'monitoring_faction_valid': torch.sum(1 - mask) / torch.sum(torch.ones_like(mask)),
                   'monitoring_bootstrap': bootstrap.mean()}
 
-        #if for_train_step:
+        # if for_train_step:
         #    losses['mask'] = mask
 
         invalid_losses = ''
@@ -560,8 +578,8 @@ class ActorCriticAgent(torch.nn.Module):
 
         self._update_ema_modules()
 
-        #val_ema = np.sum([p.abs().detach().cpu().numpy().sum() for p in self._ema_critic_net.parameters()])
-        #print(val_ema)
+        # val_ema = np.sum([p.abs().detach().cpu().numpy().sum() for p in self._ema_critic_net.parameters()])
+        # print(val_ema)
 
         # update exploration
         self.update_exploration()
@@ -591,12 +609,12 @@ class ActorCriticAgent(torch.nn.Module):
         #    return - torch.mean(torchd.kl_divergence(goal, o) + torchd.kl_divergence(o, goal), dim=-1, keepdim=True)
         # similarity = torch.pow(0.99, torch.mean(torch.abs(o - goal) ** 2, dim=-1, keepdim=True))
 
-        #o_norm = torch.linalg.vector_norm(o, dim=-1, keepdim=True)
-        #goal_norm = torch.linalg.vector_norm(goal, dim=-1, keepdim=True)
-        #norm = torch.maximum(o_norm, goal_norm).detach()
-        #similarity = torch.linalg.vecdot(goal / norm, o / norm, dim=-1).unsqueeze(-1)
+        # o_norm = torch.linalg.vector_norm(o, dim=-1, keepdim=True)
+        # goal_norm = torch.linalg.vector_norm(goal, dim=-1, keepdim=True)
+        # norm = torch.maximum(o_norm, goal_norm).detach()
+        # similarity = torch.linalg.vecdot(goal / norm, o / norm, dim=-1).unsqueeze(-1)
 
-        #similarity = torch.where(similarity < 0.95, 0.0, similarity)
+        # similarity = torch.where(similarity < 0.95, 0.0, similarity)
 
         similarity = - torch.mean(torch.abs(o - goal), dim=-1, keepdim=True)
         return similarity

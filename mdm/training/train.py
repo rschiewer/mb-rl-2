@@ -5,6 +5,7 @@ from math import ceil
 import gym_nav2d.envs
 import gymnasium_robotics
 import matplotlib.pyplot as plt
+import numpy as np
 from gymnasium_robotics.envs.maze import PointMazeEnv
 from gymnasium_robotics.envs.maze.maze_v4 import MazeEnv
 from sklearn.decomposition import PCA
@@ -51,8 +52,8 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
         if cfg['trainer']['subtrajectory_len'] > 0:
             # model_batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
             # model_batch = valid_subtrajectories_unbiased(batch, 15)
-            # model_batch = valid_subtrajectories_unbiased_fast(batch, cfg['trainer']['subtrajectory_len'])
-            model_batch = valid_subtrajectories_2(batch, cfg['trainer']['subtrajectory_len'])
+            model_batch = valid_subtrajectories_unbiased_fast(batch, cfg['trainer']['subtrajectory_len'])
+            #model_batch = valid_subtrajectories_2(batch, cfg['trainer']['subtrajectory_len'])
         else:
             model_batch = batch
 
@@ -155,7 +156,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 # flat agent
                 eval_mem_flat = []
                 eval_env.reset()
-                flat_policy = LatentAgentPolicy(r_max_agents[0][0], model, explore=False)
+                flat_policy = LatentAgentPolicy(r_max_agents[0][0], model, stochastic=False, exploration_noise=0.3)
                 d = GymEpisodeDriver(eval_env, flat_policy)
                 d.interact(10, eval_mem_flat)
                 # eval_mem_flat += collect_data(eval_env, cfg['eval']['eval_steps'], flat_policy)
@@ -164,7 +165,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 # hierarchical agent
                 eval_mem_hierarchical = []
                 eval_env.reset()
-                hierarchical_policy = HierarchicalLatentAgentPolicy(model, explore=False, stochastic=True)
+                hierarchical_policy = HierarchicalLatentAgentPolicy(model, stochastic=False, exploration_noise=0.3)
                 d = GymEpisodeDriver(eval_env, hierarchical_policy)
                 d.interact(10, eval_mem_hierarchical)
                 # eval_mem_hierarchical += collect_data(eval_env, cfg['eval']['eval_steps'], hierarchical_policy)
@@ -439,7 +440,7 @@ def pessimistic_model_training(model, opt_model, pred, targets, level, n_steps, 
     valid = (1 - compute_mask(model_mem['terminal'], first_step_mask=start_state_mask))
     # compute loss
     r_dist = world.r_decoder.dist(model_mem['r_dist'])
-    loss = 0.1 * model._neg_log_prob(r_dist, pessimistic_r_target, valid)
+    loss = model._neg_log_prob(r_dist, pessimistic_r_target, valid)
 
     # update parameters
     opt_model.zero_grad(set_to_none=True)
@@ -459,10 +460,13 @@ def train_rmax_agent(agent_model_steps, cfg, eval_env, i_step, level, logger, mo
     start_state_lvl, start_state_mask = filter_mem_state_seq_to_batch(pred[level], targets[level]['mask'])
     # prevent gradient flow into the start state
     start_state_lvl = rssm_detach_state(*start_state_lvl)
-    abstract_level = level > 0
+
+    # TODO: Maybe I need to apply much more noise than 0.9 during training and never during data collection?
+    #       Current plots suggest that while initial exploration noise is still larege, the agent performs better.
+    #       But actually agent behavior should be the same during training and data collection.
     rma_simulation = rma.act_in_sim(start_state_lvl, model, agent_model_steps[level],
                                     sample_states=sample_model, sample_actions=sample_agents,
-                                    explore=True, reconstruct=True)
+                                    reconstruct=True, expl_noise=rma.eps)
     r_max_losses = rma.update_step(rma_simulation['agent'],
                                    first_step_mask=start_state_mask.unsqueeze(0),
                                    **optimizers,
@@ -605,8 +609,8 @@ def train_goal_seeking_agent_one_step(model, level, pred, targets, eval_env, cfg
 
     goal = goal_agent.o_from_state(goal_state)
     goal_simulation = goal_agent.act_in_sim(env_start_state=start_state, sim_env=model, n_steps=chunk_size,
-                                            explore=explore, goal=goal, sample_states=sample_model,
-                                            sample_actions=sample_agents, expl_noise=exploration_noise,
+                                            goal=goal, sample_states=sample_model,
+                                            sample_actions=sample_agents, expl_noise=goal_agent.eps,
                                             reconstruct=True)
     loss = goal_agent.update_step(goal_simulation['agent'],
                                   first_step_mask=start_state_mask,
@@ -690,7 +694,7 @@ def train_goal_seeking_agent_goals_above_with_agent(model, level, pred, targets,
         rollout_state = rssm_remove_labels(rollout_state)
         # produce additional goals
         simulation = rma.act_in_sim(env_start_state=rollout_state, sim_env=model, n_steps=n_generated_goals,
-                                    explore=True, expl_noise=0.3)
+                                    expl_noise=rma.eps)
         # add simulation goals to the goal memory
         goals += [goal.detach() for goal in simulation['model']['o']]
 
@@ -715,8 +719,8 @@ def train_goal_seeking_agent_goals_above_with_agent(model, level, pred, targets,
 
         start_state = rssm_detach_state(*start_state)  # prevent gradients to flow into previous chunk
         goal_simulation = gsa.act_in_sim(env_start_state=start_state, sim_env=model, n_steps=n_steps,
-                                         explore=explore, goal=goal, sample_states=sample_model,
-                                         sample_actions=sample_agents, expl_noise=expl_noise, reconstruct=True)
+                                         goal=goal, sample_states=sample_model,
+                                         sample_actions=sample_agents, expl_noise=gsa.eps, reconstruct=True)
         agent_mem = goal_simulation['agent']
         loss = gsa.update_step(agent_mem,
                                first_step_mask=start_state_mask,
@@ -819,8 +823,8 @@ def train_goal_seeking_agent_goals_above(model, level, pred, targets, eval_env, 
 
         start_state = rssm_detach_state(*start_state)  # prevent gradients to flow into previous chunk
         goal_simulation = gsa.act_in_sim(env_start_state=start_state, sim_env=model, n_steps=n_steps,
-                                         explore=True, goal=goal, sample_states=False,
-                                         sample_actions=sample_agents, expl_noise=0.1, reconstruct=True)
+                                         goal=goal, sample_states=False,
+                                         sample_actions=sample_agents, expl_noise=gsa.eps, reconstruct=True)
         agent_mem = goal_simulation['agent']
         loss = gsa.update_step(agent_mem,
                                first_step_mask=start_state_mask,
@@ -897,8 +901,8 @@ def train_goal_seeking_agent_same_level(model, level, pred, targets, eval_env, c
         # n_steps = chunk_size
 
         goal_simulation = gsa.act_in_sim(env_start_state=start_state, sim_env=model, n_steps=n_steps,
-                                         explore=True, goal=goal, sample_states=False,
-                                         sample_actions=sample_agents, expl_noise=0.0, reconstruct=True)
+                                         goal=goal, sample_states=False,
+                                         sample_actions=sample_agents, expl_noise=gsa.eps, reconstruct=True)
         agent_mem = goal_simulation['agent']
         loss = gsa.update_step(agent_mem, first_step_mask=start_state_mask, **gsa_optimizers)
         # loss = {f'{k}_{i_goal}': v for i, (k, v) in enumerate(loss.items())}
@@ -1161,7 +1165,7 @@ def record_episode(cfg, i_step, logger, model, video_env):
     # record an episode
     video_env.reset()
     video_env.get_wrapper_attr('start_video_recorder')()
-    policy = HierarchicalLatentAgentPolicy(model, explore=False, stochastic=True)
+    policy = HierarchicalLatentAgentPolicy(model, stochastic=False, exploration_noise=0.3)
     # policy = LatentAgentPolicy(model.r_max_agents[0][0], model, explore=False)
     traj = collect_data(video_env, cfg['eval']['eval_steps'], policy)
     traj = traj[0]  # we collect only a single trajectory, remove list wrapper
@@ -1175,21 +1179,26 @@ def record_episode(cfg, i_step, logger, model, video_env):
     pid = os.getpid()
     tmp_file_name = f'.{pid}_{timestamp}_agent_video.mp4'
     clip = mp.VideoFileClip(video_path)
+    n_frames = clip.reader.nframes
 
-    # resizing the video and printing action values on top
+    # resizing the video and printing action and reward values on top
     font = cv2.FONT_HERSHEY_PLAIN
     font_scale = 0.7
     text_color = (255, 0, 0)
     char_height, char_width = cv2.getTextSize(text='X', fontFace=font, fontScale=font_scale, thickness=1)[0]
+    resize_factor = 0.5
+
     current_frame = 0  # keep track of frame number as moviepy uses seconds as time format
 
-    def print_action_on_frame(get_frame, t):
+    # define editing function that alters the individual frames
+    def print_info_on_frame(get_frame, t):
         nonlocal current_frame
         frame = get_frame(t)
-        frame = cv2.resize(frame, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)
+        frame = cv2.resize(frame, None, fx=resize_factor, fy=resize_factor, interpolation=cv2.INTER_AREA)
         # for some reason, the rendered video seems to have more frames than the resulting trajectory has time steps so
-        # we can only assign actions to frames as long as we have some
+        # we can only print actions and rewards into frames as long as we have some
         if current_frame < len(traj['a']):
+            # print action onto frame, cut it in multiple lines if necessary
             a = np.round(traj['a'][current_frame], decimals=4)  # make numbers shorter for printing
             available_columns = frame.shape[1] // char_width  # calculate roughly how many characters fit in a line
             wrapped_a_txt = textwrap.wrap(str(a), width=available_columns)  # wrap action text if necessary
@@ -1200,15 +1209,36 @@ def record_episode(cfg, i_step, logger, model, video_env):
                 # update the y-coordinate for the next line
                 textsize = cv2.getTextSize(text=a_txt, fontFace=font, fontScale=font_scale, thickness=1)[0]
                 y += textsize[1] + 5  # add 5 pixels of margin between the lines
-            plt.imshow(frame)
-            plt.show()
+            # print reward as well
+            r = np.round(traj['r'][current_frame], decimals=2)  # make numbers shorter for printing
+            # add a background box to reward as it's lower in the picture and might be less easy to read
+            # set box position and size
+            r_box_x = 10
+            r_box_y = frame.shape[0] - char_height - 10
+            r_box_w, r_box_h = cv2.getTextSize(text=str(r), fontFace=font, fontScale=font_scale, thickness=1)[0]
+            box_padding = 3
+            # add padding around the box
+            r_box_x -= box_padding
+            r_box_y -= box_padding
+            r_box_w += 2 * box_padding
+            r_box_h += 2 * box_padding
+            # cut out from oritinal frame where the box will go
+            sub_frame = frame[r_box_y: r_box_y + r_box_h, r_box_x: r_box_x + r_box_w]
+            # blend frame 50/50 with a black box to obtain a partially transparent black rectangle there
+            sub_frame = cv2.addWeighted(sub_frame, 0.5, np.ones_like(sub_frame), 0.8, 1.0)
+            frame[r_box_y: r_box_y + r_box_h, r_box_x: r_box_x + r_box_w] = sub_frame
+            # add reward text on top
+            cv2.putText(img=frame, text=str(r), org=(r_box_x + box_padding, r_box_y + char_height + box_padding - 1),
+                        fontFace=font, fontScale=font_scale, color=text_color, thickness=1, lineType=cv2.LINE_AA)
+
         current_frame += 1
         return frame
 
-    clip = clip.fl(print_action_on_frame)
+    # apply editing function to each frame
+    clip = clip.fl(print_info_on_frame)
     #clip = clip.resize(width=120)
 
-    clip.write_videofile(tmp_file_name, preset='fast', verbose=False, logger=None)
+    clip.write_videofile(tmp_file_name, preset='veryslow', verbose=False, logger=None)
     try:
         os.remove(video_path)  # delete original video file
         os.remove(metadata_path)

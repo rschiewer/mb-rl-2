@@ -31,14 +31,16 @@ class LatentAgentPolicy(Policy):
     def __init__(self,
                  agent: ActorCriticAgent,
                  model: HierarchicalRSSM,
-                 explore: bool = False,
+                 exploration_noise: float = 0.0,
+                 stochastic: bool = False,
                  init_data: Dict[str, torch.Tensor] = None):
         super().__init__()
         # assert np.prod(agent.d_o) == model.rssm_modules[agent.level].d_z_smpl
 
         self.agent = agent
         self.model = model
-        self.explore = explore
+        self.exploration_noise = exploration_noise
+        self.stochastic = stochastic
 
         if init_data is not None:
             mem, env_state = model.observe(o=init_data['o'], a=init_data['a'], r=init_data['r'],
@@ -95,7 +97,7 @@ class LatentAgentPolicy(Policy):
             raise RuntimeError(f'Invalid inf state in step {env.current_step}: {self._current_env_state[0]}')
 
         agent_o = self.agent.o_from_state(self._current_env_state)
-        a_dist, a, = self.agent(agent_o, sample=self.explore, explore=self.explore)
+        a_dist, a, = self.agent(agent_o, sample=self.stochastic, expl_noise=self.exploration_noise)
 
         if torch.isnan(a).any():
             raise RuntimeError(f'Invalid NAN action: {a}')
@@ -124,11 +126,13 @@ class HierarchicalLatentAgentPolicy(Policy):
 
     def __init__(self,
                  model: HierarchicalRSSM,
-                 explore: bool = False):
+                 exploration_noise: float = 0.0,
+                 stochastic: bool = False):
         super().__init__()
 
         self.model = model
-        self.explore = explore
+        self.exploration_noise = exploration_noise
+        self.stochastic = stochastic
         self.grounded_env_states = [None for _ in range(model.levels)]
         self.env_data_below_cache = [self._empty_cache() for _ in range(model.levels)]
         self.act_cache = [[] for _ in range(model.levels)]
@@ -278,9 +282,9 @@ class HierarchicalLatentAgentPolicy(Policy):
         # one r_max step on highest level
         state = self.grounded_env_states[i_highest]
         agent = self.model.r_max_agents[i_highest][0]
-        simulation = agent.act_in_sim(env_start_state=state, sim_env=self.model, n_steps=1, sample_actions=self.explore,
-                                      sample_states=self.sample_world_model, explore=self.explore,
-                                      reconstruct=i_highest > 0)
+        simulation = agent.act_in_sim(env_start_state=state, sim_env=self.model, n_steps=1,
+                                      sample_actions=self.stochastic, sample_states=self.sample_world_model,
+                                      expl_noise=self.exploration_noise, reconstruct=i_highest > 0)
         self.act_cache[i_highest] += simulation['agent']['a']
         self.action_history[i_highest] += simulation['agent']['a']
 
@@ -295,7 +299,7 @@ class HierarchicalLatentAgentPolicy(Policy):
                 new_goals = []
                 for goal in goals_from_above:
                     simulation = agent.act_in_sim(env_start_state=state, sim_env=self.model, n_steps=n_steps, goal=goal,
-                                                  sample_actions=False, explore=False,
+                                                  sample_actions=self.stochastic, expl_noise=0.05,
                                                   sample_states=self.sample_world_model, reconstruct=i_lvl > 0)
                     # simulation['agent']['a'] = [torch.zeros_like(x) for x in simulation['agent']['a']]
                     state = simulation['model_state']

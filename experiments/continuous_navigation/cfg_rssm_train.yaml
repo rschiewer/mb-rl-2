@@ -133,8 +133,9 @@ trainer:
    eval_interval: 50
    d_batch: 256
    subtrajectory_len: 50
-   collect_envs: 5
+   collect_envs: 20
    collect_interval: 50
+   n_collect_trajectories: 5
    agent_train_interval: 1
    model_train_steps: [ -1, 15 ]
    agent_model_steps: [ 15, 10 ]
@@ -150,8 +151,9 @@ agents:
          eps_exploration_coeff: 0.9999
          eps_exploration_min: 0.05
          min_scale: 0.1
-         act_entropy_exploration_coeff: 0.0000
+         act_entropy_exploration_coeff: 0.00001
          learn_act_entropy_exploration_coeff: False
+         target_act_entropy: "auto"
          novelty_exploration_coeff: 0.00
          tr_policy_kl_coeff: 0.1
          tr_policy_ema_update_coeff: 0.95
@@ -175,8 +177,9 @@ agents:
          eps_exploration_coeff: 0.9992
          eps_exploration_min: 0.05
          min_scale: 0.1
-         act_entropy_exploration_coeff: 0.0000
+         act_entropy_exploration_coeff: 0.00001
          learn_act_entropy_exploration_coeff: False
+         target_act_entropy: "auto"
          novelty_exploration_coeff: 0.00
          tr_policy_kl_coeff: 0.1
          tr_policy_ema_update_coeff: 0.95
@@ -201,8 +204,9 @@ agents:
          eps_exploration_coeff: 0.999
          eps_exploration_min: 0.05
          min_scale: 0.001
-         act_entropy_exploration_coeff: 0.0000
+         act_entropy_exploration_coeff: 0.00001
          learn_act_entropy_exploration_coeff: False
+         target_act_entropy: "auto"
          novelty_exploration_coeff: 0.0
          tr_policy_kl_coeff: 0.1
          tr_policy_ema_update_coeff: 0.95
