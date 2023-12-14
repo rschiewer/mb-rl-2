@@ -14,13 +14,13 @@ from mdm.logging.not_logger import NotLogger
 from mdm.logging.logger import Scope, GlobalLogger
 from mdm.policies.agent_policy import *
 from mdm.policies.expert_policies import *
+import matplotlib
 import mdm.utils.customized_gym_envs
 from mdm.utils.gym_wrappers import vec_env_worker_no_auto_reset
 
 
 # from tqdm import tqdm
 # tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
-
 
 def main():
     parser = argparse.ArgumentParser()
@@ -49,7 +49,7 @@ def main():
                                '_sanity_check_goal_computation': 50})
 
     def make_env_fn():
-        _env = mdm.utils.customized_gym_envs.gym.make(cfg['env_name'])
+        _env = gym.make(cfg['env_name'])
         _env = prepare_env(_env)
         return _env
 
@@ -89,17 +89,17 @@ def main():
     # opt_model = torch.optim.Adam(params, **cfg['optim'])
     # temporary hack end
 
-    collect_env = mdm.utils.customized_gym_envs.gym.vector.AsyncVectorEnv([make_env_fn] * cfg['trainer']['collect_envs'])
+    collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['trainer']['collect_envs'])
     collect_env = CacheLastStepVecEnv(collect_env)
     # collect_env = CacheLastStepEnv(make_env_fn())
-    eval_env = mdm.utils.customized_gym_envs.gym.vector.AsyncVectorEnv([make_env_fn] * cfg['eval']['eval_envs'])
+    eval_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['eval']['eval_envs'])
     eval_env = CacheLastStepVecEnv(eval_env)
     # eval_env = CacheLastStepEnv(make_env_fn())
 
-    video_env = mdm.utils.customized_gym_envs.gym.make(cfg['env_name'], render_mode='rgb_array')
+    video_env = gym.make(cfg['env_name'], render_mode='rgb_array')
     video_env = prepare_env(video_env)
-    video_env = mdm.utils.customized_gym_envs.gym.wrappers.RecordVideo(video_env, video_folder='videos', name_prefix=f'{os.getpid()}',
-                                                                       disable_logger=True)
+    video_env = gym.wrappers.RecordVideo(video_env, video_folder='videos', name_prefix=f'{os.getpid()}',
+                                         disable_logger=True)
     video_env = CacheLastStepEnv(video_env)
 
     train_mem = []
@@ -121,9 +121,8 @@ def main():
     else:
         policy = get_expert_policy(cfg['env_name'], fallback_policy=lambda *x: collect_env.action_space.sample())
         collect_driver = GymEpisodeDriver(collect_env, policy)
-        collect_driver.interact(100, test_mem, progress_bar=True)
+        collect_driver.interact(cfg['prefill_episodes'], test_mem, progress_bar=True)
     test_driver = OfflineRLDriver(test_mem, sampling_type=SamplingType.RANDOM)
-
 
     prep = to_tensors(train_mem, device='cpu')
     prep = prepare_data(prep)
@@ -139,7 +138,8 @@ def main():
         agent = r_max_agents[0][0]
         agent.eval()
         collect_env.reset()
-        policy = LatentAgentPolicy(agent, model, explore=explore)
+        expl_noise = 0.3 if explore else 0.0
+        policy = LatentAgentPolicy(agent, model, exploration_noise=expl_noise)
         d = GymEpisodeDriver(collect_env, policy)
         d.interact(10, train_mem)
         # collected_data_trajectories = collect_data(collect_env, -1, policy)
@@ -148,12 +148,16 @@ def main():
     def collect_fn(explore: bool):
         agent_eval_mode(r_max_agents + goal_seeking_agents)
         collect_env.reset()
-        policy = HierarchicalLatentAgentPolicy(model, explore=explore)
+        expl_noise = 0.3 if explore else 0.0
+        det_policy = HierarchicalLatentAgentPolicy(model, stochastic=False, exploration_noise=0.3)
+        #expl_policy = HierarchicalLatentAgentPolicy(model, explore=True)
         # collected_data_trajectories = collect_data(collect_env, -1, policy)
         # train_mem.extend(collected_data_trajectories)
         # train_mem.extend(collected_data_trajectories)
-        d = GymEpisodeDriver(collect_env, policy)
-        d.interact(10, train_mem)
+        GymEpisodeDriver(collect_env, det_policy).interact(cfg['trainer']['n_collect_trajectories'], train_mem)
+        #GymEpisodeDriver(collect_env, expl_policy).interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
+        #d.interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
+        #d.interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
 
         # collect_env.reset()
         # agent_eval_mode(r_max_agents + goal_seeking_agents)
