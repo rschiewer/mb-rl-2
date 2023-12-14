@@ -272,9 +272,10 @@ def to_onehot(x: Union[torch.Tensor, np.ndarray],
 
 def fig_to_img(fig: plt.Figure,
                clear_fig: bool = True,
-               minimize_size: bool = True):
+               minimize_size: bool = True,
+               **fig_kwargs):
     buffer = io.BytesIO()
-    fig.savefig(buffer, bbox_inches='tight')
+    fig.savefig(buffer, bbox_inches='tight', **fig_kwargs)
     # print(buffer.tell() / 1024)
     if clear_fig:
         plt.clf()
