@@ -873,7 +873,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         o_dist = rssm_cell.o_decoder.dist(torch.stack(pred['o_dist']))
         r_dist = rssm_cell.r_decoder.dist(torch.stack(pred['r_dist']))
         term_dist = rssm_cell.term_decoder.dist(torch.stack(pred['terminal_dist']))
-        rec_o = self._neg_log_prob(o_dist, targets['o'], valid)
+        #rec_o = self._neg_log_prob(o_dist, targets['o'], valid)
+        rec_o = self._mse(o_dist.base_dist.loc, targets['o'], valid)  # rllib and official dreamer code use MSE for obs loss
         rec_r = self._neg_log_prob(r_dist, targets['r'], valid)
         rec_term = self._neg_log_prob(term_dist, targets['terminal'], valid)
 
