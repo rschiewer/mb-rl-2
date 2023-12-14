@@ -1,10 +1,7 @@
 import unittest
 
-import matplotlib.pyplot as plt
-import torch
-
-from mdm.models.hierarchical_rssm import HierarchicalRSSM
 from mdm.models.building_blocks import *
+from mdm.models.rssm_cell import RSSMCell
 from mdm.utils.utils import filter_mem_state_seq_to_batch
 from mdm.utils.torch_tools import stack_dists, masked_mean
 

@@ -17,7 +17,7 @@ from mdm.utils.utils import *
 from mdm.utils.torch_tools import to_tensors
 from mdm.models.building_blocks import *
 from mdm.models.hierarchical_rssm import HierarchicalRSSM
-from mdm.models.building_blocks import RSSMCell
+from mdm.models.rssm_cell import RSSMCell
 from mdm.models.dynamics_model import DynamicsModel
 from mdm.models.rnn_baseline import RnnBaselineModel
 from mdm.training.dynamics_model_trainer import DynamicsModelTrainer

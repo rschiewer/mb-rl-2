@@ -3,10 +3,6 @@ import textwrap
 from math import ceil
 
 import gym_nav2d.envs
-import gymnasium_robotics
-import matplotlib.pyplot as plt
-import numpy as np
-from gymnasium_robotics.envs.maze import PointMazeEnv
 from gymnasium_robotics.envs.maze.maze_v4 import MazeEnv
 from sklearn.decomposition import PCA
 from matplotlib.colors import hsv_to_rgb, to_rgba
@@ -14,15 +10,15 @@ from matplotlib.patches import Rectangle
 from tqdm import tqdm
 import moviepy.editor as mp
 import cv2
-from moviepy.video.tools.subtitles import SubtitlesClip
 
-from mdm.logging.logger import Scope, GlobalLogger
+from mdm.logging.logger import GlobalLogger
+from mdm.models.rssm_cell import rssm_detach_state, rssm_remove_labels
 from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.policies.agent_policy import HierarchicalLatentAgentPolicy, LatentAgentPolicy
 from mdm.policies.predefined_policy import PredefinedPolicy
 from mdm.training.gym_driver import collect_data, GymEpisodeDriver
 from mdm.utils.gym_wrappers import CacheLastStepEnv
-from mdm.utils.torch_tools import to_tensors, to_np, masked_mean, FreezeParameters
+from mdm.utils.torch_tools import to_tensors, to_np, FreezeParameters
 from mdm.utils.utils import *
 from mdm.utils.gym_nav2d_tools import *
 

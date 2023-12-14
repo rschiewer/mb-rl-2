@@ -1,24 +1,20 @@
 from __future__ import annotations
 
 import copy
-import time
 from itertools import chain
 import random
 import sys
-from collections import OrderedDict
-from typing import Dict
 
-import torch
 import torch.distributions as torchd
-from torch.distributions import kl_divergence
 from torch.nn import ModuleList, ModuleDict
-import matplotlib.pyplot as plt
 
 from mdm.models.building_blocks import *
 from mdm.models.dynamics_model import DynamicsModel
-from mdm.policies.actor_critic_agent import ActorCriticAgent, calc_lambda_returns
+from mdm.models.rssm_cell import RSSMStateType, RSSMCell, rssm_stack_states, rssm_stack_state_list, rssm_detach_state, \
+    rssm_state_keys, rssm_add_labels, rssm_remove_labels
+from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.utils.torch_tools import *
-from mdm.utils.utils import filter_mem_state_seq_to_batch, fig_to_img, append_memory, extend_memory, TempFigure, numpyfy
+from mdm.utils.utils import filter_mem_state_seq_to_batch, fig_to_img, append_memory, extend_memory, TempFigure
 from mdm.logging.logger import GlobalLogger, Scope
 from mdm.utils.gym_nav2d_tools import *
 from mdm.models.vae import VAE

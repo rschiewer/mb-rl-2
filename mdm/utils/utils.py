@@ -5,9 +5,9 @@ import re
 import sys
 import random
 import time
-from enum import auto
 from inspect import stack
 from pathlib import Path
+from typing import Any
 
 import gymnasium as gym
 import matplotlib.animation as animation
@@ -20,19 +20,11 @@ from PIL import Image
 from mdm.gridworld.gridworld import Gridworld, CellType
 from mdm.memory.trajectory_memory import flatten_and_unsqueeze
 from mdm.models.building_blocks import *
-# from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.logging.logger import Logger, Scope
-from mdm.utils.torch_tools import compute_mask, unsqueeze_right, stack_if_list
+from mdm.models.rssm_cell import rssm_state_seq_to_batch, rssm_state_keys
+from mdm.utils.torch_tools import unsqueeze_right, stack_if_list
 
-SliceType = TypeVar("SliceType", bound=Sequence)
-BasicDtype = TypeVar('BasicDtype', int, float, np.single, np.double, bool)
 DataType = TypeVar('DataType', int, float, np.single, np.double, bool, np.ndarray)
-
-
-class DistributionType(Enum):
-    NONE = auto()
-    NORMAL = auto()
-    CATEGORICAL = auto()
 
 
 class InMemoryFile:

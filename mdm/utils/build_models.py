@@ -1,7 +1,6 @@
 import gymnasium as gym
-import torch
 
-from mdm.models.building_blocks import RSSMCell
+from mdm.models.rssm_cell import RSSMCell
 from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.models.building_blocks import *
 

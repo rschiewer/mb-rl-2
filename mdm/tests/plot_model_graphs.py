@@ -1,6 +1,7 @@
 from torchviz import make_dot
 
 from mdm.models.building_blocks import *
+from mdm.models.rssm_cell import RSSMCell
 
 
 def vis_gaussian_decoder():

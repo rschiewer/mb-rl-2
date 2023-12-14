@@ -15,7 +15,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from torchviz import make_dot
 
-from mdm.models.building_blocks import rssm_add_labels, rssm_detach_state, RSSMStateType
+from mdm.models.rssm_cell import RSSMStateType, rssm_detach_state, rssm_add_labels
 from mdm.utils.torch_tools import layers_with_activation as lwa, SquashedNormal, RunningMeanStd
 from mdm.utils.torch_tools import (FuzzyDeviceMixin, compute_mask, detach_dist, disable_torch_compile, stack_dists,
                                    concat_dists, TanhBijector, clip_but_pass_gradient, FreezeParameters,
