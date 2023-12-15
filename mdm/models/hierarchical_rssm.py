@@ -153,129 +153,128 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                             reconstruct: bool = True,
                             use_ema_modules: bool = False,
                             start_time_step: Optional[torch.Tensor] = None):
-        with record_function('forward_dynamic'):
-            assert level > 0, 'Not intended for level 0 model, use forward_static()'
+        assert level > 0, 'Not intended for level 0 model, use forward_static()'
 
-            mdl = self._ema_rssm_modules[level] if use_ema_modules else self.rssm_modules[level]
-            mdl_other = self.rssm_modules[level] if use_ema_modules else self._ema_rssm_modules[level]
-            memory = {} if memory is None else memory
-            memory_other = {} if memory_other is None else memory_other
-            memory_targets = {} if memory_targets is None else memory_targets
-            memory_states_below = {} if memory_states_below is None else memory_states_below
+        mdl = self._ema_rssm_modules[level] if use_ema_modules else self.rssm_modules[level]
+        mdl_other = self.rssm_modules[level] if use_ema_modules else self._ema_rssm_modules[level]
+        memory = {} if memory is None else memory
+        memory_other = {} if memory_other is None else memory_other
+        memory_targets = {} if memory_targets is None else memory_targets
+        memory_states_below = {} if memory_states_below is None else memory_states_below
 
-            if n_warmup < 0:
-                n_warmup = n_steps
+        if n_warmup < 0:
+            n_warmup = n_steps
 
-            agent = self.r_max_agents[level][0]
-            lvl_below = level - 1
-            lower_level_steps = self.strides[level]  # give goal seeking agent some slack to achieve goals
+        agent = self.r_max_agents[level][0]
+        lvl_below = level - 1
+        lower_level_steps = self.strides[level]  # give goal seeking agent some slack to achieve goals
 
-            state = start_state
-            state_below = start_state_below
-            goal_rewards, distance_rewards, reachability_rewards, terminals = [], [], [], []
-            this_run_a, this_run_o = [], []
-            for t in range(n_steps):
-                # get action from agent
-                with torch.no_grad():
-                    agent_o = agent.o_from_state(state)
-                    _, a_t, = agent(agent_o, sample=True, disable_exploration=False)
-                    a_t = a_t.detach()  # prevent gradients from flowing through agent back into world model
-                    this_run_a.append(a_t)
+        state = start_state
+        state_below = start_state_below
+        goal_rewards, distance_rewards, reachability_rewards, terminals = [], [], [], []
+        this_run_a, this_run_o = [], []
+        for t in range(n_steps):
+            # get action from agent
+            with torch.no_grad():
+                agent_o = agent.o_from_state(state)
+                _, a_t, = agent(agent_o, sample=True, disable_exploration=False)
+                a_t = a_t.detach()  # prevent gradients from flowing through agent back into world model
+                this_run_a.append(a_t)
 
-                # get next model state
-                next_state = mdl(a=a_t, last_state=state, use_posterior=False, sample_state=sample_state)
+            # get next model state
+            next_state = mdl(a=a_t, last_state=state, use_posterior=False, sample_state=sample_state)
+            pred = mdl.decode(next_state[-1], sample=sample_output, reconstruct_observation=reconstruct)
+
+            # get simulated ground truth for this step from level below
+            # if a chunk starts in an invalid trajectory part (beyond terminal state), this is filtered out later
+            with torch.no_grad():
+                simulation = self.goal_seeking_agents[lvl_below][0].act_in_sim(env_start_state=state_below,
+                                                                               sim_env=self,
+                                                                               n_steps=lower_level_steps,
+                                                                               goal=pred['o'],
+                                                                               sample_actions=True,
+                                                                               sample_states=True,
+                                                                               disable_exploration=True,
+                                                                               reconstruct=True)
+                simulated_ground_truth = self.filter_up(o=simulation['model'][self.links[lvl_below]],
+                                                        r=simulation['model']['r'],
+                                                        terminal=simulation['model']['terminal'], level=level,
+                                                        n_steps=lower_level_steps, respect_mask=True,
+                                                        window_size=lower_level_steps)
+                # remove time dim
+                simulated_ground_truth = {k: v.squeeze(0) for k, v in simulated_ground_truth.items()}
+
+            # punishment for unreachable states
+            with torch.no_grad():
+                end_state_repr_below = simulation['model']['s_embedding'][-1]
+                distance_reward = torch.mean((state_below[5] - end_state_repr_below) ** 2, dim=-1,
+                                             keepdim=True).detach()
+                reachability_coeff = torch.exp(- 100 * simulation['agent']['r'][-1] ** 2).detach()
+                # simulated_ground_truth['r'] += distance_reward
+                # simulated_ground_truth['r'] *= reachability_coeff
+
+            goal_rewards.append(simulation['agent']['r'][-1])
+            reachability_rewards.append(reachability_coeff)
+            distance_rewards.append(distance_reward)
+            terminals.append(simulated_ground_truth['terminal'])
+
+            # TODO: sample_output changed to fixed false to reduce variance of training targets
+            if t < n_warmup:  # if still in warmup, re-do last step with simulated ground truth and use posterior
+                o_enc = mdl.o_encoder(simulated_ground_truth['o'])
+                this_run_o.append(o_enc)
+                next_state = mdl(a=a_t, o_enc=o_enc, last_state=state,
+                                 use_posterior=True, sample_state=sample_state)
                 pred = mdl.decode(next_state[-1], sample=sample_output, reconstruct_observation=reconstruct)
 
-                # get simulated ground truth for this step from level below
-                # if a chunk starts in an invalid trajectory part (beyond terminal state), this is filtered out later
-                with torch.no_grad():
-                    simulation = self.goal_seeking_agents[lvl_below][0].act_in_sim(env_start_state=state_below,
-                                                                                   sim_env=self,
-                                                                                   n_steps=lower_level_steps,
-                                                                                   goal=pred['o'],
-                                                                                   sample_actions=True,
-                                                                                   sample_states=True,
-                                                                                   disable_exploration=True,
-                                                                                   reconstruct=True)
-                    simulated_ground_truth = self.filter_up(o=simulation['model'][self.links[lvl_below]],
-                                                            r=simulation['model']['r'],
-                                                            terminal=simulation['model']['terminal'], level=level,
-                                                            n_steps=lower_level_steps, respect_mask=True,
-                                                            window_size=lower_level_steps)
-                    # remove time dim
-                    simulated_ground_truth = {k: v.squeeze(0) for k, v in simulated_ground_truth.items()}
+            append_memory(memory, **pred, **rssm_add_labels(next_state), a=a_t)
+            append_memory(memory_targets, **simulated_ground_truth)
+            append_memory(memory_states_below, **rssm_add_labels(simulation['model_state']))
+            # TODO: hack until proper ema model querying is implemented
+            append_memory(memory_other, **rssm_add_labels(next_state))
 
-                # punishment for unreachable states
-                with torch.no_grad():
-                    end_state_repr_below = simulation['model']['s_embedding'][-1]
-                    distance_reward = torch.mean((state_below[5] - end_state_repr_below) ** 2, dim=-1,
-                                                 keepdim=True).detach()
-                    reachability_coeff = torch.exp(- 100 * simulation['agent']['r'][-1] ** 2).detach()
-                    # simulated_ground_truth['r'] += distance_reward
-                    # simulated_ground_truth['r'] *= reachability_coeff
+            # important: update model states
+            state = next_state
+            state_below = simulation['model_state']
 
-                goal_rewards.append(simulation['agent']['r'][-1])
-                reachability_rewards.append(reachability_coeff)
-                distance_rewards.append(distance_reward)
-                terminals.append(simulated_ground_truth['terminal'])
+        # run other model in one pass as now actions and groundtruth observations are known
+        # a_ema = torch.stack(this_run_a)
+        # o_ema = torch.stack(this_run_o) if len(this_run_o) > 0 else None
+        # _, state_mem_other = mdl_other.scan(a_ema, o_ema, start_state, n_warmup, sample_state)
+        # extend_memory(memory_other, rssm_add_labels(rssm_stack_state_list(state_mem_other)))
 
-                # TODO: sample_output changed to fixed false to reduce variance of training targets
-                if t < n_warmup:  # if still in warmup, re-do last step with simulated ground truth and use posterior
-                    o_enc = mdl.o_encoder(simulated_ground_truth['o'])
-                    this_run_o.append(o_enc)
-                    next_state = mdl(a=a_t, o_enc=o_enc, last_state=state,
-                                     use_posterior=True, sample_state=sample_state)
-                    pred = mdl.decode(next_state[-1], sample=sample_output, reconstruct_observation=reconstruct)
+        if GlobalLogger.can_log('simulated_ground_truth_goal_distance', self._current_train_step):
+            sim_ground_truth_r = torch.stack(memory_targets['r'][1:]).mean(dim=1).detach().cpu().numpy()
+            goal_rewards = torch.stack(goal_rewards).mean(dim=1).detach().cpu().numpy().squeeze()
+            reachability_rewards = torch.stack(reachability_rewards).mean(dim=1).detach().cpu().numpy().squeeze()
+            distance_rewards = torch.stack(distance_rewards).mean(dim=1).detach().cpu().numpy().squeeze()
+            terminals = torch.stack(terminals).mean(dim=1).detach().cpu().numpy().squeeze()
+            fig = plt.figure(dpi=60)
+            plt.plot(sim_ground_truth_r, label='sim ground truth r', marker='o')
+            plt.plot(goal_rewards, label='agent goal reward', marker='o')
+            plt.plot(reachability_rewards, label='reachability reward', marker='o')
+            plt.plot(distance_rewards, label='distance reward', marker='o')
+            plt.plot(terminals, label='terminal flags', marker='o')
+            plt.suptitle(f'L{level} Model + Goal Seeking Agent')
+            plt.legend()
+            plt.tight_layout()
+            GlobalLogger.logger.log_plot(fig_to_img(fig), Scope.TRAIN() / f'model/{level}/goal_reward',
+                                         self._current_train_step)
+            plt.close(fig)
+            del fig
 
-                append_memory(memory, **pred, **rssm_add_labels(next_state), a=a_t)
-                append_memory(memory_targets, **simulated_ground_truth)
-                append_memory(memory_states_below, **rssm_add_labels(simulation['model_state']))
-                # TODO: hack until proper ema model querying is implemented
-                append_memory(memory_other, **rssm_add_labels(next_state))
+        memory_targets = {k: torch.stack(v) for k, v in memory_targets.items()}  # to fit loss calculation scheme
 
-                # important: update model states
-                state = next_state
-                state_below = simulation['model_state']
+        # DEBUGGING
 
-            # run other model in one pass as now actions and groundtruth observations are known
-            # a_ema = torch.stack(this_run_a)
-            # o_ema = torch.stack(this_run_o) if len(this_run_o) > 0 else None
-            # _, state_mem_other = mdl_other.scan(a_ema, o_ema, start_state, n_warmup, sample_state)
-            # extend_memory(memory_other, rssm_add_labels(rssm_stack_state_list(state_mem_other)))
+        # action std
+        # print(f'using agent: {torch.stack(this_run_a).detach().cpu().numpy().reshape(-1, 2).mean(axis=0)} | {torch.stack(this_run_a).detach().cpu().numpy().reshape(-1, 2).std(axis=0)}')
 
-            if GlobalLogger.can_log('simulated_ground_truth_goal_distance', self._current_train_step):
-                sim_ground_truth_r = torch.stack(memory_targets['r'][1:]).mean(dim=1).detach().cpu().numpy()
-                goal_rewards = torch.stack(goal_rewards).mean(dim=1).detach().cpu().numpy().squeeze()
-                reachability_rewards = torch.stack(reachability_rewards).mean(dim=1).detach().cpu().numpy().squeeze()
-                distance_rewards = torch.stack(distance_rewards).mean(dim=1).detach().cpu().numpy().squeeze()
-                terminals = torch.stack(terminals).mean(dim=1).detach().cpu().numpy().squeeze()
-                fig = plt.figure(dpi=60)
-                plt.plot(sim_ground_truth_r, label='sim ground truth r', marker='o')
-                plt.plot(goal_rewards, label='agent goal reward', marker='o')
-                plt.plot(reachability_rewards, label='reachability reward', marker='o')
-                plt.plot(distance_rewards, label='distance reward', marker='o')
-                plt.plot(terminals, label='terminal flags', marker='o')
-                plt.suptitle(f'L{level} Model + Goal Seeking Agent')
-                plt.legend()
-                plt.tight_layout()
-                GlobalLogger.logger.log_plot(fig_to_img(fig), Scope.TRAIN() / f'model/{level}/goal_reward',
-                                             self._current_train_step)
-                plt.close(fig)
-                del fig
+        # start state std
+        # start_state_std = agent.o_from_state(start_state).std(axis=0).detach().cpu().numpy().mean()
+        # below_start_state_std = agent.o_from_state(start_state_below).std(axis=0).detach().cpu().numpy().mean()
+        # print(f'start_state: {start_state_std}, below_start_state: {below_start_state_std}')
 
-            memory_targets = {k: torch.stack(v) for k, v in memory_targets.items()}  # to fit loss calculation scheme
-
-            # DEBUGGING
-
-            # action std
-            # print(f'using agent: {torch.stack(this_run_a).detach().cpu().numpy().reshape(-1, 2).mean(axis=0)} | {torch.stack(this_run_a).detach().cpu().numpy().reshape(-1, 2).std(axis=0)}')
-
-            # start state std
-            # start_state_std = agent.o_from_state(start_state).std(axis=0).detach().cpu().numpy().mean()
-            # below_start_state_std = agent.o_from_state(start_state_below).std(axis=0).detach().cpu().numpy().mean()
-            # print(f'start_state: {start_state_std}, below_start_state: {below_start_state_std}')
-
-            return memory, memory_other, memory_targets, state, memory_states_below
+        return memory, memory_other, memory_targets, state, memory_states_below
 
     @torch.jit.export
     def forward_static(self,

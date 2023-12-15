@@ -152,7 +152,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 # flat agent
                 eval_mem_flat = []
                 eval_env.reset()
-                flat_policy = LatentAgentPolicy(r_max_agents[0][0], model, stochastic=False, exploration_noise=0.3)
+                flat_policy = LatentAgentPolicy(r_max_agents[0][0], model, stochastic=False, exploration_noise=0.0)
                 d = GymEpisodeDriver(eval_env, flat_policy)
                 d.interact(10, eval_mem_flat)
                 # eval_mem_flat += collect_data(eval_env, cfg['eval']['eval_steps'], flat_policy)
@@ -161,7 +161,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 # hierarchical agent
                 eval_mem_hierarchical = []
                 eval_env.reset()
-                hierarchical_policy = HierarchicalLatentAgentPolicy(model, stochastic=False, exploration_noise=0.3)
+                hierarchical_policy = HierarchicalLatentAgentPolicy(model, stochastic=False, exploration_noise=0.0)
                 d = GymEpisodeDriver(eval_env, hierarchical_policy)
                 d.interact(10, eval_mem_hierarchical)
                 # eval_mem_hierarchical += collect_data(eval_env, cfg['eval']['eval_steps'], hierarchical_policy)

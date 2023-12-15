@@ -124,22 +124,12 @@ def main():
         collect_driver.interact(cfg['prefill_episodes'], test_mem, progress_bar=True)
     test_driver = OfflineRLDriver(test_mem, sampling_type=SamplingType.RANDOM)
 
-    prep = to_tensors(train_mem, device='cpu')
-    prep = prepare_data(prep)
-    instance = make_env_fn()
-
-    # fig, ani = visualize_trajectory(train_mem[0])
-    # gif = anim_to_gif(ani)
-    # plt.show()
-    # fig = plot_trajectory_stats(train_mem, 20)
-    # plt.show()
-
     def simple_collect_fn(explore: bool):
         agent = r_max_agents[0][0]
         agent.eval()
         collect_env.reset()
         expl_noise = 0.3 if explore else 0.0
-        policy = LatentAgentPolicy(agent, model, exploration_noise=expl_noise)
+        policy = LatentAgentPolicy(agent, model, stochastic=False, exploration_noise=expl_noise)
         d = GymEpisodeDriver(collect_env, policy)
         d.interact(10, train_mem)
         # collected_data_trajectories = collect_data(collect_env, -1, policy)
@@ -149,7 +139,7 @@ def main():
         agent_eval_mode(r_max_agents + goal_seeking_agents)
         collect_env.reset()
         expl_noise = 0.3 if explore else 0.0
-        det_policy = HierarchicalLatentAgentPolicy(model, stochastic=False, exploration_noise=0.3)
+        det_policy = HierarchicalLatentAgentPolicy(model, stochastic=False, exploration_noise=expl_noise)
         #expl_policy = HierarchicalLatentAgentPolicy(model, explore=True)
         # collected_data_trajectories = collect_data(collect_env, -1, policy)
         # train_mem.extend(collected_data_trajectories)

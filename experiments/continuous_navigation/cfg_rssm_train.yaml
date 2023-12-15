@@ -166,8 +166,6 @@ agents:
          critic_act_fn: "relu"
          actor_layer_norm: True
          critic_layer_norm: True
-         normalize_observations: False
-         normalize_rewards: False
          dynamics_loss: True
          use_slow_value_target: True
          use_slow_world_model: False
@@ -192,8 +190,6 @@ agents:
          critic_act_fn: "relu"
          actor_layer_norm: True
          critic_layer_norm: True
-         normalize_observations: False
-         normalize_rewards: False
          dynamics_loss: True
          use_slow_value_target: True
          use_slow_world_model: False
@@ -219,12 +215,10 @@ agents:
          critic_act_fn: "relu"
          actor_layer_norm: True
          critic_layer_norm: True
-         normalize_observations: False
-         normalize_rewards: False
          dynamics_loss: False
          use_slow_value_target: True
          use_slow_world_model: False
 eval:
-   eval_envs: 20
+   eval_envs: 10
    eval_steps: 1000
    warmup_steps: [ 3, 3 ]
