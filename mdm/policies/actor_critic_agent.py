@@ -20,7 +20,7 @@ from mdm.utils.torch_tools import layers_with_activation as lwa, SquashedNormal,
 from mdm.utils.torch_tools import (FuzzyDeviceMixin, compute_mask, detach_dist, disable_torch_compile, stack_dists,
                                    concat_dists, TanhBijector, clip_but_pass_gradient, FreezeParameters,
                                    plot_grad_flow, masked_mean, masked_var)
-from mdm.utils.utils import fig_to_img, append_memory, numpyfy
+from mdm.utils.utils import fig_to_img, append_memory, numpyfy, extend_memory, list_of_tuples_to_tuple_of_lists
 from mdm.logging.logger import GlobalLogger, Scope, Logger
 
 
@@ -150,96 +150,62 @@ class ActorCriticAgent(torch.nn.Module):
             other_world = sim_env._ema_rssm_modules[self.level]
 
         agent_memory = {} if agent_memory is None else agent_memory
-        env_mem = {} if env_memory is None else env_memory
+        env_memory = {} if env_memory is None else env_memory
         ema_env_mem = {}
 
-        if goal is None:  # for torchscript
-            goal = torch.zeros_like(env_start_state[-1])
-        # goal = goal.detach()# goal is absolute and should not be altered through gradients
-
-        prev_similarity = None
-        last_env_state = env_start_state  # note: first observation is not added to agent memory
+        env_states = [env_start_state]
+        agent_obs = [self.fuse_o_with_goal(env_start_state, goal)]
+        agent_acts, agent_act_dists = [], []
         with FreezeParameters([world]):
             for t in range(n_steps):
-                agent_o = self.fuse_o_with_goal(last_env_state, goal)
-                a_dist, a = self(agent_o.detach(), sample=sample_actions, expl_noise=expl_noise)
+                a_dist, a = self(agent_obs[-1].detach(), sample=sample_actions, expl_noise=expl_noise)
                 # ema_a_dist, _, ema_v = self(agent_o, use_ema_modules=True, sample=sample_actions,
                 #                            disable_exploration=disable_exploration)
-                ema_a_dist = torch.ones_like(a_dist)
-
-                if torch.isnan(last_env_state[0]).any() or torch.isinf(last_env_state[0]).any():
-                    raise RuntimeError(f'Invalid env state in act_in_sim: {last_env_state[0]}')
-                if torch.isnan(agent_o).any() or torch.isinf(agent_o).any():
-                    raise RuntimeError(f'Invalid agent observation in act_in_sim: {agent_o}')
-                if torch.isnan(a).any() or torch.isinf(a).any():
-                    raise RuntimeError(f'Invalid agent action in act_in_sim: {a}')
-
-                current_env_state = world(a=a, last_state=last_env_state, use_posterior=False,
+                current_env_state = world(a=a, last_state=env_states[-1], use_posterior=False,
                                           sample_state=sample_states)
-                pred = world.decode(current_env_state[-1], sample=False, reconstruct_observation=reconstruct)
 
-                for k, v in pred.items():
-                    if torch.isnan(v).any():
-                        print(f'found nan value in {k}')
-                # with torch.no_grad():
-                #    _, next_slow_env_state = other_world(a=a, last_state=last_env_state, use_posterior=False,
-                #                                        sample_state=sample_states)
-                #    slow_z_dist = other_world.z_dist(next_slow_env_state[1])
-                #    z_dist = world.z_dist(current_env_state[1])
-                #    novelty = kl_divergence(z_dist, slow_z_dist).detach()
-                novelty = torch.zeros_like(agent_o[:, 0])
-                # TODO: check if correct time step's z is used for calc rewards and if correct time step's z is stored
-                # if self.goal_seeking:
-                #    _, current_o_enc = sim_env.goal_autoencoder.encode(current_env_state[-1], sample=False)
-                #    r = self.goal_similarity(current_o_enc, goal_enc)
-                # else:
-                #    r = pred['r']
-                r = self.build_step_reward(step=current_env_state, r=pred['r'], goal=goal,
-                                           use_goal_reward=self.goal_seeking, prev_similarity=None)
-                prev_similarity = r
-                terminal = self.build_step_terminal(current_env_state, goal, pred['terminal'])
+                env_states.append(current_env_state)
+                agent_obs.append(self.fuse_o_with_goal(current_env_state, goal))
+                agent_acts.append(a)
+                agent_act_dists.append(a_dist)
 
-                # if self.level > 0:
-                #    _, _, _, s_rec = sim_env.goal_autoencoder(pred['o'], sample=False)
-                #    r_expl = torch.mean((pred['o'] - s_rec) ** 2, dim=-1, keepdim=True)
-                # else:
-                r_expl = torch.zeros_like(r)
+            # transform list of RSSM state tuples to a tuple of lists, each element of the tuple being a list that
+            # containing all time steps of the previous tuple's elements at that position
+            # [(a_0, b_0), (a_1, b_1), ...] -> ([a_0, a_1, ...], [b_0, b_1, ...])
+            env_states_tpl = list_of_tuples_to_tuple_of_lists(env_states)
+            s_embed_stacked = torch.stack(env_states_tpl[-1])  # use last RSSM state element for decoding
+            pred = world.decode(s_embed_stacked, sample=False, reconstruct_observation=False)
+            pred = {k: list(v.unbind(0)) for k, v in pred.items()}  # make first dimension to list again
+            pred.update(rssm_add_labels(env_states_tpl))  # add rssm states to the memory
+            extend_memory(env_memory, pred)  # write contents of this act_in_sim() call to env memory
 
-                # if self.goal_seeking:
-                #    params = {**dict(self.named_parameters()), **dict(world.named_parameters())}
-                #    make_dot(r, params).view()
-                #    quit()
+            # repeat the goal over the time dimension to match the format in env_states
+            if self.goal_seeking:
+                goal = goal.detach()  # goals come from upper level management and should not be changed by workers
+                # repeat the same goal for each time step
+                goal_tiled = torch.repeat_interleave(goal.unsqueeze(0), repeats=n_steps, dim=0)
+                agent_r = self.goal_similarity(s_embed_stacked, goal_tiled)
+                agent_r = list(agent_r.unbind(0))
+            else:
+                agent_r = pred['r']
 
-                timestep = {  # 'o_env': last_env_state[0],
-                    # 'o_env_next': current_env_state[0],
-                    # 'goal': goal,
-                    'o': self.fuse_o_with_goal(current_env_state, goal),
-                    # agent_o,  # self.o_from_state(current_env_state), #agent_o,
-                    'a': a,
-                    'r': r,
-                    'r_expl': r_expl,
-                    # 'r_raw': pred['r'],
-                    'terminal': terminal,
-                    'a_dist': a_dist,
-                    'ema_a_dist': ema_a_dist,
-                    'model_novelty': novelty
-                }
+            ema_a_dist_mock = [torch.zeros_like(x) for x in agent_act_dists]
+            extend_memory(agent_memory, {'o': agent_obs, 'a': agent_acts, 'r': agent_r, 'terminal': pred['terminal'],
+                                         'a_dist': agent_act_dists, 'ema_a_dist': ema_a_dist_mock, 'model_novelty': []})
 
-                append_memory(agent_memory, **timestep)
-                append_memory(env_mem, **pred, **rssm_add_labels(current_env_state))
-                last_env_state = current_env_state
+        return {'agent': agent_memory, 'model': env_memory, 'model_state': env_states[-1], 'ema_model': ema_env_mem}
 
-        # agent novelty reward, could be computed in eval_step to save some compute
-        # a_ema = torch.stack(agent_memory['a'][-n_steps:])
-        # _, ema_state_mem = other_world.scan(a_ema, start_state=env_start_state, sample_state=sample_states)
-        # z_dist_params = torch.stack(env_mem['z_post'][-n_steps:])
-        # slow_z_dist_params = torch.stack([ema_state[2] for ema_state in ema_state_mem])  # always try to get posterior
-        # novelty = kl_divergence(world.z_dist(z_dist_params), world.z_dist(slow_z_dist_params))
-        # model_novelty = agent_memory.get('model_novelty', [])
-        # model_novelty += list(novelty.unbind(0))
-        # agent_memory['model_novelty'] = model_novelty
-
-        return {'agent': agent_memory, 'model': env_mem, 'model_state': last_env_state, 'ema_model': ema_env_mem}
+    @staticmethod
+    def _check(a, agent_o, last_env_state, pred):
+        if torch.isnan(last_env_state[0]).any() or torch.isinf(last_env_state[0]).any():
+            raise RuntimeError(f'Invalid env state in act_in_sim: {last_env_state[0]}')
+        if torch.isnan(agent_o).any() or torch.isinf(agent_o).any():
+            raise RuntimeError(f'Invalid agent observation in act_in_sim: {agent_o}')
+        if torch.isnan(a).any() or torch.isinf(a).any():
+            raise RuntimeError(f'Invalid agent action in act_in_sim: {a}')
+        for k, v in pred.items():
+            if torch.isnan(v).any():
+                print(f'found nan value in {k}')
 
     @torch.jit.export
     def update_exploration(self):
@@ -251,10 +217,10 @@ class ActorCriticAgent(torch.nn.Module):
                        o: torch.Tensor):
         params = self.actor_net(o)
         mu, logvar = torch.tensor_split(params, 2, -1)
-        mu = torch.tanh(mu) * 5.0  # limit total range of mu but make it easy for the actor net to saturate it
-        logvar = logvar + 5.0  # make initial variance high
-        #sigma = torch.nn.functional.softplus(logvar) + self.min_scale
-        sigma = torch.nn.functional.sigmoid(logvar) * 10.0  # limit total range of sigma
+        mu = torch.tanh(mu) * 2.0  # limit total range of mu but make it easy for the actor net to saturate it
+        logvar = logvar + 3.0  # make initial variance high
+        # sigma = torch.nn.functional.softplus(logvar) + self.min_scale
+        sigma = torch.nn.functional.sigmoid(logvar) * 3.0  # limit total range of sigma
         d = torch.stack([mu, sigma], dim=-1)
         return d
 
@@ -267,6 +233,7 @@ class ActorCriticAgent(torch.nn.Module):
         # d = torch.distributions.Independent(d, 1)
         return d
 
+    # see https://github.com/ray-project/ray/blob/d9722d2bafe8d7fd4ffb95f4ac64701720526c56/rllib/models/torch/torch_action_dist.py#L337
     @torch.jit.ignore
     def _a_log_prob(self,
                     a_dist_params: torch.Tensor,
@@ -275,7 +242,19 @@ class ActorCriticAgent(torch.nn.Module):
         d = self._a_dist(mu, sigma)
         # a = self.scale_to_unit_interval(a)
         a_log_prob = d.log_prob(a)
-        return a_log_prob
+        a_log_prob = a_log_prob.sum(dim=-1, keepdim=True)  # sum over action dimension
+
+        a_unsquashed = torch.atanh(torch.clamp(a, -1 + 0.00001, 1 - 0.00001))
+        a_log_prob_unsquashed = torch.distributions.Normal(loc=mu, scale=sigma).log_prob(a_unsquashed)
+        a_log_prob_unsquashed = torch.clamp(a_log_prob_unsquashed, -100, 100)
+        a_log_prob_unsquashed = a_log_prob_unsquashed.sum(dim=-1)
+        a_unsquashed_tanhd = torch.tanh(a_unsquashed)
+        a_log_prob_2 = a_log_prob_unsquashed - torch.sum(torch.log(1 - a_unsquashed_tanhd ** 2 + 0.00001), dim=-1)
+        a_log_prob_2 = a_log_prob_2.unsqueeze(-1)
+        
+        if torch.isnan(a_log_prob_2).any() or torch.isinf(a_log_prob_2).any():
+            raise RuntimeError('NaN or inf in action log prob found')
+        return a_log_prob_2
 
     @torch.jit.ignore
     def _a_dist_entropy(self,
@@ -296,7 +275,6 @@ class ActorCriticAgent(torch.nn.Module):
                   model_novelty: list[torch.Tensor],
                   a: list[torch.Tensor],
                   r: list[torch.Tensor],
-                  r_expl: list[torch.Tensor],
                   # r_raw: list[torch.Tensor],
                   terminal: list[torch.Tensor],
                   o: List[torch.Tensor],
@@ -306,15 +284,27 @@ class ActorCriticAgent(torch.nn.Module):
                   first_step_mask: Optional[torch.Tensor] = None,
                   for_train_step: bool = False):
         o = torch.stack(o)
-        terminal = torch.stack(terminal)
         r = torch.stack(r)
-        r_expl = torch.stack(r_expl)
+        terminal = torch.stack(terminal)
+        a = torch.stack(a)
+        a_dist = torch.stack(a_dist)
+        ema_a_dist = torch.stack(ema_a_dist)
+        a_log_prob = self._a_log_prob(a_dist, a.detach())
 
-        # use compute_mask to produce validity matrix that honors first_step_mask, which might mean to make a complete
-        # trajectory invalid if the first time step is already after a terminal step.
+        if self.goal_seeking:
+            gamma = 1.0
+            lambda_ = 0.95
+        else:
+            gamma = 0.99
+            lambda_ = 0.95
+
+        # set first step's terminal flag to what came out of the experience replay buffer
+        terminal[0] = first_step_mask
+
         with torch.no_grad():
-            mask = compute_mask(terminal, first_step_mask=first_step_mask, disable=False)
-            valid = 1 - mask
+            # see https://github.com/ray-project/ray/blob/5ae0ddaf4360eeef0525ca33d9670251337ca930/rllib/algorithms/dreamerv3/tf/models/dreamer_model.py#L397
+            valid = torch.cumprod((1 - terminal) * gamma, dim=0) / gamma
+            mask_t1_to_H = (1 - valid)[:-1]
 
         # prevent critic net parameters from being updated through policy loss but let gradients of policy loss flow
         # through value network back into simulated environment
@@ -325,55 +315,15 @@ class ActorCriticAgent(torch.nn.Module):
                 v_actor_slow = self.ema_critic_net(o)
             v_actor = torch.minimum(v_actor, v_actor_slow)
 
-        a = torch.stack(a)
-        a_dist = torch.stack(a_dist)
-        ema_a_dist = torch.stack(ema_a_dist)
-        a_log_prob = self._a_log_prob(a_dist, a.detach())
-
-        # valid_bootstrap = (valid * torch.minimum(v_actor, ema_v))[-1]
-        if self.goal_seeking:
-            # we only train a single chunk, no bootstrapping needed beyond that
-            # CAUTION: we don't train the last step and should get one step more than chunk size
-            # bootstrap = (1 - mask)[-1] * r[-1]  # (1 - mask[-1]) * v_actor[-1]
-            gamma = 1.0
-            lambda_ = 0.999
-            # lambda_returns = calc_returns_simple(r[:-1], terminal[:-1], bootstrap, gamma=gamma)
-            # bootstrap = torch.zeros_like(r[-1])  # (1 - mask[-1]) * v_actor[-1]
-            # lambda_returns = calc_lambda_returns(r, terminal, v_actor, bootstrap, gamma, 0.95)
-            # bootstrap = terminal[-1] * valid[-1] * r[-1]
-        else:
-            gamma = 0.99
-            lambda_ = 0.95
-            # bootstrap = (1 - mask)[-1] * v_actor[-1]
-            # bootstrap = (1 - mask)[-1] * v_actor[-1]  # (1 - mask[-1]) * v_actor[-1]
-        bootstrap = v_actor[-1]
-        # bootstrap = (1 - terminal)[-1] * v_actor[-1] + terminal[-1] * r[-1]
-        # changed lambda from 0.99 to 0.95 24.11.23
-        lambda_returns = calc_lambda_returns(r[1:] + r_expl[1:], terminal[1:], v_actor[:-1], bootstrap, gamma, 0.95)
+        lambda_returns = self.compute_value_targets(r, terminal, v_actor, gamma, lambda_)
+        #lambda_returns = calc_lambda_returns(r[1:], terminal[1:], v_actor[:-1], bootstrap, gamma, lambda_)
         # lambda_returns = calc_returns_simple(r[:-1], terminal[:-1], bootstrap, 0.99)
-        # bootstrap = (1 - mask)[-1] * v_actor[-1]  # (1 - mask[-1]) * v_actor[-1]
-        # bootstrap = (1 - mask)[-1] * (((1 - terminal) * v_actor + terminal * r))[-1]
 
-        # remove bootstrap time step
-        mask = mask[:-1]
-        valid = valid[:-1]
-        v_actor = v_actor[:-1]
-        o = o[:-1]
-        a = a[:-1]
-        a_dist = a_dist[:-1]
-        a_log_prob = a_log_prob[:-1]
-        r = r[:-1]
-        r_expl = r_expl[:-1]
-
-        # normalize returns and state values
-        # if self.goal_seeking:
-        #    advantage_actor = lambda_returns# - v_actor
-        # else:
-        ret_mean, ret_std = self.return_running_average(lambda_returns, mask)  # update and return stats
+        ret_mean, ret_std = self.return_running_average(lambda_returns, mask_t1_to_H)  # update and return stats
         lambda_returns_actor = self.return_running_average.normalize(lambda_returns, ret_mean, ret_std)
         v_actor = self.return_running_average.normalize(v_actor, ret_mean, ret_std)
-        advantage_actor = lambda_returns_actor - v_actor
-        #advantage_actor = lambda_returns - v_actor
+        #lambda_returns_actor = lambda_returns
+        advantage_actor = lambda_returns_actor - v_actor[:-1]#.detach()
 
         # params = {**dict(self.named_parameters())}
         # make_dot(advantage_actor, params).view()
@@ -382,47 +332,47 @@ class ActorCriticAgent(torch.nn.Module):
         # ACTOR
         if self.dynamics_loss:
             # we can't optimize return for first state, as it comes from replay buffer
-            #policy_loss = -advantage_actor * valid
+            # policy_loss = -advantage_actor * valid
             # policy_loss = -a_log_prob * advantage_actor.detach() * valid
             # policy_loss = -advantage_actor
-            policy_loss = - masked_mean(advantage_actor, mask)
+            policy_loss = - masked_mean(lambda_returns_actor, mask_t1_to_H)
         else:
             # policy_loss = -a_log_prob[:-1] * advantage_actor[1:].detach() * valid[:-1]
             # advantage = (lambda_returns - (v_actor * valid)[:-1]).detach()
             # policy_loss = -a_log_prob * advantage_actor.detach() * valid
-            #policy_loss = -a_log_prob[1:] * advantage_actor[:-1].detach() * valid[:-1]
-            policy_loss = - masked_mean(a_log_prob[1:] * advantage_actor[:-1].detach(), mask[:-1])
+            # policy_loss = -a_log_prob[1:] * advantage_actor[:-1].detach() * valid[:-1]
+            policy_loss = - masked_mean(a_log_prob * advantage_actor.detach(), mask_t1_to_H)
         # policy_loss = torch.sum(policy_loss)
 
         # ACTION ENTROPY LOSS
         act_entropy = self._a_dist_entropy(a_dist)
         act_entropy = torch.sum(act_entropy, dim=-1, keepdim=True)  # sum over action dim
         # act_entropy_loss = torch.sum(act_entropy_loss * valid)  # sum over T and B
-        act_entropy_loss = - self.alpha.detach() * masked_mean(act_entropy, mask)
-        #act_entropy_loss = - torch.maximum(self.alpha.detach(), torch.zeros_like(self.alpha)) * act_entropy_loss
+        act_entropy_loss = - self.alpha.detach() * masked_mean(act_entropy, mask_t1_to_H)
+        # act_entropy_loss = - torch.maximum(self.alpha.detach(), torch.zeros_like(self.alpha)) * act_entropy_loss
 
         # ALPHA LOSS
         # see https://github.com/ray-project/ray/blob/cb5bb4e7763994db4f4e765ce9dc74376d7eedca/rllib/algorithms/sac/sac_tf_policy.py#L415
         if self.learn_aplha:
             alpha_loss = self.alpha * (a_log_prob.detach() + self.target_act_entropy)
             # alpha_loss = - torch.sum(alpha_loss * valid)
-            alpha_loss = - masked_mean(alpha_loss, mask)
+            alpha_loss = - masked_mean(alpha_loss, mask_t1_to_H)
         else:
             alpha_loss = torch.zeros_like(policy_loss)
 
         # CRITIC
         with torch.no_grad():
             value_target = lambda_returns
-            v_ema_critic = self.ema_critic_net(o.detach())
+            v_ema_critic = self.ema_critic_net(o.detach()[:-1])
             ema_value_loss = torch.nn.functional.smooth_l1_loss(v_ema_critic, value_target.detach(), reduction='none')
             # ema_value_loss = torch.sum(ema_value_loss * valid)
-            ema_value_loss = masked_mean(ema_value_loss, mask)
+            ema_value_loss = masked_mean(ema_value_loss, mask_t1_to_H)
 
-        v_critic = self.critic_net(o.detach())
+        v_critic = self.critic_net(o.detach()[:-1])
         value_loss = torch.nn.functional.smooth_l1_loss(v_critic, value_target.detach(), reduction='none')
-        #value_loss = (v_critic - value_target.detach()) ** 2
+        # value_loss = (v_critic - value_target.detach()) ** 2
         # value_loss = torch.sum(value_loss * valid)
-        value_loss = masked_mean(value_loss, mask)
+        value_loss = masked_mean(value_loss, mask_t1_to_H)
 
         # TODO: currently last action is not trained, we can change that and record last state in act_in_sim as well
 
@@ -431,24 +381,24 @@ class ActorCriticAgent(torch.nn.Module):
 
         # log statistics
         with torch.no_grad():
-            per_time_step_mask = torch.where(mask.mean(dim=0) < 1.0, 0.0, 1.0)
-            a_dist_mean = masked_mean(a, mask)
-            a_dist_std = masked_var(a, mask)
+            # reward and state values are only counted from second time step on as the first one is based on a model
+            # state that came from experience memory and is ground truth
+            per_time_step_mask = torch.where(mask_t1_to_H.mean(dim=0) < 1.0, 0.0, 1.0)
+            a_dist_mean = masked_mean(a, mask_t1_to_H)
+            a_dist_std = masked_var(a, mask_t1_to_H)
             a_min = a.min()
             a_max = a.max()
-            ep_r = (r * (1 - mask)).sum(dim=0)
+            ep_r = (r[1:] * (1 - mask_t1_to_H)).sum(dim=0)
             valid_r = masked_mean(ep_r, per_time_step_mask)
-            ep_r_expl = (r_expl * (1 - mask)).sum(dim=0)
-            valid_r_expl = masked_mean(ep_r_expl, per_time_step_mask)
-            a_log_prob_mean = masked_mean(a_log_prob, mask)
-            v_mean = masked_mean(v_critic, mask)
-            ema_v_mean = masked_mean(v_ema_critic, mask)
-            v_result_mean = masked_mean(v_actor, mask)
-            lambda_returns_mean = masked_mean(lambda_returns, mask)
+            a_log_prob_mean = masked_mean(a_log_prob, mask_t1_to_H)
+            v_mean = masked_mean(v_critic, mask_t1_to_H)
+            ema_v_mean = masked_mean(v_ema_critic, mask_t1_to_H)
+            v_result_mean = masked_mean(v_actor[1:], mask_t1_to_H)
+            lambda_returns_mean = masked_mean(lambda_returns, mask_t1_to_H)
             mu, sigma = a_dist.unbind(-1)
 
         if self.goal_seeking:
-            step_r = masked_mean(r, mask, dim=1).detach().cpu().numpy().squeeze()
+            step_r = masked_mean(r[1:], mask_t1_to_H, dim=1).detach().cpu().numpy().squeeze()
             step_a_magnitude = a.abs().mean(dim=[0, 1]).detach().cpu().numpy()
             # print(step_r / (step_r[0] - 1e-5))
             print(step_r, end=' | ')
@@ -467,21 +417,20 @@ class ActorCriticAgent(torch.nn.Module):
                   'monitoring_a_dist_std': a_dist_std,
                   'monitoring_a_min': a_min,
                   'monitoring_a_max': a_max,
-                  'monitoring_a_entropy': masked_mean(act_entropy, mask),
+                  'monitoring_a_entropy': masked_mean(act_entropy, mask_t1_to_H),
                   'monitoring_obtained_reward': valid_r,
-                  'monitoring_obtained_exploration_reward': valid_r_expl,
                   'monitoring_a_log_prob': a_log_prob_mean,
                   'monitoring_v': v_mean,
                   'monitoring_ema_v': ema_v_mean,
                   'monitoring_v_result': v_result_mean,
-                  'monitoring_a_mu': masked_mean(mu, mask),
-                  'monitoring_a_sigma': masked_mean(sigma, mask),
+                  'monitoring_a_mu': masked_mean(mu, mask_t1_to_H),
+                  'monitoring_a_sigma': masked_mean(sigma, mask_t1_to_H),
                   'monitoring_lambda_returns': lambda_returns_mean,
-                  'monitoring_faction_valid': torch.sum(1 - mask) / torch.sum(torch.ones_like(mask)),
-                  'monitoring_bootstrap': bootstrap.mean()}
+                  'monitoring_faction_valid': torch.sum(1 - mask_t1_to_H) / torch.sum(torch.ones_like(mask_t1_to_H)),
+                  'monitoring_bootstrap': v_actor[-1].mean()}
 
         # if for_train_step:
-        #    losses['mask'] = mask
+        #    losses['mask_t1_to_H'] = mask_t1_to_H
 
         invalid_losses = ''
         for k, v in losses.items():
@@ -491,6 +440,21 @@ class ActorCriticAgent(torch.nn.Module):
             raise RuntimeError(f'Invalid loss in {self._agent_repr} detected: {invalid_losses}')
 
         return losses
+
+    @staticmethod
+    def compute_value_targets(rewards, terminals, values, gamma, lambda_):
+        # TODO: this is wrong I think, look at original dreamer implementation and check against rllib
+        #  (this is currently following rllib)
+        r_t1_to_Hm1 = rewards[1:]
+        disc_t1_to_H = (1 - terminals[1:]) * gamma
+        returns = [values[-1]]
+        intermediates = r_t1_to_Hm1 + disc_t1_to_H * (1 - lambda_) * values[1:]
+
+        for t in reversed(range(disc_t1_to_H.shape[0])):
+            returns.append(intermediates[t] + disc_t1_to_H[t] * lambda_ * returns[-1])
+
+        returns = torch.stack(list(reversed(returns))[:-1], dim=0)
+        return returns
 
     @torch.jit.ignore
     def update_step(self,
@@ -505,7 +469,6 @@ class ActorCriticAgent(torch.nn.Module):
                                 model_novelty=simulation_data['model_novelty'],
                                 a=simulation_data['a'],
                                 r=simulation_data['r'],
-                                r_expl=simulation_data['r_expl'],
                                 # r_raw=simulation_data['r_raw'],
                                 terminal=simulation_data['terminal'],
                                 o=simulation_data['o'],
@@ -621,15 +584,12 @@ class ActorCriticAgent(torch.nn.Module):
                           step: RSSMStateType,
                           r: torch.Tensor,
                           goal: Optional[torch.Tensor] = None,
-                          prev_similarity: Optional[torch.Tensor] = None,
                           use_goal_reward: bool = False):
         # TODO: should we detach o as well?
         if use_goal_reward:
             o = self.o_from_state(step)
             # return 0.5 * self.goal_similarity(o, goal) + 0.5 * r
             similarity = self.goal_similarity(o, goal)
-            if prev_similarity is not None:
-                similarity = torch.where(similarity < prev_similarity, torch.zeros_like(similarity), similarity)
             return similarity
         else:
             return r

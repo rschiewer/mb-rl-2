@@ -434,11 +434,6 @@ def rssm_stack_states(h: List[torch.Tensor],
             torch.stack(s_embedding).contiguous())
 
 
-@torch.jit.ignore
-def rssm_stack_state_list(states: List[RSSMStateType]):
-    return [list(x) for x in zip(*states)]
-
-
 @torch.jit.script
 def rssm_detach_state(h: torch.Tensor,
                       z: torch.Tensor,

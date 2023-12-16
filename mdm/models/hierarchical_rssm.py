@@ -10,11 +10,12 @@ from torch.nn import ModuleList, ModuleDict
 
 from mdm.models.building_blocks import *
 from mdm.models.dynamics_model import DynamicsModel
-from mdm.models.rssm_cell import RSSMStateType, RSSMCell, rssm_stack_states, rssm_stack_state_list, rssm_detach_state, \
+from mdm.models.rssm_cell import RSSMCell, rssm_stack_states, rssm_detach_state, \
     rssm_state_keys, rssm_add_labels, rssm_remove_labels
 from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.utils.torch_tools import *
-from mdm.utils.utils import filter_mem_state_seq_to_batch, fig_to_img, append_memory, extend_memory, TempFigure
+from mdm.utils.utils import filter_mem_state_seq_to_batch, fig_to_img, append_memory, extend_memory, TempFigure, \
+    list_of_tuples_to_tuple_of_lists
 from mdm.logging.logger import GlobalLogger, Scope
 from mdm.utils.gym_nav2d_tools import *
 from mdm.models.vae import VAE
@@ -312,11 +313,11 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         s_embed = torch.stack([state[-1] for state in model_state_mem])
         pred = mdl.decode(s_embed, sample=sample_output, reconstruct_observation=reconstruct)
         pred = {k: v.unbind(0) for k, v in pred.items()}
-        pred.update(rssm_add_labels(rssm_stack_state_list(model_state_mem)))
+        pred.update(rssm_add_labels(list_of_tuples_to_tuple_of_lists(model_state_mem)))
         pred['a'] = a.unbind(0)
         extend_memory(memory, pred)
         # TODO: hack until proper ema model querying is implemented
-        extend_memory(memory_other, rssm_add_labels(rssm_stack_state_list(model_state_mem)))
+        extend_memory(memory_other, rssm_add_labels(list_of_tuples_to_tuple_of_lists(model_state_mem)))
         # extend_memory(memory_other, rssm_add_labels(rssm_stack_state_list(model_state_mem_other)))
 
         state = model_state_mem[-1]

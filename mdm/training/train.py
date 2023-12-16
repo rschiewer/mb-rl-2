@@ -1161,7 +1161,7 @@ def record_episode(cfg, i_step, logger, model, video_env):
     # record an episode
     video_env.reset()
     video_env.get_wrapper_attr('start_video_recorder')()
-    policy = HierarchicalLatentAgentPolicy(model, stochastic=False, exploration_noise=0.3)
+    policy = HierarchicalLatentAgentPolicy(model, stochastic=False, exploration_noise=0.0)
     # policy = LatentAgentPolicy(model.r_max_agents[0][0], model, explore=False)
     traj = collect_data(video_env, cfg['eval']['eval_steps'], policy)
     traj = traj[0]  # we collect only a single trajectory, remove list wrapper

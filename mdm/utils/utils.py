@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import io
 import os
 import pickle
@@ -7,13 +9,14 @@ import random
 import time
 from inspect import stack
 from pathlib import Path
-from typing import Any
+from typing import Any, List
 
 import gymnasium as gym
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 import numpy.ma as ma
 import pandas as pd
+import torch
 import yaml
 from PIL import Image
 
@@ -21,7 +24,7 @@ from mdm.gridworld.gridworld import Gridworld, CellType
 from mdm.memory.trajectory_memory import flatten_and_unsqueeze
 from mdm.models.building_blocks import *
 from mdm.logging.logger import Logger, Scope
-from mdm.models.rssm_cell import rssm_state_seq_to_batch, rssm_state_keys
+from mdm.models.rssm_cell import rssm_state_seq_to_batch, rssm_state_keys, RSSMStateType
 from mdm.utils.torch_tools import unsqueeze_right, stack_if_list
 
 DataType = TypeVar('DataType', int, float, np.single, np.double, bool, np.ndarray)
@@ -1101,3 +1104,8 @@ def prepare_env(env: gym.Env):
     if isinstance(env.observation_space, gym.spaces.dict.Dict):
         env = gym.wrappers.FlattenObservation(env)
     return env
+
+
+def list_of_tuples_to_tuple_of_lists(list_of_tpls: List[Any]):
+    state = tuple([list(x) for x in zip(*list_of_tpls)])
+    return state
