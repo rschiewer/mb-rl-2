@@ -448,7 +448,8 @@ def subtrajectories(data: Dict[str, torch.Tensor],
 
 def valid_subtrajectories(data: Dict[str, torch.Tensor],
                           length: int):
-    assert length < data['o'].shape[0]
+    if length >= data['o'].shape[0]:
+        length = data['o'].shape[0]
 
     n_trajs = data['o'].shape[1]
     l_trajs = (1 - data['mask']).sum(dim=0).detach().cpu().numpy().squeeze()

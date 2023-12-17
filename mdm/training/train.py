@@ -18,7 +18,7 @@ from mdm.policies.agent_policy import HierarchicalLatentAgentPolicy, LatentAgent
 from mdm.policies.predefined_policy import PredefinedPolicy
 from mdm.training.gym_driver import collect_data, GymEpisodeDriver
 from mdm.utils.gym_wrappers import CacheLastStepEnv
-from mdm.utils.torch_tools import to_tensors, to_np, FreezeParameters
+from mdm.utils.torch_tools import to_tensors, to_np, FreezeParameters, compute_mask
 from mdm.utils.utils import *
 from mdm.utils.gym_nav2d_tools import *
 
@@ -46,9 +46,9 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
         # actor_params = _new_actor_params
 
         if cfg['trainer']['subtrajectory_len'] > 0:
-            # model_batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
+            model_batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
             # model_batch = valid_subtrajectories_unbiased(batch, 15)
-            model_batch = valid_subtrajectories_unbiased_fast(batch, cfg['trainer']['subtrajectory_len'])
+            #model_batch = valid_subtrajectories_unbiased_fast(batch, cfg['trainer']['subtrajectory_len'])
             #model_batch = valid_subtrajectories_2(batch, cfg['trainer']['subtrajectory_len'])
         else:
             model_batch = batch
@@ -142,6 +142,8 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 # trajs_orig = add_no_ops(trajs_orig, model.strides[1])
                 batch = to_tensors(trajs_orig, model.device)
                 batch = prepare_data(batch)
+                if cfg['trainer']['subtrajectory_len'] > 0:
+                    batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
                 eval_steps = [-1] + cfg['trainer']['model_train_steps'][1:]
                 eval_losses, pred, targets = model.eval_step(batch, model_steps=eval_steps, sample_state=False,
                                                              sample_output=False,
@@ -535,7 +537,7 @@ def abstract_model_training_static(abstract_train_driver, model, optimizer):
     batch = abstract_train_driver.interact(128)
     batch = to_tensors(batch, 'cuda')
     batch = {k.replace('_abstract', ''): v for k, v in batch.items() if k.endswith('_abstract')}
-    pred_upper, _, _ = model.forward_static(batch, start_state=None, level=1)
+    pred_upper, _, _ = model.forward_static(batch, start_state=None, level=1, n_steps=-1, n_warmup=-1)
     # compute loss
     mask_abstract = compute_mask(batch['terminal'])
     loss_abstract = model.rssm_loss(pred_upper, pred_upper, batch, mask_abstract, 1.0, level=1)
@@ -554,7 +556,7 @@ def abstract_model_training(abstract_train_driver, model, optimizer, cfg):
     batch = to_tensors(batch, 'cuda')
     # batch = valid_subtrajectories_2(batch, cfg['trainer']['subtrajectory_len'] * model.strides[1])
     # generate up to date latent states from lower level
-    pred, _, _ = model.forward_static(batch, start_state=None, level=0)
+    pred, _, _ = model.forward_static(batch, start_state=None, level=0, n_steps=-1, n_warmup=-1)
     # use batch data and up to date world model states to generate inputs for higher level
     batch_upper = model.filter_up(o=pred['s_embedding'],
                                   r=batch['r'],
@@ -563,7 +565,7 @@ def abstract_model_training(abstract_train_driver, model, optimizer, cfg):
     # this is the whole reason for this training routine: replace upper level actions with recorded ones from agent
     batch_upper['a'] = batch['a_abstract']
     # commence rollout generation
-    pred_upper, _, _ = model.forward_static(batch_upper, start_state=None, level=1)
+    pred_upper, _, _ = model.forward_static(batch_upper, start_state=None, level=1, n_steps=-1, n_warmup=-1)
     # compute loss
     mask_abstract = compute_mask(batch_upper['terminal'])
     loss_abstract = model.rssm_loss(pred_upper, pred_upper, batch_upper, mask_abstract, 1.0, level=1)

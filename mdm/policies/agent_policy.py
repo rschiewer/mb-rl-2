@@ -89,6 +89,7 @@ class LatentAgentPolicy(Policy):
                                                                   start_state=self._current_env_state,
                                                                   level=self.agent.level, n_steps=1, n_warmup=1,
                                                                   sample_state=False, sample_output=False,
+                                                                  reconstruct=False,
                                                                   use_ema_modules=self.agent.use_slow_world_model)
 
         if torch.isnan(self._current_env_state[0]).any():
@@ -173,6 +174,7 @@ class HierarchicalLatentAgentPolicy(Policy):
                               for _ in self.model.rssm_modules]
         self.action_queue = []
         self.chunk_history = []
+        self.action_history = [[] for _ in self.model.rssm_modules]
 
     @torch.no_grad()
     def _prep_step(self,
@@ -230,7 +232,8 @@ class HierarchicalLatentAgentPolicy(Policy):
             state = self.grounded_env_states[i_lvl]
             mem, _, new_state = self.model.forward_static(data_filtered, start_state=state, level=i_lvl, n_steps=1,
                                                           n_warmup=1, sample_state=self.sample_world_model,
-                                                          sample_output=False, use_ema_modules=self._use_ema_modules)
+                                                          reconstruct=True, sample_output=False,
+                                                          use_ema_modules=self._use_ema_modules)
             self.grounded_env_states[i_lvl] = new_state
             self.level_active[i_lvl] = True
 

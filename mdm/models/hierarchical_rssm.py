@@ -11,7 +11,7 @@ from torch.nn import ModuleList, ModuleDict
 from mdm.models.building_blocks import *
 from mdm.models.dynamics_model import DynamicsModel
 from mdm.models.rssm_cell import RSSMCell, rssm_stack_states, rssm_detach_state, \
-    rssm_state_keys, rssm_add_labels, rssm_remove_labels
+    rssm_state_keys, rssm_add_labels, rssm_remove_labels, RSSMStateType
 from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.utils.torch_tools import *
 from mdm.utils.utils import filter_mem_state_seq_to_batch, fig_to_img, append_memory, extend_memory, TempFigure, \
@@ -281,15 +281,15 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
     def forward_static(self,
                        trajectory: Dict[str, torch.Tensor],
                        start_state: Dict[str, torch.Tensor],
-                       level: int = 0,
-                       n_steps: int = -1,
-                       n_warmup: int = -1,
+                       level: int,
+                       n_steps: int,
+                       n_warmup: int,
+                       sample_state: bool,
+                       sample_output: bool,
+                       reconstruct: bool,
+                       use_ema_modules: bool = False,
                        memory: Optional[Dict[str, torch.Tensor]] = None,
-                       memory_other: Optional[Dict[str, torch.Tensor]] = None,
-                       sample_state: bool = True,
-                       sample_output: bool = True,
-                       reconstruct: bool = True,
-                       use_ema_modules: bool = False):
+                       memory_other: Optional[Dict[str, torch.Tensor]] = None):
         mdl = self._ema_rssm_modules[level] if use_ema_modules else self.rssm_modules[level]
         mdl_other = self.rssm_modules[level] if use_ema_modules else self._ema_rssm_modules[level]
         memory = {} if memory is None else memory
@@ -470,9 +470,10 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             assert v.shape[0] == 1, f'k is too long: {v.shape[0]}'
 
         mem, mem_other, state = self.forward_static(simulated_ground_truth, start_state=start_state, level=level,
-                                                    n_steps=1, n_warmup=1, memory=memory, memory_other=memory_other,
-                                                    sample_state=sample_state, sample_output=False,
-                                                    reconstruct=reconstruct, use_ema_modules=use_ema_modules)
+                                                    n_steps=1, n_warmup=1, sample_state=sample_state,
+                                                    sample_output=False, reconstruct=reconstruct,
+                                                    use_ema_modules=use_ema_modules, memory=memory,
+                                                    memory_other=memory_other)
 
         simulated_ground_truth = {k: v.squeeze(0) for k, v in simulated_ground_truth.items()}  # remove time dim
 
@@ -523,10 +524,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             # filtered_trajectory['r'][0] = 0
             # filtered_trajectory['terminal'][0] = 0
             memory[l], memory_ema[l], model_state[l] = self.forward_static(filtered_trajectory,
-                                                                           start_state=model_state[l],
-                                                                           level=l,
-                                                                           n_steps=-1,  # always go all steps
-                                                                           n_warmup=warmup_steps[l],
+                                                                           start_state=model_state[l], level=l,
+                                                                           n_steps=-1, n_warmup=warmup_steps[l],
                                                                            sample_state=sample_state,
                                                                            sample_output=sample_output,
                                                                            reconstruct=reconstruct)
@@ -695,7 +694,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
             # do the model rollout
             trajectory = {'a': actions, 'o': None, 'r': None, 'terminal': None}
-            pred_lo_lvl, _, _ = self.forward_static(trajectory, start_state=start_state_detached, level=l,
+            pred_lo_lvl, _, _ = self.forward_static(trajectory, start_state=start_state_detached, level=l, n_steps=-1,
                                                     n_warmup=0, sample_state=True, reconstruct=False)
             z_prior_params = torch.stack(pred_lo_lvl['z_prior'])
 
