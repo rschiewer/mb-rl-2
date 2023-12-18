@@ -279,6 +279,7 @@ def plot_latent_state_differences(pred, logger, i_step, major_scope):
 
 
 def decoding_err_diff(model, pred, targets, level, n_steps, sample_model, sample_agents, i_step, logger):
+    raise RuntimeError('act_in_sim now returns data for the start state as well, fix the code')
     rma, rma_optimizers = model.r_max_agents[level]
     gsa, gsa_optimizers = model.goal_seeking_agents[level - 1]
     # omit first time step as we don't get a starting and end state for below model
@@ -348,6 +349,7 @@ def decoding_err_diff(model, pred, targets, level, n_steps, sample_model, sample
 
 
 def imitation_learning(model, pred, targets, level, n_steps, sample_model, sample_agents, i_step, logger):
+    raise RuntimeError('act_in_sim now returns data for the start state as well, fix the code')
     rma, rma_optimizers = model.r_max_agents[level]
     gsa, gsa_optimizers = model.goal_seeking_agents[level - 1]
     # omit first time step as we don't get a starting and end state for below model
@@ -476,60 +478,10 @@ def train_rmax_agent(agent_model_steps, cfg, eval_env, i_step, level, logger, mo
         plot_rewards(eval_env, model, level, logger, i_step)
     if level > 0 and i_step % cfg['trainer']['eval_interval'] == 0 and env_class_is(eval_env, Nav2dEnv):
         plot_goals(rma_simulation, model, logger, i_step, level)
-    if GlobalLogger.can_log('sanity_check_goal_computation', i_step) and level < model.levels - 1:
-        plot_goals_fancy(i_step, level, logger, model, rma, rma_simulation)
 
     if level < model.levels - 1:
         pass
         # update_model_chunk_distance(i_step, level, logger, model, rma_simulation)
-
-
-def plot_goals_fancy(i_step, l, logger, model, r_max_agent, r_max_simulation):
-    achieved_goals = model.filter_up(o=r_max_simulation['agent']['o_env_next'],
-                                     r=r_max_simulation['agent']['r'],
-                                     terminal=r_max_simulation['agent']['terminal'], level=l + 1,
-                                     respect_terminal_flag=False)
-    chunk_size = model.strides[l + 1]
-    similarities = torch.zeros(len(r_max_simulation['agent']['o_env_next']),
-                               len(r_max_simulation['agent']['o_env_next']), device=model.device,
-                               dtype=torch.float32)
-    for i, g in enumerate(r_max_simulation['agent']['o_env_next']):
-        for j, g_other in enumerate(r_max_simulation['agent']['o_env_next']):
-            # similarities[i, j] = torch.nn.functional.cosine_similarity(g, g_other, dim=-1).mean()
-            similarities[i, j] = torch.mean(torch.abs(g - g_other))
-    with TempFigure(dpi=60) as fig:
-        plt.matshow(similarities.detach().cpu().numpy(), fignum=fig)
-        plt.tight_layout()
-        plt.colorbar()
-        logger.log_plot(fig_to_img(fig, minimize_size=False),
-                        Scope.TRAIN() / f'r_max_agent_fake_goals/{l}/trajectory_step_similarities',
-                        i_step)
-    with TempFigure(dpi=60) as fig:
-        o_next = torch.stack(r_max_simulation['agent']['o_env_next'])
-        z_diff = torch.mean(torch.abs(o_next[:-1] - o_next[1:]), dim=(1, 2))
-        plt.plot(z_diff.detach().cpu().numpy().squeeze())
-        logger.log_plot(fig_to_img(fig),
-                        Scope.TRAIN() / f'r_max_agent_fake_goals/{l}/state_distances',
-                        i_step)
-    r_max_simulation['agent']['r'] = []
-    for i_goal, goal in enumerate(achieved_goals['o'][:-1]):
-        for t_chunk in range(chunk_size):
-            t = i_goal * chunk_size + t_chunk
-            r_her = r_max_agent.build_step_reward(r_max_simulation['agent']['o_env_next'][t],
-                                                  r_max_simulation['agent']['r_raw'][t], goal,
-                                                  use_goal_reward=True)
-            r_max_simulation['agent']['r'].append(r_her)
-    obtained_step_reward = torch.stack(r_max_simulation['agent']['r']).mean(dim=1)
-    terminals = torch.stack(r_max_simulation['agent']['terminal']).mean(dim=1)
-    with TempFigure(dpi=60) as fig:
-        plt.plot(terminals.detach().cpu().numpy().squeeze(), marker='.', color='lightgray')
-        plt.scatter(range(len(obtained_step_reward)),
-                    obtained_step_reward.detach().cpu().numpy().squeeze(), marker='o')
-        plt.suptitle(f'L{l} R_max Agent Fake Goal Step Rewards')
-        plt.tight_layout()
-        logger.log_plot(fig_to_img(fig),
-                        Scope.TRAIN() / f'r_max_agent_fake_goals/{l}/her_step_reward',
-                        i_step)
 
 
 def abstract_model_training_static(abstract_train_driver, model, optimizer):
@@ -619,12 +571,10 @@ def train_goal_seeking_agent_one_step(model, level, pred, targets, eval_env, cfg
 
     if i_step % cfg['trainer']['eval_interval'] == 0:
         # add start state and goal state to comparison
-        goal_simulation['model']['s_embedding'].insert(0, start_state[5])
         goal_simulation['model']['s_embedding'].append(goal)
         # same for observation
         start_state_obs = seq_to_batch(trajectories, i_start=0, i_end=-chunk_size)['o']
         goal_state_obs = seq_to_batch(trajectories, i_start=chunk_size)['o']
-        goal_simulation['model']['o'].insert(0, start_state_obs)
         goal_simulation['model']['o'].append(goal_state_obs)
 
         plot_latent_state_differences(goal_simulation['model'], logger, i_step,
@@ -694,7 +644,7 @@ def train_goal_seeking_agent_goals_above_with_agent(model, level, pred, targets,
         simulation = rma.act_in_sim(env_start_state=rollout_state, sim_env=model, n_steps=n_generated_goals,
                                     expl_noise=rma.eps)
         # add simulation goals to the goal memory
-        goals += [goal.detach() for goal in simulation['model']['o']]
+        goals += [goal.detach() for goal in simulation['model']['o'][1:]]
 
     gsa_agent_mem, gsa_model_mem, gsa_losses = {}, {}, {}
     start_state = first_start_state
@@ -720,14 +670,17 @@ def train_goal_seeking_agent_goals_above_with_agent(model, level, pred, targets,
                                          goal=goal, sample_states=sample_model,
                                          sample_actions=sample_agents, expl_noise=gsa.eps, reconstruct=True)
         agent_mem = goal_simulation['agent']
-        loss = gsa.update_step(agent_mem,
-                               first_step_mask=start_state_mask,
-                               **gsa_optimizers)
+        loss = gsa.update_step(agent_mem, first_step_mask=start_state_mask, **gsa_optimizers)
         # loss = {f'{k}_{i_goal}': v for i, (k, v) in enumerate(loss.items())}
         # gsa_losses.update(loss)
         for k in loss:
             val = gsa_losses.get(k, 0.0)
             gsa_losses[k] = val + loss[k]
+
+        # remove simulation data from initial time step, as this would make the beginning of each chunk beyond the first
+        # one appear twice in the data
+        goal_simulation['agent'] = {k: v[1:] for k, v in goal_simulation['agent']}
+        goal_simulation['model'] = {k: v[1:] for k, v in goal_simulation['model']}
 
         extend_memory(gsa_agent_mem, goal_simulation['agent'])
         extend_memory(gsa_model_mem, goal_simulation['model'])
@@ -908,6 +861,11 @@ def train_goal_seeking_agent_same_level(model, level, pred, targets, eval_env, c
         for k in loss:
             val = gsa_losses.get(k, 0.0)
             gsa_losses[k] = val + loss[k]
+
+        # remove simulation data from initial time step, as this would make the beginning of each chunk beyond the first
+        # one appear twice in the data
+        goal_simulation['agent'] = {k: v[1:] for k, v in goal_simulation['agent']}
+        goal_simulation['model'] = {k: v[1:] for k, v in goal_simulation['model']}
 
         extend_memory(gsa_agent_mem, goal_simulation['agent'])
         extend_memory(gsa_model_mem, goal_simulation['model'])
@@ -1140,6 +1098,11 @@ def train_goal_seeking_agent_rand(model, level, pred, targets, eval_env, cfg, i_
             val = gsa_losses.get(k, 0.0)
             gsa_losses[k] = val + loss[k]
 
+        # remove simulation data from initial time step, as this would make the beginning of each chunk beyond the first
+        # one appear twice in the data
+        goal_simulation['agent'] = {k: v[1:] for k, v in goal_simulation['agent']}
+        goal_simulation['model'] = {k: v[1:] for k, v in goal_simulation['model']}
+
         extend_memory(gsa_agent_mem, goal_simulation['agent'])
         extend_memory(gsa_model_mem, goal_simulation['model'])
 
@@ -1342,7 +1305,7 @@ def plot_goal_conditioned_value_function(eval_env, model, agent, level, logger, 
 
 
 def plot_goals(r_max_simulation, model, logger, i_step, l):
-    abstract_obs = torch.stack(r_max_simulation['model']['o'])
+    abstract_obs = torch.stack(r_max_simulation['model']['o'][1:])
     goal_obs = model.rssm_modules[l - 1].decode(abstract_obs, sample=False, reconstruct_observation=True)['o']
     goal_obs = goal_obs.detach().cpu().numpy()
     terminals = torch.stack(r_max_simulation['model']['terminal']).detach().cpu().numpy()

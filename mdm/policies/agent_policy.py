@@ -288,12 +288,16 @@ class HierarchicalLatentAgentPolicy(Policy):
         simulation = agent.act_in_sim(env_start_state=state, sim_env=self.model, n_steps=1,
                                       sample_actions=self.stochastic, sample_states=self.sample_world_model,
                                       expl_noise=self.exploration_noise, reconstruct=i_highest > 0)
-        self.act_cache[i_highest] += simulation['agent']['a']
-        self.action_history[i_highest] += simulation['agent']['a']
+        a_agent = simulation['agent']['a'][1:]  # remove frst action from record as it's padding
+
+        assert len(a_agent) == 1
+
+        self.act_cache[i_highest] += a_agent
+        self.action_history[i_highest] += a_agent
 
         # act with goal seeking agents
         if i_highest > 0:
-            goals_from_above = simulation['model']['o']
+            goals_from_above = simulation['model']['o'][1:]  # remove first goal as it's for current state
             chunk_id = random.randint(0, 100000)
             for i_lvl in reversed(range(0, i_highest)):
                 state = self.grounded_env_states[i_lvl]
@@ -306,11 +310,12 @@ class HierarchicalLatentAgentPolicy(Policy):
                                                   sample_states=self.sample_world_model, reconstruct=i_lvl > 0)
                     # simulation['agent']['a'] = [torch.zeros_like(x) for x in simulation['agent']['a']]
                     state = simulation['model_state']
-                    self.act_cache[i_lvl] += simulation['agent']['a']
-                    self.action_history[i_lvl] += simulation['agent']['a']
-                    self.chunk_history.extend([chunk_id for _ in simulation['agent']['a']])
+                    a_agent = simulation['agent']['a'][1:]  # remove frst action from record as it's padding
+                    self.act_cache[i_lvl] += a_agent
+                    self.action_history[i_lvl] += a_agent
+                    self.chunk_history.extend([chunk_id for _ in a_agent])
                     if i_lvl > 0:
-                        new_goals += simulation['model']['o']
+                        new_goals += simulation['model']['o'][1:]
                 goals_from_above = new_goals
         else:
             self.chunk_history.append(-1)

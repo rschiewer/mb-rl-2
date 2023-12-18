@@ -15,16 +15,6 @@ from matplotlib.pyplot import Line2D
 RnnStateType = TypeVar('RnnStateType', torch.Tensor, Tuple[torch.Tensor, torch.Tensor])
 _Placeholder = namedtuple('placeholder', 'device')
 
-# define torch.compile decorator depending on whether we're in debug mode or not
-if True or gettrace() or 'PYCHARM_HOSTED' in os.environ:
-    print('Debugging or running in PyCharm IDE, disabling torch.compile')
-    disable_torch_compile = True
-else:
-    print('Compiling functions with torch.compile')
-    # torch.set_float32_matmul_precision('high')
-    disable_torch_compile = False
-
-
 def stack_if_list(x: Union[torch.Tensor, List[torch.Tensor]],
                   dim: int = 0):
     if isinstance(x, list):

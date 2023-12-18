@@ -324,41 +324,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
         return memory, memory_other, state
 
-    def action_alignment(self,
-                         trajectory: Dict[str, torch.Tensor | List[torch.Tensor]],
-                         level: int):
-        assert self.links[level - 1] == 's_embedding'
-        gsa = self.goal_seeking_agents[level - 1][0]
-        n_steps = self.strides[level]
-        a_upper = torch.stack(trajectory['a'][:-1])
-        d_time, d_batch = a_upper.shape[:2]
-        a_upper = a_upper.reshape(-1, a_upper.shape[-1])
-
-        # fold time into batch dimension to perform all gsa chunks at the same time
-        start_s_embedding = torch.concat(trajectory['o'][:-1])
-        # super sketchy, reverse-engineer needed z_sample and rnn_state
-        start_rnn_state = start_s_embedding[:, :self.rssm_modules[level - 1].d_h].unsqueeze(1)  # add layer dim
-        start_z_smpl = start_s_embedding[:, self.rssm_modules[level - 1].d_h:]
-        goal_s_embedding = torch.concat(trajectory['o'][1:])
-        # generate state dummy and fill in necessary info
-        s_start = self.rssm_modules[level - 1].init_state(start_s_embedding.shape[0], self.device)
-        s_start = (s_start[0], start_z_smpl.detach(), s_start[2], s_start[3], start_rnn_state.detach(), s_start[5])
-
-        simulaion = gsa.act_in_sim(env_start_state=s_start, sim_env=self, n_steps=n_steps, goal=goal_s_embedding)
-        a_lower = torch.stack(simulaion['agent']['a'])
-        a_enc = self.actions_up(a_lower, level)[0]  # remove redundant time dim
-
-        # max dot product similarity
-        upper_norm = torch.linalg.vector_norm(a_upper, dim=-1, keepdim=True)
-        enc_norm = torch.linalg.vector_norm(a_enc, dim=-1, keepdim=True)
-        norm = torch.maximum(upper_norm, enc_norm).detach()
-        a_upper = a_upper / upper_norm
-        a_enc = a_enc / enc_norm
-        similarity = torch.linalg.vecdot(a_upper, a_enc.detach(), dim=-1).unsqueeze(-1)
-        similarity = similarity.reshape(d_time, d_batch, 1)
-        # print(similarity.mean())
-        return similarity
-
     def actions_up(self,
                    a: torch.Tensor | List[torch.Tensor],
                    level: int,
