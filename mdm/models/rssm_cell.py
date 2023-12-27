@@ -290,6 +290,8 @@ class RSSMCell(torch.nn.Module):
         if last_state is None:
             last_state = self.init_state(d_batch, a.device)
         if o_enc is None:
+            if use_posterior:
+                raise ValueError('Can\'t use posterior if no observation is provided')
             o_enc = torch.zeros(d_batch, self.o_encoder.d_x_encoded, device=a.device)
 
         if torch.isnan(a).any() or torch.isinf(a).any():
