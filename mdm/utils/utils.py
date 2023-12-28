@@ -10,6 +10,7 @@ import time
 from inspect import stack
 from pathlib import Path
 from typing import Any, List
+from functools import reduce
 
 import gymnasium as gym
 import matplotlib.animation as animation
@@ -401,6 +402,12 @@ def prepare_data_old(o: Union[np.ndarray, torch.Tensor],
         mask = mask[t_start:t_end]
 
     return {'o': o, 'a': a, 'r': r, 'terminal': terminal, 'truncated': truncated, 'mask': mask}
+
+
+def count_env_interactions(mem: Sequence[Dict[str, np.ndarray]]):
+    # N observations means N-1 interactions, so subtract 1 from trajectory length
+    n_interactions = reduce(lambda a, b: a + len(b['o']) - 1,  mem, 0)
+    return n_interactions
 
 
 def prepare_data(data: Dict[str, Union[torch.Tensor, np.ndarray]],
@@ -1017,6 +1024,7 @@ def seq_to_batch(mem: Dict[str, torch.Tensor | List[torch.Tensor]],
 
     return mem
 
+
 def log_params(model: torch.nn.Module,
                logger: Logger,
                scope: Scope,
@@ -1110,3 +1118,56 @@ def prepare_env(env: gym.Env):
 def list_of_tuples_to_tuple_of_lists(list_of_tpls: List[Any]):
     state = tuple([list(x) for x in zip(*list_of_tpls)])
     return state
+
+
+def store_model_params(model, model_opt, path, logger, *, store_locally, upload):
+    # make sure the save directory exists and infer final path for the file
+    if not os.path.exists(path):
+        os.makedirs(path)
+    final_path = Path(path) / f'{logger.run_id}.ptmdl'
+
+    # collect state dicts
+    state_dicts = {'HRSSM': model.state_dict(), 'HRSSM_opt': model_opt.state_dict()}
+
+    for i_agent, agent in enumerate(model.r_max_agents + model.goal_seeking_agents):
+        state_dicts[f'agent_{i_agent}'] = agent[0].state_dict()  # agent state dict
+        for i_opt, opt in enumerate(agent[1].values()):
+            state_dicts[f'agent_{i_agent}_opt_{i_opt}'] = opt.state_dict()  # agent optimizer state dicts
+
+    # store weights of all model components
+    torch.save(state_dicts, final_path)
+
+    if upload:
+        model_weights = InMemoryFile(final_path, name='final_weights')
+        logger.start_session()
+        logger.log_file(model_weights, Scope.DATA() / 'weights')
+
+        # clear last checkpoint file
+
+    if not store_locally:
+        os.remove(final_path)
+
+
+def load_model_params(model, model_opt, path, run_id, api_token, project):
+    final_path = Path(path) / f'{run_id}.ptmdl'
+    if not os.path.exists(final_path):
+        import neptune
+        from neptune.exceptions import RunNotFound
+        print('loading model parameters from run database')
+        try:
+            tmp_run = neptune.init_run(api_token=api_token, project=project, with_id=run_id, mode='read-only')
+            tmp_run[f'{Scope.DATA()}/weights/final_weights'].download(str(final_path))
+            tmp_run.stop()
+        except RunNotFound:
+            raise RuntimeError(f'Tried to load parameters from run {run_id} to {final_path} but run doesn\'t',
+                               'exist in database')
+
+    state_dicts = torch.load(final_path)
+
+    model.load_state_dict(state_dicts['HRSSM'])
+    model_opt.load_state_dict(state_dicts['HRSSM_opt'])
+
+    for i_agent, agent in enumerate(model.r_max_agents + model.goal_seeking_agents):
+        agent[0].load_state_dict(state_dicts[f'agent_{i_agent}'])
+        for i_opt, opt in enumerate(agent[1].values()):
+            opt.load_state_dict(state_dicts[f'agent_{i_agent}_opt_{i_opt}'])

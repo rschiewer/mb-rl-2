@@ -1,6 +1,7 @@
 import math
 import textwrap
 from math import ceil
+import time
 
 import gym_nav2d.envs
 from gymnasium_robotics.envs.maze.maze_v4 import MazeEnv
@@ -36,6 +37,8 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
     logger.n_log_calls = 0
 
     for i_step in tqdm(range(cfg['trainer']['n_train_steps']), desc='Training Progress'):
+        logger.log({'n_env_interactions': count_env_interactions(train_driver.memory)}, Scope.TRAIN(), i_step)
+
         batch = train_driver.interact(cfg['trainer']['d_batch'])
         batch = to_tensors(batch, device='cuda')
         batch = prepare_data(batch)
@@ -46,10 +49,10 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
         # actor_params = _new_actor_params
 
         if cfg['trainer']['subtrajectory_len'] > 0:
-            model_batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
+            #model_batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
             # model_batch = valid_subtrajectories_unbiased(batch, 15)
-            #model_batch = valid_subtrajectories_unbiased_fast(batch, cfg['trainer']['subtrajectory_len'])
-            #model_batch = valid_subtrajectories_2(batch, cfg['trainer']['subtrajectory_len'])
+            model_batch = valid_subtrajectories_2(batch, cfg['trainer']['subtrajectory_len'])
+            # model_batch = valid_subtrajectories_2(batch, cfg['trainer']['subtrajectory_len'])
         else:
             model_batch = batch
 
@@ -114,7 +117,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                     # train_goal_seeking_agent_goals_above(model, level, pred, targets, eval_env, cfg, i_step, logger,
                     #                                     sample_agents)
                     train_goal_seeking_agent_goals_above_with_agent(model, level, pred, targets, eval_env, cfg, i_step,
-                                                                    logger, sample_agents)
+                                                                    logger, sample_agents, use_her=True)
                     # train_goal_seeking_agent_one_step(model, level, pred, targets, eval_env, cfg, i_step, logger,
                     #                                  sample_agents)
 
@@ -143,7 +146,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 batch = to_tensors(trajs_orig, model.device)
                 batch = prepare_data(batch)
                 if cfg['trainer']['subtrajectory_len'] > 0:
-                    batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
+                    batch = valid_subtrajectories_2(batch, cfg['trainer']['subtrajectory_len'])
                 eval_steps = [-1] + cfg['trainer']['model_train_steps'][1:]
                 eval_losses, pred, targets = model.eval_step(batch, model_steps=eval_steps, sample_state=False,
                                                              sample_output=False,
@@ -243,12 +246,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 # print(f'{r_pos.mean(axis=0)}({r_pos.std(axis=0)})')
 
         if i_step % cfg['trainer']['checkpoint_interval'] == 0:
-            timestamp = time.time_ns()
-            pid = os.getpid()
-            model_path = f'.checkpoint_model_weights_{pid}_{timestamp}_{logger.run_id}.ptmdl'
-            torch.save(model.state_dict(), model_path)
-            cpt_file = InMemoryFile.consume_file(model_path, new_name='checkpoint')
-            logger.log_file(cpt_file, Scope.DATA() / 'weights')
+            store_model_params(model, opt_model, cfg['model_save_path'], logger, store_locally=True, upload=True)
 
 
 def plot_latent_state_differences(pred, logger, i_step, major_scope):
@@ -466,7 +464,7 @@ def train_rmax_agent(agent_model_steps, cfg, eval_env, i_step, level, logger, mo
     #       But actually agent behavior should be the same during training and data collection.
     rma_simulation = rma.act_in_sim(start_state_lvl, model, agent_model_steps[level],
                                     sample_states=sample_model, sample_actions=sample_agents,
-                                    reconstruct=True, expl_noise=rma.eps)
+                                    reconstruct=True, expl_noise=cfg['trainer']['fixed_agent_train_noise'])
     r_max_losses = rma.update_step(rma_simulation['agent'],
                                    first_step_mask=start_state_mask.unsqueeze(0),
                                    **optimizers,
@@ -476,8 +474,9 @@ def train_rmax_agent(agent_model_steps, cfg, eval_env, i_step, level, logger, mo
     if i_step % cfg['trainer']['eval_interval'] == 0 and env_class_is(eval_env, Nav2dEnv):
         plot_value_function(eval_env, model, rma, level, logger, i_step)
         plot_rewards(eval_env, model, level, logger, i_step)
-    if level > 0 and i_step % cfg['trainer']['eval_interval'] == 0 and env_class_is(eval_env, Nav2dEnv):
-        plot_goals(rma_simulation, model, logger, i_step, level)
+        if level > 0:
+            pass
+            #plot_goals(rma_simulation, model, logger, i_step, level)
 
     if level < model.levels - 1:
         pass
@@ -582,13 +581,16 @@ def train_goal_seeking_agent_one_step(model, level, pred, targets, eval_env, cfg
 
 
 def train_goal_seeking_agent_goals_above_with_agent(model, level, pred, targets, eval_env, cfg, i_step, logger,
-                                                    sample_agents):
-    n_groundtruth_goals = 2
-    n_generated_goals = 2
+                                                    sample_agents, use_her):
+    n_groundtruth_goals = 1
+    n_generated_goals = 0
     chunk_size = model.strides[level + 1]
     n_goals_total = len(targets[level + 1]['o'])
     gsa, gsa_optimizers = model.goal_seeking_agents[level]
     rma, _ = model.r_max_agents[level + 1]
+
+    if use_her:
+        assert not gsa.dynamics_loss, 'GSA must use policy gradient loss to use HER training mode!'
 
     if len(pred[level]['a']) <= chunk_size * n_groundtruth_goals + 1:
         return
@@ -631,6 +633,8 @@ def train_goal_seeking_agent_goals_above_with_agent(model, level, pred, targets,
         goal = goal.reshape(goal.shape[0] * goal.shape[1], *goal.shape[2:])
         goals.append(goal.detach())
 
+
+
     if n_generated_goals > 0:
         # generate rollout to produce diverse in distribution goals from the higher level agent beyond groundtruth goals
         # use state belonging to last goal to start agent rollout from
@@ -651,36 +655,50 @@ def train_goal_seeking_agent_goals_above_with_agent(model, level, pred, targets,
     start_state_mask = first_step_mask
     for i_goal, goal in enumerate(goals):
         # vary step count to give the agent some slack sometimes
-        n_steps = random.randint(math.ceil(0.5 * chunk_size), 3 * chunk_size)
+        #n_steps = random.randint(math.ceil(0.5 * chunk_size), 3 * chunk_size)
         # n_steps = random.randint(chunk_size, chunk_size + 1)
-        # n_steps = chunk_size
+        n_steps = chunk_size + 1
 
-        explore = random.random() > 0.75
-        if explore:
-            expl_noise = random.random() * 0.5
-            sample_model = random.random() > 0.33
-            print('explore ', end='')
-        else:
-            expl_noise = 0.0
-            sample_model = False
-            print('        ', end='')
+        #explore = random.random() > 0.75
+        #if explore:
+        #    expl_noise = gsa.eps
+        #    sample_model = random.random() > 0.33
+        #    print('E ', end='')
+        #else:
+        #    expl_noise = 0.001
+        #    sample_model = False
+        #    print('  ', end='')
 
         start_state = rssm_detach_state(*start_state)  # prevent gradients to flow into previous chunk
         goal_simulation = gsa.act_in_sim(env_start_state=start_state, sim_env=model, n_steps=n_steps,
-                                         goal=goal, sample_states=sample_model,
-                                         sample_actions=sample_agents, expl_noise=gsa.eps, reconstruct=True)
+                                         goal=goal, sample_states=cfg['trainer']['sample_model_during_agent_training'],
+                                         sample_actions=sample_agents, expl_noise=0.0, reconstruct=True)
+
+        if use_her and random.random() > 0.5:
+            print('HER ', end='')
+            s_embed_stacked = torch.stack(goal_simulation['model']['s_embedding'])
+            goal_reached = goal_simulation['model']['s_embedding'][-1]
+            goal_tiled = torch.repeat_interleave(goal_reached.unsqueeze(0), repeats=s_embed_stacked.shape[0], dim=0)
+            agent_r = gsa.goal_similarity(s_embed_stacked, goal_tiled)
+            agent_term = torch.where(agent_r >= -0.0001, 1.0, 0.0)
+            agent_r = list(agent_r.unbind(0))
+            agent_term = list(agent_term.unbind(0))
+            goal_simulation['agent']['r'] = agent_r
+            goal_simulation['agent']['terminal'] = agent_term
+        else:
+            print('    ', end='')
+
         agent_mem = goal_simulation['agent']
         loss = gsa.update_step(agent_mem, first_step_mask=start_state_mask, **gsa_optimizers)
-        # loss = {f'{k}_{i_goal}': v for i, (k, v) in enumerate(loss.items())}
-        # gsa_losses.update(loss)
+        #loss = gsa.update_step(agent_mem, first_step_mask=None, **gsa_optimizers)
         for k in loss:
             val = gsa_losses.get(k, 0.0)
             gsa_losses[k] = val + loss[k]
 
         # remove simulation data from initial time step, as this would make the beginning of each chunk beyond the first
         # one appear twice in the data
-        goal_simulation['agent'] = {k: v[1:] for k, v in goal_simulation['agent']}
-        goal_simulation['model'] = {k: v[1:] for k, v in goal_simulation['model']}
+        goal_simulation['agent'] = {k: v[1:] for k, v in goal_simulation['agent'].items()}
+        goal_simulation['model'] = {k: v[1:] for k, v in goal_simulation['model'].items()}
 
         extend_memory(gsa_agent_mem, goal_simulation['agent'])
         extend_memory(gsa_model_mem, goal_simulation['model'])
@@ -722,9 +740,10 @@ def train_goal_seeking_agent_goals_above_with_agent(model, level, pred, targets,
                             Scope.TRAIN() / f'goal_seeking_agent/{level}/goal_seeking_train_performance', i_step)
 
     if i_step % cfg['trainer']['eval_interval'] == 0 and level == 0 and env_class_is(eval_env, Nav2dEnv):
-        plot_goal_conditioned_value_function(eval_env, model, gsa, level, logger, i_step, 3, 3)
-        plot_goal_seeking_performance(gsa, gsa_model_mem, gsa_agent_mem, goals, first_start_state, model,
-                                      [chunk_size for _ in goals], logger, i_step, level)
+        pass
+        #plot_goal_conditioned_value_function(eval_env, model, gsa, level, logger, i_step, 3, 3)
+        #plot_goal_seeking_performance(gsa, gsa_model_mem, gsa_agent_mem, goals, first_start_state, model,
+        #                              [chunk_size for _ in goals], logger, i_step, level)
 
 
 def train_goal_seeking_agent_goals_above(model, level, pred, targets, eval_env, cfg, i_step, logger, sample_agents):
@@ -792,10 +811,10 @@ def train_goal_seeking_agent_goals_above(model, level, pred, targets, eval_env, 
         # set new start state
         start_state = goal_simulation['model_state']
         # remember all trajectories that had invalid start states or became invalid throughout current chunk
-        mask = torch.stack([start_state_mask] + goal_simulation['model']['terminal'])
+        #mask = torch.stack([start_state_mask] + goal_simulation['model']['terminal'])
         # use similar technique as in compute_mask function, but don't shift terminal states
-        valid = torch.cumprod(1.0 - mask.to(torch.float32), dim=0)
-        start_state_mask = (1.0 - valid)[-1]
+        #valid = torch.cumprod(1.0 - mask.to(torch.float32), dim=0)
+        #start_state_mask = (1.0 - valid)[-1]
 
     gsa_losses = {k: v / n_goals for k, v in gsa_losses.items()}
 
@@ -1197,7 +1216,7 @@ def record_episode(cfg, i_step, logger, model, video_env):
 
     # apply editing function to each frame
     clip = clip.fl(print_info_on_frame)
-    #clip = clip.resize(width=120)
+    # clip = clip.resize(width=120)
 
     clip.write_videofile(tmp_file_name, preset='veryslow', verbose=False, logger=None)
     try:
@@ -1305,7 +1324,7 @@ def plot_goal_conditioned_value_function(eval_env, model, agent, level, logger, 
 
 
 def plot_goals(r_max_simulation, model, logger, i_step, l):
-    abstract_obs = torch.stack(r_max_simulation['model']['o'][1:])
+    abstract_obs = torch.stack(r_max_simulation['model']['o'])
     goal_obs = model.rssm_modules[l - 1].decode(abstract_obs, sample=False, reconstruct_observation=True)['o']
     goal_obs = goal_obs.detach().cpu().numpy()
     terminals = torch.stack(r_max_simulation['model']['terminal']).detach().cpu().numpy()
@@ -1560,6 +1579,7 @@ def log_prediction_error_plot(batch, cfg, i_step, logger, model):
         for l in range(model.levels):
             mask = targets[l]['mask']
 
+            # shape of predictions: [T, B, D]
             o_diff = torch.abs(torch.stack(pred[l]['o']) - targets[l]['o'])
             o_diff = masked_mean(o_diff, mask, dim=[1, 2])
             r_diff = torch.abs(torch.stack(pred[l]['r']) - targets[l]['r'])

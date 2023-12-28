@@ -29,7 +29,7 @@ def main():
     parser.add_argument('-n_collect', type=int)
     args = parser.parse_args()
 
-    cfg = load_yaml(here() / 'cfg_simple_rssm_train.yaml')
+    cfg = load_yaml(here() / 'cfg_rssm_train.yaml')
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
     if args.d_batch:
@@ -60,24 +60,16 @@ def main():
 
     cfg = build_rssms(cfg)
     r_max_agents, goal_seeking_agents = build_agents(cfg, env, torch.device('cuda'))
-
     model = HierarchicalRSSM(**cfg['mdm'], r_max_agents=r_max_agents, goal_seeking_agents=goal_seeking_agents)
+    model = model.to('cuda')
+    opt_model = build_model_opt(model, cfg)
 
     # load model if necessary
     if cfg['pretrained_model'] is None:
         print('Starting training from scratch')
     else:
         print(f'Using pretrained model {cfg["pretrained_model"]}')
-        mdl_path = here() / Path(f'trained_models/model_{cfg["pretrained_model"]}.ptmdl')
-        if not mdl_path.exists():
-            tmp_run = neptune.init_run(**neptune_cfg, with_id=cfg['pretrained_model'])
-            tmp_run[f'{Scope.DATA()}/weights/final_weights'].download(str(mdl_path))
-            tmp_run.stop()
-        pretrained_model = torch.load(here() / mdl_path)
-        copy_params(pretrained_model, model)
-    model = model.to('cuda')
-
-    opt_model = build_model_opt(model, cfg)
+        load_model_params(model, opt_model, cfg['model_save_path'], cfg['pretrained_model'], **neptune_cfg)
 
     # model = torch.compile(model, disable=disable_torch_compile)
 
@@ -128,8 +120,9 @@ def main():
         agent = r_max_agents[0][0]
         agent.eval()
         collect_env.reset()
-        expl_noise = 0.3 if explore else 0.0
-        policy = LatentAgentPolicy(agent, model, stochastic=False, exploration_noise=expl_noise)
+        #expl_noise = 0.3 if explore else 0.0
+        expl_noise = 0.05
+        policy = LatentAgentPolicy(agent, model, stochastic=True, exploration_noise=expl_noise)
         d = GymEpisodeDriver(collect_env, policy)
         d.interact(10, train_mem)
         # collected_data_trajectories = collect_data(collect_env, -1, policy)
@@ -138,13 +131,15 @@ def main():
     def collect_fn(explore: bool):
         agent_eval_mode(r_max_agents + goal_seeking_agents)
         collect_env.reset()
-        expl_noise = 0.3 if explore else 0.0
-        det_policy = HierarchicalLatentAgentPolicy(model, stochastic=False, exploration_noise=expl_noise)
-        #expl_policy = HierarchicalLatentAgentPolicy(model, explore=True)
+        #expl_noise = 0.3 if explore else 0.0
+        det_policy = HierarchicalLatentAgentPolicy(model, stochastic=True, exploration_noise=0.01)
+        expl_policy = HierarchicalLatentAgentPolicy(model, stochastic=True,
+                                                    exploration_noise=cfg['trainer']['fixed_agent_expl_noise'])
         # collected_data_trajectories = collect_data(collect_env, -1, policy)
         # train_mem.extend(collected_data_trajectories)
         # train_mem.extend(collected_data_trajectories)
-        GymEpisodeDriver(collect_env, det_policy).interact(cfg['trainer']['n_collect_trajectories'], train_mem)
+        GymEpisodeDriver(collect_env, det_policy).interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
+        GymEpisodeDriver(collect_env, expl_policy).interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
         #GymEpisodeDriver(collect_env, expl_policy).interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
         #d.interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
         #d.interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
@@ -204,19 +199,12 @@ def main():
     #        train_driver, logger, profile=profiling_run, log_videos=True)
     # print(prof.key_averages(group_by_input_shape=True).table(sort_by="cpu_time_total", row_limit=10))
 
+    # clean up
     collect_env.close()
     eval_env.close()
-    # store model and output run id
-    p = here() / cfg['final_model_path'][:cfg['final_model_path'].rindex('/')]
-    if not os.path.exists(p):
-        os.makedirs(p)
-    model_path = here() / f'{cfg["final_model_path"]}_{logger.run_id}.ptmdl'
-    torch.save(model.state_dict(), model_path)
-    model_weights = InMemoryFile(model_path, name='final_weights')
-    logger.start_session()
-    logger.log_file(model_weights, Scope.DATA() / 'weights')
+    path = here() / cfg['model_save_path']
+    store_model_params(model, opt_model, path, logger, store_locally=True, upload=True)
     logger.stop_session()
-    print(logger.run_id)
 
 
 if __name__ == '__main__':
