@@ -1151,6 +1151,7 @@ def store_model_params(model, model_opt, path, logger, *, store_locally, upload)
 def load_model_params(model, model_opt, path, run_id, api_token, project):
     final_path = Path(path) / f'{run_id}.ptmdl'
     if not os.path.exists(final_path):
+        os.makedirs(os.path.basename(final_path))
         import neptune
         from neptune.exceptions import RunNotFound
         print('loading model parameters from run database')
