@@ -1103,8 +1103,8 @@ def numpyfy(x: torch.Tensor | List[torch.Tensor] | Tuple[torch.Tensor],
     if isinstance(x, (list, tuple)):
         x = torch.stack(list(x))
     x = x.detach().cpu().numpy()
-    if squeeze:
-        x = x.squeeze()
+    if squeeze and x.shape[-1] == 1:
+        x = x.squeeze(axis=-1)
     return x
 
 
@@ -1148,16 +1148,21 @@ def store_model_params(model, model_opt, path, logger, *, store_locally, upload)
         os.remove(final_path)
 
 
-def load_model_params(model, model_opt, path, run_id, api_token, project):
+def load_model_params(model, model_opt, path, run_id, api_token, project, force_reload=False):
     final_path = Path(path) / f'{run_id}.ptmdl'
+
+    if force_reload and os.path.exists(final_path):
+        os.remove(final_path)
+
     if not os.path.exists(final_path):
-        os.makedirs(os.path.basename(final_path))
+        if not os.path.exists(os.path.dirname(final_path)):
+            os.makedirs(os.path.dirname(final_path))
         import neptune
         from neptune.exceptions import RunNotFound
         print('loading model parameters from run database')
         try:
             tmp_run = neptune.init_run(api_token=api_token, project=project, with_id=run_id, mode='read-only')
-            tmp_run[f'{Scope.DATA()}/weights/final_weights'].download(str(final_path))
+            tmp_run[f'{Scope.DATA()}/weights/final_weights'].download(destination=str(final_path))
             tmp_run.stop()
         except RunNotFound:
             raise RuntimeError(f'Tried to load parameters from run {run_id} to {final_path} but run doesn\'t',

@@ -29,7 +29,7 @@ def main():
     parser.add_argument('-n_collect', type=int)
     args = parser.parse_args()
 
-    cfg = load_yaml(here() / 'cfg_rssm_train.yaml')
+    cfg = load_yaml(here() / 'cfg_simple_rssm_train.yaml')
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
     if args.d_batch:
@@ -133,7 +133,7 @@ def main():
         collect_env.reset()
         #expl_noise = 0.3 if explore else 0.0
         det_policy = HierarchicalLatentAgentPolicy(model, stochastic=True, exploration_noise=0.01)
-        expl_policy = HierarchicalLatentAgentPolicy(model, stochastic=True,
+        expl_policy = HierarchicalLatentAgentPolicy(model, stochastic=False,
                                                     exploration_noise=cfg['trainer']['fixed_agent_expl_noise'])
         # collected_data_trajectories = collect_data(collect_env, -1, policy)
         # train_mem.extend(collected_data_trajectories)

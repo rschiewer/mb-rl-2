@@ -6,6 +6,7 @@ import random
 import sys
 
 import torch.distributions as torchd
+import torch.nn
 from torch.nn import ModuleList, ModuleDict
 
 from mdm.models.building_blocks import *
@@ -99,20 +100,11 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         self.ema_update_interval = ema_update_interval
         self.temporal_activation_regularization = temporal_activation_regularization
         self.kl_balance = kl_balance
-        self.pessimism_coeff = 0.005
+        self.pessimism_coeff = 0.001
         self.dbg_timestep = 0
-        # self._avg_z_distance = torch.nn.parameter.Parameter(torch.tensor(1.0, dtype=torch.float32), requires_grad=False)
         self.avg_chunk_dist_early = ModuleList([RunningMeanStd(shape=(mod.d_z,)) for mod in self.rssm_modules[:-1]])
         self.avg_chunk_dist_mid = ModuleList([RunningMeanStd(shape=(mod.d_z,)) for mod in self.rssm_modules[:-1]])
         self.avg_chunk_dist_late = ModuleList([RunningMeanStd(shape=(mod.d_z,)) for mod in self.rssm_modules[:-1]])
-
-        # if self.levels > 1:
-        #    self.act_enc = SquashedGaussianEncoder(s_x_orig=(self.strides[1], self.rssm_modules[0].d_a),
-        #                                           d_x_encoded=self.rssm_modules[1].d_a, lws=[64, 64, 64],
-        #                                           activation='relu', epsilon=0.1, layer_norm=True)
-        #    self.act_dec = MLPDecoder(s_x_orig=(self.strides[1], self.rssm_modules[0].d_a),
-        #                              d_x_encoded=self.rssm_modules[1].d_a, lws=[64, 64, 64], activation='relu',
-        #                              layer_norm=True, final_activation='tanh')
 
         self.goal_autoencoder = VAE(d_x=rssm_modules[0].d_s_embedding, d_z=10, latent_dist='normal',
                                     encoder_lws=[128, 64, 64], decoder_lws=[64, 64, 128], activation='relu',
@@ -300,6 +292,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             n_steps = a.shape[0]
         else:
             assert n_steps <= a.shape[0], f'Not enough actions available ({a.shape[0]}) to go {n_steps} steps'
+            a = a[:n_steps]
+            o = o[:n_steps]
 
         if n_warmup < 0:
             n_warmup = n_steps
@@ -310,10 +304,14 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         model_state_mem = mdl.scan(a, o, start_state, n_warmup, sample_state)
         # _, model_state_mem_other = mdl_other.scan(a, o, start_state, n_warmup, sample_state)
 
+        # decode predictions from states
         s_embed = torch.stack([state[-1] for state in model_state_mem])
         pred = mdl.decode(s_embed, sample=sample_output, reconstruct_observation=reconstruct)
+        # adhere to convention and make first dimension a list
         pred = {k: v.unbind(0) for k, v in pred.items()}
+        # add rssm state components to memory
         pred.update(rssm_add_labels(list_of_tuples_to_tuple_of_lists(model_state_mem)))
+        # add actions, make first dimension list as well here
         pred['a'] = a.unbind(0)
         extend_memory(memory, pred)
         # TODO: hack until proper ema model querying is implemented
@@ -363,7 +361,17 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         assert level is not None
 
         if n_steps == -1:
-            n_steps = len(o)
+            if o:
+                n_steps = len(o)
+            elif a:
+                n_steps = len(a)
+            elif r:
+                n_steps = len(r)
+            elif terminal:
+                n_steps = len(terminal)
+            else:
+                n_steps = len(mask)
+
         flt = self.upwards_filters[level]
 
         if respect_mask:
@@ -379,12 +387,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         if a is not None:
             simulated_ground_truth['a'] = flt['a'](stack_if_list(a[:n_steps]), mask=mask,
                                                    window_size=window_size).detach()
-            # a_orig = stack_if_list(a[:n_steps])
-            # if level > 0:
-            #    simulated_ground_truth['a'] = self.actions_up(a_orig, level, mask=mask).detach()
-            # else:
-            #    simulated_ground_truth['a'] = a_orig.detach()
-
         if r is not None:
             simulated_ground_truth['r'] = flt['r'](stack_if_list(r[:n_steps]), mask=mask,
                                                    window_size=window_size).detach()
@@ -463,7 +465,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                            sample_output: bool = True,
                            reconstruct: bool = True,
                            dynamic: bool = True):
-        d_batch = ground_truth_trajectory['o'].shape[1]
+        d_batch = ground_truth_trajectory['a'].shape[1]
         memory = [{} for _ in range(self.levels)]
         memory_ema = [{} for _ in range(self.levels)]
         if model_state is None:
@@ -496,7 +498,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                                                                            reconstruct=reconstruct)
             targets[l] = filtered_trajectory
 
-        return memory, memory_ema, targets
+        return memory, memory_ema, targets, model_state
 
     def pessimistic_loss(self, memory, targets, level):
         start_state, start_state_mask = filter_mem_state_seq_to_batch(memory[level], targets[level]['mask'])
@@ -510,20 +512,23 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             current_state = start_state
             for t in range(10):
                 agent_o = rma.o_from_state(current_state)
-                _, a = rma(agent_o, sample=True, explore=True)
-                current_state = world(a=a, last_state=current_state)
+                _, a = rma(agent_o, sample=True)
+                current_state = world(a=a, last_state=current_state, use_posterior=False)
                 pred = world.decode(current_state[-1], sample=False, reconstruct_observation=True)
                 append_memory(mem, **rssm_add_labels(current_state), **pred, a=a)
 
             # compute eqn (4) from https://arxiv.org/abs/2204.12581
             o = torch.stack(mem['s_embedding'])
             r = torch.stack(mem['r'])
-            terminal = torch.stack(mem['terminal'])
-            # take pessimistic perspective and use highest available state value estimate
-            v = torch.maximum(rma.critic_net(o), rma.ema_critic_net(o))
+            v = torch.minimum(rma.critic_net(o), rma.ema_critic_net(o))
+            v = rma.return_running_average.normalize(v, rma.return_running_average.mean, rma.return_running_average.var)
+            z = torch.stack(mem['z'])
+            z_dist_params = torch.stack(mem['z_prior'])
+            z_log_prob = self.rssm_modules[level].z_dist(z_dist_params).log_prob(z.detach()).unsqueeze(-1)
             mask = compute_mask(mem['terminal'], first_step_mask=start_state_mask)
-            pessimistic_loss = r[:-1] + 0.99 * v[1:]
-            #pessimistic_loss = calc_lambda_returns(r[1:], terminal[1:], v[:-1], v[-1], 0.99, 0.95)
+            # pessimistic_loss = (r[:-1] + 0.99 * v[1:]).detach() * z_log_prob[1:]
+            pessimistic_loss = (r[:-1] + 0.99 * v[1:])
+            # pessimistic_loss = calc_lambda_returns(r[1:], terminal[1:], v[:-1], v[-1], 0.99, 0.95)
             pessimistic_loss = self.pessimism_coeff * masked_mean(pessimistic_loss, mask[:-1])
             # pessimistic_loss = 0.001 * masked_mean(v, mask)
         return pessimistic_loss
@@ -636,11 +641,11 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             offset = n_lo[l]
             # prepare start states for latent overshooting (we us our own hand-made masks)
             with torch.no_grad():
-                start_state, _ = filter_mem_state_seq_to_batch(pred_tf[l], targets[l]['terminal'], i_end=-offset)
+                start_state, _ = filter_mem_state_seq_to_batch(pred_tf[l], targets[l]['mask'], i_end=-offset)
                 start_state_detached = rssm_detach_state(*start_state)
                 # prepare action, posterior and mask windows that contain for every start state the next n_lo time steps
                 actions = torch.stack(pred_tf[l]['a']).detach()  # make tensor (time x batch x d_a)
-                mask = compute_mask(targets[l]['terminal'])  # compute mask from groundtruth sequences
+                mask = targets[l]['mask']  # compute mask from groundtruth sequences
                 z_post_params = torch.stack(pred_tf[l]['z_post'])  # don't take z_post from start_state_detached
 
                 # select for every start state the next n_lo actions, mask items and posteriors
@@ -660,7 +665,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             # do the model rollout
             trajectory = {'a': actions, 'o': None, 'r': None, 'terminal': None}
             pred_lo_lvl, _, _ = self.forward_static(trajectory, start_state=start_state_detached, level=l, n_steps=-1,
-                                                    n_warmup=0, sample_state=True, reconstruct=False)
+                                                    n_warmup=0, sample_state=True, reconstruct=False,
+                                                    sample_output=False)
             z_prior_params = torch.stack(pred_lo_lvl['z_prior'])
 
             if GlobalLogger.can_log('mask_latent_overshooting', self._current_train_step):
@@ -671,17 +677,11 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                                                  Scope.TRAIN() / f'model/l{l}_latent_overshooting_mask',
                                                  time_step=self._current_train_step)
 
-            if self.kl_balance is not None:
-                z_prior = self.rssm_modules[l].z_dist(z_prior_params)
-                z_prior_detached = self.rssm_modules[l].z_dist(z_prior_params.detach())
-                z_post = self.rssm_modules[l].z_dist(z_post_params)
-                z_post_detached = self.rssm_modules[l].z_dist(z_post_params.detach())
-                kl_0 = torch.mean(torch.distributions.kl_divergence(z_post_detached, z_prior) * (1 - mask).squeeze(-1))
-                kl_1 = torch.mean(torch.distributions.kl_divergence(z_post, z_prior_detached) * (1 - mask).squeeze(-1))
-                kl = (self.kl_balance * kl_0 + (1 - self.kl_balance) * kl_1)
-            else:
-                kl = torch.mean(torch.distributions.kl_divergence(z_post_detached, z_prior) * (1 - mask).squeeze(-1))
-            losses_lo[f'kl_latent_overshooting_{l}'] = self.kl_betas[l] * kl / offset
+            z_prior = self.rssm_modules[l].z_dist(z_prior_params)
+            z_post_detached = self.rssm_modules[l].z_dist(z_post_params.detach())
+            kl = masked_mean(torch.distributions.kl_divergence(z_post_detached, z_prior).unsqueeze(-1), mask)
+
+            losses_lo[f'kl_latent_overshooting_{l}'] = self.kl_betas[l] * kl
         return losses_lo
 
     def _eval_step(self,
@@ -694,10 +694,10 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         warmup_steps = kwargs.pop('force_warmup', self.warmup_steps)
         warmup_steps = self.maybe_sample_warmup_steps(training_data, model_steps, warmup_steps)
         ground_truth_trajs = {k: v for k, v in training_data.items() if k in ('o', 'a', 'r', 'terminal', 'mask')}
-        pred, pred_ema, targets = self.forward_all_levels(ground_truth_trajectory=ground_truth_trajs,
-                                                          warmup_steps=warmup_steps,
-                                                          model_steps=model_steps,
-                                                          **kwargs)
+        pred, pred_ema, targets, _ = self.forward_all_levels(ground_truth_trajectory=ground_truth_trajs,
+                                                             warmup_steps=warmup_steps,
+                                                             model_steps=model_steps,
+                                                             **kwargs)
         # average losses and calculate masks
         losses = {}
         for level in range(self.levels):
@@ -713,8 +713,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             loss_level = self.rssm_loss(pred[level], pred_ema[level], targets[level], targets[level]['mask'],
                                         self.kl_betas[level], self.kl_reg_betas[level], level)
 
-            #pessimistic_loss = self.pessimistic_loss(pred, targets, level)
-            #loss_level['total_pessimistic_loss'] = pessimistic_loss
+            # pessimistic_loss = self.pessimistic_loss(pred, targets, level)
+            # loss_level['total_pessimistic_loss'] = pessimistic_loss
 
             if level == 0:
                 s_embeddings = torch.stack(pred[level]['s_embedding']).detach()
@@ -775,48 +775,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         losses = {f'{k}_act_autoencoder': v for k, v in losses.items()}
         return losses
 
-        # OLD CODE BELOW, WE NOW HAVE A SEPARATE UPWARDS FILTER OBJECT FOR THIS
-
-        # actually don't need to re-compute this but we just do it anyways
-        """
-        mask_next_level = MaxUpwardsFilter(self.strides[target_lvl])(mask).detach()
-        valid = 1 - mask
-        valid_next_level = 1 - mask_next_level
-
-        # a_enc from filter_up was detached so we need to re-encode the original actions
-        a_orig = stack_if_list(a_orig).detach()
-        a_reshaped = UpwardsFilter(self.strides[target_lvl])(a_orig)
-        a_reshaped = torch.permute(a_reshaped, (0, 2, 1, 3))
-        a_enc_dist, a_enc = self.act_enc(a_reshaped, sample=True)
-        a_enc_dist = self.act_enc.dist(a_enc_dist)
-        _, a_rec = self.act_dec(a_enc)
-        a_rec = torch.permute(a_rec, (0, 2, 1, 3))
-        a_rec = a_rec.reshape(a_rec.shape[0] * a_rec.shape[1], a_rec.shape[2], a_rec.shape[3])
-        a_rec = a_rec[:len(a_orig)]  # a_orig might have been padded before filtering so a_rec could be too long
-
-        a_rec_loss = self._mse(a_rec, a_orig, valid)
-
-        # https://www.tensorflow.org/agents/api_docs/python/tf_agents/distributions/utils/SquashToSpecNormal says that
-        # kl divergence between two distributions is invariant if both are transformed with the same invertible function
-        reg_dist = torchd.Normal(loc=torch.zeros_like(a_enc), scale=torch.ones_like(a_enc))
-        kl = torchd.kl_divergence(a_enc_dist.base_dist.base_dist, reg_dist)
-        # clip kl divergence at 1 nat
-        kl = torch.maximum(1.0, kl)
-        # we removed the Independent() wrapper from a_enc_dist and have to manualls sum over event dimension
-        kl = kl.sum(dim=-1, keepdim=True)
-        a_kl_loss = 0.1 * masked_mean(kl, mask_next_level)
-
-        if a_enc_targets is not None:
-            a_enc_targets = stack_if_list(a_enc_targets).detach()
-            a_enc_loss = self._mse(a_enc, a_enc_targets, valid_next_level)
-        else:
-            a_enc_loss = torch.tensor(0.0, device=self.device, dtype=torch.float32)
-
-        total = a_rec_loss + a_kl_loss + a_enc_loss
-
-        return {'total_a_autoenc': total, 'a_rec': a_rec_loss, 'a_kl': a_kl_loss, 'a_enc': a_enc_loss}
-        """
-
     def rssm_loss(self,
                   pred: Dict[str, List[torch.Tensor]],
                   pred_ema: Dict[str, List[torch.Tensor]],
@@ -833,8 +791,9 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         o_dist = rssm_cell.o_decoder.dist(torch.stack(pred['o_dist']))
         r_dist = rssm_cell.r_decoder.dist(torch.stack(pred['r_dist']))
         term_dist = rssm_cell.term_decoder.dist(torch.stack(pred['terminal_dist']))
-        #rec_o = self._neg_log_prob(o_dist, targets['o'], valid)
-        rec_o = self._mse(o_dist.base_dist.loc, targets['o'], valid)  # rllib and official dreamer code use MSE for obs loss
+        # rec_o = self._neg_log_prob(o_dist, targets['o'], valid)
+        rec_o = self._mse(o_dist.base_dist.loc, targets['o'],
+                          valid)  # rllib and official dreamer code use MSE for obs loss
         rec_r = self._neg_log_prob(r_dist, targets['r'], valid)
         rec_term = self._neg_log_prob(term_dist, targets['terminal'], valid)
 

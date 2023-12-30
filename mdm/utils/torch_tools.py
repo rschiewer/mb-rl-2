@@ -15,6 +15,7 @@ from matplotlib.pyplot import Line2D
 RnnStateType = TypeVar('RnnStateType', torch.Tensor, Tuple[torch.Tensor, torch.Tensor])
 _Placeholder = namedtuple('placeholder', 'device')
 
+
 def stack_if_list(x: Union[torch.Tensor, List[torch.Tensor]],
                   dim: int = 0):
     if isinstance(x, list):
@@ -423,6 +424,8 @@ def _get_act_fn(descr: str):
         act_constr = torch.nn.GELU
     elif descr == 'elu':
         act_constr = torch.nn.ELU
+    elif descr == 'silu':
+        act_constr = torch.nn.SiLU
     elif descr == 'tanh':
         act_constr = torch.nn.Tanh
     elif descr == 'sigmoid':
@@ -725,12 +728,12 @@ def to_tensors(mem: List[Dict[str, int | float | np.single | np.double | bool | 
                 cont[fid][flens[i]:, i] = cont[fid][flens[i] - 1, i].unsqueeze(0)
 
     # mask for longest field per trajectory (valid for o, a, r, term, trunc but not for higher level a)
-    #if padding is None:
+    # if padding is None:
     cont['mask'] = torch.full((max(longest.values()), n_traj), fill_value=True, dtype=torch.float32, device=device)
     for i in range(n_traj):
         longest_field = max([x[i] for x in lengths.values()])
         cont['mask'][0:longest_field, i] = False
-    #else:
+    # else:
     #    cont['mask'] = torch.full((max(longest.values()), n_traj), fill_value=False, dtype=torch.float32, device=device)
 
     return cont
@@ -935,7 +938,37 @@ class SquashedNormal(torch.distributions.transformed_distribution.TransformedDis
         return mu
 
     def entropy(self):
-        return self.base_dist.entropy()
+        raise NotImplementedError('There\'s no analytic expression for SquashedGaussian entropy')
+        #return self.base_dist.entropy()
+
+    #def log_prob(self, value, pre_tanh_value=None, epsilon=1e-6):
+    #    if pre_tanh_value is None:
+    #        pre_tanh_value = torch.log((1 + value) / (1 - value)) / 2
+    #    norm_lp = self.base_dist.log_prob(pre_tanh_value).sum(dim=-1)
+    #    ret = norm_lp - torch.log((1.0 - torch.tanh(value) ** 2) + epsilon).sum(dim=-1)
+    #    return ret
+    def log_prob(self, value):
+        value = torch.clamp(value, min=-1.0 + 1e-6, max=1.0 - 1e-6)
+        return super().log_prob(value)
+
+    @staticmethod
+    def _clip_but_pass_gradient(x: torch.Tensor, lower: float = 0., upper: float = 1.):
+        """Clipping function that allows for gradients to flow through.
+
+        Args:
+            x (torch.Tensor): value to be clipped
+            lower (float): lower bound of clipping
+            upper (float): upper bound of clipping
+
+        Returns:
+            torch.Tensor: x clipped between lower and upper.
+
+        """
+        clip_up = (x > upper).float()
+        clip_low = (x < lower).float()
+        with torch.no_grad():
+            clip = ((upper - x) * clip_up + (lower - x) * clip_low)
+        return x + clip
 
 
 # from https://github.com/ray-project/ray/blob/master/rllib/algorithms/dreamer/utils.py#L48
@@ -946,8 +979,8 @@ class TanhBijector(torch.distributions.Transform):
         self.domain = torch.distributions.constraints.real
         self.codomain = torch.distributions.constraints.interval(-1.0, 1.0)
 
-    def atanh(self, x):
-        return 0.5 * torch.log((1 + x) / (1 - x))
+    #def atanh(self, x):
+    #    return 0.5 * torch.log((1 + x) / (1 - x))
 
     def sign(self):
         return 1.0
@@ -956,8 +989,8 @@ class TanhBijector(torch.distributions.Transform):
         return torch.tanh(x)
 
     def _inverse(self, y):
-        y = torch.clamp(y, -0.99999997, 0.99999997)
-        y = self.atanh(y)
+        #y = torch.clamp(y, min=-1.0 + 1e-5, max=1.0 - 1e-5)
+        y = torch.atanh(y)
         return y
 
     def log_abs_det_jacobian(self, x, y):

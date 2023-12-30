@@ -13,19 +13,6 @@ from mdm.utils.torch_tools import unsqueeze_right, compute_mask
 from mdm.utils.gym_wrappers import CacheLastStepEnv, CacheLastStepVecEnv
 
 
-class AgentPolicy(Policy):
-
-    def __init__(self,
-                 agent: ActorCriticAgent):
-        super().__init__()
-        self.agent = agent
-
-    def __call__(self, env):
-        last_o = torch.from_numpy(env.last_o).to(self.agent.device)
-        a_dist, a, v = self.agent(last_o)
-        return a.detach().cpu().numpy()
-
-
 class LatentAgentPolicy(Policy):
 
     def __init__(self,
@@ -49,6 +36,8 @@ class LatentAgentPolicy(Policy):
             self._current_env_state = env_state
         else:
             self._current_env_state = None
+
+        self.sample_world_model = False
 
     def reset(self):
         self._current_env_state = None
@@ -88,8 +77,8 @@ class LatentAgentPolicy(Policy):
         _, _, self._current_env_state = self.model.forward_static(trajectory=env_data,
                                                                   start_state=self._current_env_state,
                                                                   level=self.agent.level, n_steps=1, n_warmup=1,
-                                                                  sample_state=False, sample_output=False,
-                                                                  reconstruct=False,
+                                                                  sample_state=self.sample_world_model,
+                                                                  sample_output=False, reconstruct=False,
                                                                   use_ema_modules=self.agent.use_slow_world_model)
 
         if torch.isnan(self._current_env_state[0]).any():

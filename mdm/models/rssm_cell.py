@@ -57,6 +57,7 @@ class RSSMCell(torch.nn.Module):
         self.r_decoder = r_decoder
         self.term_decoder = term_decoder
         self.n_hidden_layers = n_hidden_layers
+        self.hidden_dropout = hidden_dropout
         self.epsilon = epsilon
         self.layer_norm = layer_norm
         self.activation = activation
@@ -87,6 +88,7 @@ class RSSMCell(torch.nn.Module):
                                 + [torch.nn.LSTMCell(d_h, hidden_size=d_h) for _ in range(n_hidden_layers - 1)])
         self._gru = ModuleList([torch.nn.GRUCell(d_det_core, hidden_size=d_h)]
                                + [torch.nn.GRUCell(d_h, hidden_size=d_h) for _ in range(n_hidden_layers - 1)])
+        self._rnn_dropout = torch.nn.Dropout(p=hidden_dropout)
 
         if self.rnn_type == 'lstm':
             for p in self._gru.parameters():
@@ -229,6 +231,8 @@ class RSSMCell(torch.nn.Module):
 
         # if torch.isnan(z_embed).any():
         #    raise RuntimeError(f'Invalid NAN embedded z in imagine: {z_embed}')
+        if self.hidden_dropout > 0:
+            last_rnn_state = self._rnn_dropout(last_rnn_state)
 
         inp = torch.concat([z, a], dim=-1)
         if self.rnn_type == 'lstm':
@@ -279,14 +283,15 @@ class RSSMCell(torch.nn.Module):
                 last_state: Optional[RSSMStateType] = None,
                 use_posterior: bool = True,
                 sample_state: bool = True) -> RSSMStateType:
-        if torch.any(a > 1.0) or torch.any(a < -1.0):
-            raise ValueError('Found invalid actions outside of [-1, 1] interval')
-        # if o is None and last_state is None:
-        #    raise ValueError('Need at least "o" or "last_state"')
-        # if o is None and use_posterior:
-        #    raise ValueError('Can\'t use posterior if no ground truth data is provided')
-
         d_batch = a.shape[0]
+
+        # checks
+        if torch.any(a > 1.0) or torch.any(a < -1.0) or torch.isnan(a).any():
+            raise RuntimeError(f'Invalid action in imagine: {a}')
+
+        if o_enc is None and last_state is None:
+            raise ValueError('Need at least "o" or "last_state"')
+
         if last_state is None:
             last_state = self.init_state(d_batch, a.device)
         if o_enc is None:
@@ -294,10 +299,10 @@ class RSSMCell(torch.nn.Module):
                 raise ValueError('Can\'t use posterior if no observation is provided')
             o_enc = torch.zeros(d_batch, self.o_encoder.d_x_encoded, device=a.device)
 
-        if torch.isnan(a).any() or torch.isinf(a).any():
-            raise RuntimeError(f'Invalid action in imagine: {a}')
         if torch.isnan(last_state[1]).any() or torch.isinf(last_state[1]).any():
             raise RuntimeError(f'Invalid last state in imagine: {last_state[1]}')
+
+        # last_state = rssm_detach_state(*last_state)
 
         if use_posterior:
             ret = self.observe(a, o_enc, last_state[1], last_state[4], sample_state)
@@ -320,14 +325,14 @@ class RSSMCell(torch.nn.Module):
 
         if o_enc is None:
             o_enc = torch.zeros(d_time, d_batch, self.o_encoder.d_x_encoded, device=a.device)
-        elif posterior_steps < d_time:  # necessary to avoid index error in the loop below if o_enc is too short
-            pad = torch.zeros(d_time - posterior_steps, d_batch, self.o_encoder.d_x_encoded, device=a.device)
+        elif o_enc.shape[0] < d_time:  # necessary to avoid index error in the loop below if o_enc is too short
+            pad = torch.zeros(d_time - o_enc.shape[0], d_batch, self.o_encoder.d_x_encoded, device=a.device)
             o_enc = torch.concat([o_enc, pad], dim=0)
 
         state_mem: List[RSSMStateType] = []
         state = start_state
         for t, a_t in enumerate(a):
-            use_posterior = t <= posterior_steps
+            use_posterior = t < posterior_steps
             state = self(a[t], o_enc[t], state, use_posterior, sample_state)
             state_mem.append(state)
 
@@ -360,15 +365,16 @@ class RSSMCell(torch.nn.Module):
             # TODO: continuous bernoulli?
             z_smpl = torch.bernoulli(dist_params) + dist_params - dist_params.detach()
         else:  # categorical
-            probs_reshaped = dist_params.reshape(dist_params.shape[0] * self.d_z, self.n_latent_categories)
-            indices = torch.multinomial(probs_reshaped, 1, True)
-            indices = indices.squeeze(-1)  # remove redundant extra dim coming from generating only one sample
-            z_smpl = torch.nn.functional.one_hot(indices, self.n_latent_categories).to(dist_params)
-            z_smpl = z_smpl + probs_reshaped - probs_reshaped.detach()  # straight-through gradient
+            #probs_reshaped = dist_params.reshape(dist_params.shape[0] * self.d_z, self.n_latent_categories)
+            #indices = torch.multinomial(probs_reshaped, 1, True)
+            #indices = indices.squeeze(-1)  # remove redundant extra dim coming from generating only one sample
+            #z_smpl = torch.nn.functional.one_hot(indices, self.n_latent_categories).to(dist_params)
+            #z_smpl = z_smpl + probs_reshaped - probs_reshaped.detach()  # straight-through gradient
+            #z_smpl = z_smpl.reshape(dist_params.shape[0], self.d_z * self.n_latent_categories)
+            probs_reshaped = dist_params.reshape(dist_params.shape[0], self.d_z, self.n_latent_categories)
+            z_smpl = torch.distributions.OneHotCategorical(probs=probs_reshaped).sample()
+            z_smpl = z_smpl.to(probs_reshaped) + probs_reshaped - probs_reshaped.detach()
             z_smpl = z_smpl.reshape(dist_params.shape[0], self.d_z * self.n_latent_categories)
-            # z_smpl = torch.distributions.OneHotCategorical(probs=dist_params['probs']).sample()
-            # z_smpl = z_smpl + dist_params['probs'] - dist_params['probs'].detach()
-            # z_smpl = torch.flatten(z_smpl, start_dim=-2, end_dim=-1)
         return z_smpl
 
     def z_mode(self,
@@ -379,10 +385,14 @@ class RSSMCell(torch.nn.Module):
         elif self.latent_dist == 'bernoulli':
             z_smpl = torch.round(dist_params) + dist_params - dist_params.detach()
         else:  # categorical
-            probs_reshaped = dist_params.reshape(dist_params.shape[0] * self.d_z, self.n_latent_categories)
-            z_smpl = torch.argmax(probs_reshaped, dim=-1)
-            z_smpl = torch.nn.functional.one_hot(z_smpl, num_classes=self.n_latent_categories)
-            z_smpl = z_smpl + probs_reshaped - probs_reshaped.detach()  # straight-through gradient
+            #probs_reshaped = dist_params.reshape(dist_params.shape[0] * self.d_z, self.n_latent_categories)
+            #z_smpl = torch.argmax(probs_reshaped, dim=-1)
+            #z_smpl = torch.nn.functional.one_hot(z_smpl, num_classes=self.n_latent_categories)
+            #z_smpl = z_smpl + probs_reshaped - probs_reshaped.detach()  # straight-through gradient
+            #z_smpl = z_smpl.reshape(dist_params.shape[0], self.d_z * self.n_latent_categories)
+            probs_reshaped = dist_params.reshape(dist_params.shape[0], self.d_z, self.n_latent_categories)
+            z_smpl = torch.distributions.OneHotCategorical(probs=probs_reshaped).mode
+            z_smpl = z_smpl.to(probs_reshaped) + probs_reshaped - probs_reshaped.detach()
             z_smpl = z_smpl.reshape(dist_params.shape[0], self.d_z * self.n_latent_categories)
         return z_smpl
 
