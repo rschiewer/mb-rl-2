@@ -13,7 +13,7 @@ repeat_terminal_state: False
 mdm:
    rssm_modules:
       # RSSM no. 1
-      -  d_z: 10
+      -  d_z: 32
          d_h: 300
          d_a: <infer>
          d_s_embedding: null
