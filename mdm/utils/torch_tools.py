@@ -859,64 +859,6 @@ def compute_mask(terminals: Union[List[torch.Tensor], torch.Tensor],
 
         return mask.detach()
 
-        """
-        if mode == 'deterministic' and threshold is not None:
-            terminals_transformed = torch.where(terminals > threshold,
-                                                torch.tensor(1.0, device=terminals.device, dtype=terminals.dtype),
-                                                torch.tensor(0.0, device=terminals.device, dtype=terminals.dtype))
-        elif mode == 'stochastic':
-            terminals_transformed = torch.distributions.Bernoulli(probs=torch.nn.functional.sigmoid(terminals)).sample()
-        elif mode == 'default':
-            terminals_transformed = terminals
-        else:
-            raise ValueError(f'Unknown mode: {mode}')
-
-        mask = torch.zeros_like(terminals)
-        if first_step_mask is not None:
-            mask[0] = first_step_mask
-
-        for t in range(1, d_time):
-            mask[t] = torch.maximum(mask[t - 1], terminals_transformed[t - 1])
-
-        # if disable:
-        #    mask = torch.zeros_like(mask)
-
-        return mask.detach()
-        """
-
-
-def compute_mask_old(terminals: torch.Tensor,
-                     mode: str = 'default',
-                     threshold: float | None = None,
-                     first_step_mask: torch.Tensor | None = None,
-                     disable: bool = True):
-    with torch.no_grad():
-        terminals = terminals.detach()
-        d_time = terminals.shape[0]
-
-        if mode == 'deterministic' and threshold is not None:
-            terminals_transformed = torch.where(terminals > threshold,
-                                                torch.tensor(1.0, device=terminals.device, dtype=terminals.dtype),
-                                                torch.tensor(0.0, device=terminals.device, dtype=terminals.dtype))
-        elif mode == 'stochastic':
-            terminals_transformed = torch.distributions.Bernoulli(probs=torch.nn.functional.sigmoid(terminals)).sample()
-        elif mode == 'default':
-            terminals_transformed = terminals
-        else:
-            raise ValueError(f'Unknown mode: {mode}')
-
-        mask = torch.zeros_like(terminals)
-        if first_step_mask is not None:
-            mask[0] = first_step_mask
-
-        for t in range(1, d_time):
-            mask[t] = torch.maximum(mask[t - 1], terminals_transformed[t - 1])
-
-        # if disable:
-        #    mask = torch.zeros_like(mask)
-
-        return mask.detach()
-
 
 # compiled from:
 # https://github.com/denisyarats/pytorch_sac/blob/master/agent/actor.py
