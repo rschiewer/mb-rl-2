@@ -1,7 +1,6 @@
 import math
 import textwrap
 from math import ceil
-import time
 
 import gym_nav2d.envs
 from gymnasium_robotics.envs.maze.maze_v4 import MazeEnv
@@ -12,7 +11,6 @@ from tqdm import tqdm
 import moviepy.editor as mp
 import cv2
 
-from mdm.logging.logger import GlobalLogger
 from mdm.models.rssm_cell import rssm_detach_state, rssm_remove_labels
 from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.policies.agent_policy import HierarchicalLatentAgentPolicy, LatentAgentPolicy
@@ -22,6 +20,7 @@ from mdm.utils.gym_wrappers import CacheLastStepEnv
 from mdm.utils.torch_tools import to_tensors, to_np, FreezeParameters, compute_mask
 from mdm.utils.utils import *
 from mdm.utils.gym_nav2d_tools import *
+from mdm.utils.visualize_env import plot_maze_env, visualize_env
 
 
 def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collect_fn, eval_env, test_driver,
@@ -78,7 +77,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
         logger.log(to_np(train_losses), Scope.TRAIN(), i_step)
 
         # log latent state and observation distances
-        if i_step % cfg['trainer']['eval_interval'] == 0:
+        if i_step % cfg['trainer']['plot_interval'] == 0:
             for level, pred_level in enumerate(pred):
                 plot_latent_state_differences(pred_level, logger, i_step, major_scope=f'model/{level}')
 
@@ -119,10 +118,11 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                     #                                    logger, sample_agents)
                     # train_goal_seeking_agent_goals_above(model, level, pred, targets, eval_env, cfg, i_step, logger,
                     #                                     sample_agents)
-                    train_goal_seeking_agent_goals_above_with_agent(model, level, pred, targets, eval_env, cfg, i_step,
-                                                                    logger, sample_agents, use_her=False)
-                    # train_goal_seeking_agent_one_step(model, level, pred, targets, eval_env, cfg, i_step, logger,
-                    #                                  sample_agents)
+                    #train_goal_seeking_agent_goals_above_with_agent(model, level, pred, targets, eval_env, cfg, i_step,
+                    #                                                logger, sample_agents, use_her=False)
+                    train_gsa(model, level, pred, targets, eval_env, cfg, i_step, logger, sample_agents, use_her=False)
+                    #train_goal_seeking_agent_one_step(model, level, pred, targets, eval_env, cfg, i_step, logger,
+                    #                                 sample_agents)
 
                 if level > 0:
                     pass
@@ -190,6 +190,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 if env_class_is(eval_env, Nav2dEnv):
                     latent_state_pca_plot(model, eval_env, eval_steps, i_step, logger)
 
+                """
                 if env_class_is(eval_env, Nav2dEnv):
                     returns_flat = [t['r'].sum() for t in eval_mem_flat]
                     worst_flat = np.argmin(returns_flat)
@@ -232,6 +233,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                             vid = anim_to_vid(anim)
                             vid.name = 'model_sim'
                         logger.log({'model': vid}, Scope.TEST() / 'model_prediction_video/1', i_step)
+                """
                 # log model and agent params
                 # log_params(model, logger, Scope.PARAMETERS() / 'model', time_step=i_step)
                 # for i_ag, ag in enumerate(r_max_agents):
@@ -518,7 +520,7 @@ def train_rmax_agent(agent_model_steps, cfg, eval_env, i_step, level, logger, mo
                                    logger=logger)
     logger.log(to_np(r_max_losses), Scope.TRAIN() / f'r_max_agent/{level}/', i_step)
     # debugging and inspection
-    if i_step % cfg['trainer']['eval_interval'] == 0 and env_class_is(eval_env, Nav2dEnv):
+    if i_step % cfg['trainer']['plot_interval'] == 0 and env_class_is(eval_env, Nav2dEnv):
         plot_value_function(eval_env, model, rma, level, logger, i_step)
         plot_rewards(eval_env, model, level, logger, i_step)
         if level > 0:
@@ -577,13 +579,12 @@ def abstract_model_training(abstract_train_driver, model, optimizer, cfg):
 
 
 def train_goal_seeking_agent_one_step(model, level, pred, targets, eval_env, cfg, i_step, logger, sample_agents):
-    n_goals = 3
     chunk_size = model.strides[level + 1]
-    goal_agent, goal_actor_opt, goal_critic_opt = model.goal_seeking_agents[level]
+    goal_agent, gsa_optimizers = model.goal_seeking_agents[level]
     trajectories = pred[level]
     mask = targets[level]['mask']
 
-    if len(trajectories['a']) <= chunk_size * n_goals:
+    if len(trajectories['a']) <= chunk_size:
         return
 
     # get starting states, leave enough states out at the end to collect goals
@@ -610,27 +611,51 @@ def train_goal_seeking_agent_one_step(model, level, pred, targets, eval_env, cfg
                                             reconstruct=True)
     loss = goal_agent.update_step(goal_simulation['agent'],
                                   first_step_mask=start_state_mask,
-                                  actor_optimizer=goal_actor_opt,
-                                  critic_optimizer=goal_critic_opt)
+                                  **gsa_optimizers)
 
     logger.log(to_np(loss), Scope.TRAIN() / f'goal_seeking_agent/{level}/', i_step)
 
-    if i_step % cfg['trainer']['eval_interval'] == 0:
-        # add start state and goal state to comparison
-        goal_simulation['model']['s_embedding'].append(goal)
-        # same for observation
-        start_state_obs = seq_to_batch(trajectories, i_start=0, i_end=-chunk_size)['o']
-        goal_state_obs = seq_to_batch(trajectories, i_start=chunk_size)['o']
-        goal_simulation['model']['o'].append(goal_state_obs)
-
+    if i_step % cfg['trainer']['plot_interval'] == 0:
         plot_latent_state_differences(goal_simulation['model'], logger, i_step,
                                       major_scope=f'goal_seeking_agent/{level}')
 
 
+def train_gsa(model, level, pred, targets, eval_env, cfg, i_step, logger, sample_agents, use_her):
+    gsa, gsa_optimizers = model.goal_seeking_agents[level]
+
+    # get start states from model rollout
+    state = {k: v for k, v in pred[level].items() if k in rssm_state_keys()}
+    # fold time into batch dimension, i.e. concatenate the different time steps along batch dimension
+    state = {k: torch.concat(v, dim=0) for k, v in state.items()}
+    state_mask = torch.concat(targets[level]['mask'].unbind(0), dim=0)  # reshape should also work
+
+    # sample random goals from model
+    d_batch = state['s_embedding'].shape[0]
+    device = state['s_embedding'].device
+    goal_sample = model.goal_autoencoder.gen_unconditionally(d_batch=d_batch, device=device)
+    goal_obs = model.rssm_modules[level].decode(goal_sample, sample=False, reconstruct_observation=True)['o']
+
+    # perform gsa seeking rollout
+    state = rssm_detach_state(**state)  # prevent gradients to flow into previous chunk
+    goal_simulation = gsa.act_in_sim(env_start_state=state, sim_env=model, n_steps=15,
+                                     goal=goal_sample, sample_states=True,
+                                     sample_actions=sample_agents, expl_noise=gsa.eps, reconstruct=True)
+    loss = gsa.update_step(goal_simulation['agent'], first_step_mask=state_mask, **gsa_optimizers)
+    logger.log(to_np(loss), Scope.TRAIN() / f'goal_seeking_agent/{level}/', i_step)
+
+    if i_step % cfg['trainer']['plot_interval'] == 0 and env_class_is(eval_env, MazeEnv):
+        obs = numpyfy(goal_simulation['model']['o'])[:, :3]
+        goal_obs = numpyfy(goal_obs)[None, :3]  # need to add a time dimension to goal observations as well
+        with TempFigure(figsize=(10, 10)) as fig:
+            visualize_env(eval_env, fig.gca(), observations=obs, goal_observations=goal_obs)
+            logger.log_plot(fig_to_img(fig),
+                            Scope.TRAIN() / f'goal_seeking_agent/{level}/goal_seeking_train_performance', i_step)
+
+
 def train_goal_seeking_agent_goals_above_with_agent(model, level, pred, targets, eval_env, cfg, i_step, logger,
                                                     sample_agents, use_her):
-    n_groundtruth_goals = 3
-    n_generated_goals = 3
+    n_groundtruth_goals = 0
+    n_generated_goals = 2
     chunk_size = model.strides[level + 1]
     n_goals_total = len(targets[level + 1]['o'])
     gsa, gsa_optimizers = model.goal_seeking_agents[level]
@@ -642,17 +667,18 @@ def train_goal_seeking_agent_goals_above_with_agent(model, level, pred, targets,
     if len(pred[level]['a']) <= chunk_size * n_groundtruth_goals + 1:
         return
 
-    # cut out a window of gsa start states for first chunk, for n_groundtruth_goals=2 and chunk_size=2 this means:
-    # B0: [a0] a1 [a2] a3 [a4] a5 a6 a7 a8        [a0] [a2] [a4] a6 a8        [a0] [a2] [a4]
-    # B1: [b0] b1 [b2] b3 [b4] b5 b6 b7 b8   ->   [b0] [b2] [b4] b6 b8   ->   [b0] [b2] [b4]
-    # B2: [c0] c1 [c2] c3 [c4] c5 c6 c7 c8        [c0] [c2] [c4] c6 c8        [c0] [c2] [c4]
+    # get start states for goal seeking agent, for n_groundtruth_goals=3 and chunk_size=2 this means:
+    # B0: a0 [a1] a2 [a3] a4 [a5] a6 a7 ...        [a1] [a3] [a5] a7 ...        [a1] [a3] [a5]
+    # B1: b0 [b1] b2 [b3] b4 [b5] b6 b7 ...   ->   [b1] [b3] [b5] b7 ...   ->   [b1] [b3] [b5]
+    # B2: c0 [c1] c2 [c3] c4 [c5] c6 c7 ...        [c1] [c3] [c5] c7 ...        [c1] [c3] [c5]
     # filter out every k-th step from current level predictions (for agent start states) and from targets (for masking)
     flt = PickOneUpwardsFilter(window_size=chunk_size, offset=-1)
-    pred_flt = {k: flt(torch.stack(v)) for k, v in pred[level].items()}
-    targets_flt = {k: flt(v) for k, v in targets[level].items()}
-    # cut off last n_groundtruth_goals steps as they are needed as goals
-    pred_flt = {k: v[:-n_groundtruth_goals] for k, v in pred_flt.items()}
-    targets_flt = {k: v[:-n_groundtruth_goals] for k, v in targets_flt.items()}
+    pred_flt = {k: flt(torch.stack(v), mask=targets[level]['mask']) for k, v in pred[level].items()}
+    targets_flt = {k: flt(v, mask=targets[level]['mask']) for k, v in targets[level].items()}
+    if n_groundtruth_goals > 0:
+        # cut off last n_groundtruth_goals steps as they are needed as goals
+        pred_flt = {k: v[:-n_groundtruth_goals] for k, v in pred_flt.items()}
+        targets_flt = {k: v[:-n_groundtruth_goals] for k, v in targets_flt.items()}
     # fold time into batch dim, this yields one time step with shape (1, BxT, ...)
     # [a0]
     # [b0]
@@ -671,6 +697,7 @@ def train_goal_seeking_agent_goals_above_with_agent(model, level, pred, targets,
 
     # goals are taken from above level's model predictions
     goals = []
+    t_start, t_end = 0, n_goals_total
     for i in range(n_groundtruth_goals):
         t_start = i + 1  # for each chunk, goals are 1 index after start states
         t_end = n_goals_total - n_groundtruth_goals + i + 1  # indexing is exclusive t_end, so add 1 at the end
@@ -724,7 +751,7 @@ def train_goal_seeking_agent_goals_above_with_agent(model, level, pred, targets,
             goal_reached = goal_simulation['model']['s_embedding'][-1]
             goal_tiled = torch.repeat_interleave(goal_reached.unsqueeze(0), repeats=s_embed_stacked.shape[0], dim=0)
             agent_r = gsa.goal_similarity(s_embed_stacked, goal_tiled)
-            agent_term = torch.where(agent_r >= -0.0001, 1.0, 0.0)
+            agent_term = gsa.goal_terminal(agent_r)
             agent_o = torch.concat([s_embed_stacked, goal_tiled, agent_r], dim=-1)
             agent_r = list(agent_r.unbind(0))
             agent_term = list(agent_term.unbind(0))
@@ -762,7 +789,7 @@ def train_goal_seeking_agent_goals_above_with_agent(model, level, pred, targets,
 
     logger.log(to_np(gsa_losses), Scope.TRAIN() / f'goal_seeking_agent/{level}/', i_step)
 
-    if i_step % cfg['trainer']['eval_interval'] == 0 and env_class_is(eval_env, MazeEnv):
+    if i_step % cfg['trainer']['plot_interval'] == 0 and env_class_is(eval_env, MazeEnv):
         # choose random batch indices to plot
         indices = [random.randint(0, first_start_state[-1].shape[0] - 1) for _ in range(2)]
 
@@ -782,11 +809,11 @@ def train_goal_seeking_agent_goals_above_with_agent(model, level, pred, targets,
         goal_obs = torch.stack(goal_obs).detach().cpu().numpy().swapaxes(0, 1)[indices].swapaxes(0, 1)
 
         with TempFigure(figsize=(10, 10)) as fig:
-            plot_maze_env(eval_env, obs, goal_obs, fig.gca())
+            plot_maze_env(eval_env, fig.gca(), obs, goal_obs)
             logger.log_plot(fig_to_img(fig),
                             Scope.TRAIN() / f'goal_seeking_agent/{level}/goal_seeking_train_performance', i_step)
 
-    if i_step % cfg['trainer']['eval_interval'] == 0 and level == 0 and env_class_is(eval_env, Nav2dEnv):
+    if i_step % cfg['trainer']['plot_interval'] == 0 and level == 0 and env_class_is(eval_env, Nav2dEnv):
         pass
         # plot_goal_conditioned_value_function(eval_env, model, gsa, level, logger, i_step, 3, 3)
         # plot_goal_seeking_performance(gsa, gsa_model_mem, gsa_agent_mem, goals, first_start_state, model,
@@ -867,7 +894,7 @@ def train_goal_seeking_agent_goals_above(model, level, pred, targets, eval_env, 
 
     logger.log(to_np(gsa_losses), Scope.TRAIN() / f'goal_seeking_agent/{level}/', i_step)
 
-    if i_step % cfg['trainer']['eval_interval'] == 0 and level == 0 and env_class_is(eval_env, Nav2dEnv):
+    if i_step % cfg['trainer']['plot_interval'] == 0 and level == 0 and env_class_is(eval_env, Nav2dEnv):
         plot_goal_conditioned_value_function(eval_env, model, gsa, level, logger, i_step, 3, 3)
         plot_goal_seeking_performance(gsa, gsa_model_mem, gsa_agent_mem, goals, first_start_state, model,
                                       [chunk_size for _ in goals], logger, i_step, level)
@@ -948,7 +975,7 @@ def train_goal_seeking_agent_same_level(model, level, pred, targets, eval_env, c
 
     logger.log(to_np(gsa_losses), Scope.TRAIN() / f'goal_seeking_agent/{level}/', i_step)
 
-    if i_step % cfg['trainer']['eval_interval'] == 0 and level == 0 and env_class_is(eval_env, Nav2dEnv):
+    if i_step % cfg['trainer']['plot_interval'] == 0 and level == 0 and env_class_is(eval_env, Nav2dEnv):
         plot_goal_conditioned_value_function(eval_env, model, gsa, level, logger, i_step, 3, 3)
         plot_goal_seeking_performance(gsa, gsa_model_mem, gsa_agent_mem, goal_mem, first_start_state, model,
                                       [chunk_size for _ in goal_states], logger, i_step, level)
@@ -1180,7 +1207,7 @@ def train_goal_seeking_agent_rand(model, level, pred, targets, eval_env, cfg, i_
 
     logger.log(to_np(gsa_losses), Scope.TRAIN() / f'goal_seeking_agent/{level}/', i_step)
 
-    if (i_step % cfg['trainer']['eval_interval'] == 0
+    if (i_step % cfg['trainer']['plot_interval'] == 0
             and level == 0
             and isinstance(eval_env.unwrapped.env_fns[0]().unwrapped, gym_nav2d.envs.Nav2dEnv)):
         plot_goal_conditioned_value_function(eval_env, model, goal_agent, level, logger, i_step, 3, 3)
@@ -1679,57 +1706,6 @@ def log_prediction_error_plot(batch, cfg, i_step, logger, model):
             plt.tight_layout()
             # plt.show()
             logger.log_plot(fig_to_img(fig), Scope.TRAIN() / f'model/{l}/prediction_error', i_step)
-
-
-def plot_maze_env(env, observations: np.ndarray = None, goal_observations: np.ndarray = None, axis: plt.axis = None):
-    assert env_class_is(env, MazeEnv)
-    if axis is None:
-        plt_target = plt
-    else:
-        plt_target = axis
-    instance = get_env_instance(env).unwrapped
-    x_center = instance.maze.x_map_center
-    y_center = instance.maze.y_map_center
-    length = instance.maze.map_length
-    width = instance.maze.map_width
-    start_locations = instance.maze.unique_reset_locations
-    goal_locations = instance.maze.unique_goal_locations
-    maze_map = instance.maze.maze_map
-    # remove maze_map start and goal locations
-    for row in maze_map:
-        for x in range(len(row)):
-            if type(row[x]) is str:
-                row[x] = 0
-    maze_map = np.array(maze_map)
-    left = - width / 2
-    right = width / 2
-    bottom = - length / 2
-    top = length / 2
-    plt_target.imshow(maze_map, extent=(left, right, bottom, top))
-    for loc in start_locations:
-        plt_target.scatter(loc[0], loc[1], marker='.', c='red', s=500)
-        plt_target.scatter(loc[0], loc[1], marker='$S$', c='white', s=45)
-    for loc in goal_locations:
-        plt_target.scatter(loc[0], loc[1], marker='.', c='green', s=500)
-        plt_target.scatter(loc[0], loc[1], marker='$R$', c='white', s=45)
-
-    # plot individual trajectories
-    prop_cycle = plt.rcParams['axes.prop_cycle']
-    colors = prop_cycle.by_key()['color']
-    goal_names = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S']
-    if observations is not None:
-        for i_traj in range(observations.shape[1]):
-            c = colors[i_traj % len(colors)]
-            for t in range(observations.shape[0]):
-                plt_target.scatter(observations[t, i_traj, 4], observations[t, i_traj, 5], marker=f'${t}$', c=c, s=25)
-    if goal_observations is not None:
-        for i_traj in range(goal_observations.shape[1]):
-            c = colors[i_traj % len(colors)]
-            for t in range(goal_observations.shape[0]):
-                plt_target.scatter(goal_observations[t, i_traj, 4] - 0.002, goal_observations[t, i_traj, 5] - 0.002,
-                                   marker=f'${goal_names[t]}$', c='black', s=25)
-                plt_target.scatter(goal_observations[t, i_traj, 4], goal_observations[t, i_traj, 5],
-                                   marker=f'${goal_names[t]}$', c=c, s=25)
 
 
 # print(torch.cuda.memory_allocated() / torch.cuda.max_memory_allocated())
