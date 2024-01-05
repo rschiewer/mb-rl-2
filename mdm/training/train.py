@@ -644,10 +644,11 @@ def train_gsa(model, level, pred, targets, eval_env, cfg, i_step, logger, sample
     logger.log(to_np(loss), Scope.TRAIN() / f'goal_seeking_agent/{level}/', i_step)
 
     if i_step % cfg['trainer']['plot_interval'] == 0:
-        obs = numpyfy(goal_simulation['model']['o'])[:, :3]
-        goal_obs = numpyfy(goal_obs)[None, :3]  # need to add a time dimension to goal observations as well
+        obs = numpyfy(goal_simulation['model']['o'])
+        goal_obs = numpyfy(goal_obs)[None]  # need to add a time dimension to goal observations as well
         with TempFigure(figsize=(10, 10)) as fig:
-            visualize_env(eval_env, fig.gca(), observations=obs, goal_observations=goal_obs)
+            visualize_env(eval_env, fig.gca(), observations=obs, goal_observations=goal_obs, n_trajs=2)
+            plt.show()
             logger.log_plot(fig_to_img(fig),
                             Scope.TRAIN() / f'goal_seeking_agent/{level}/goal_seeking_train_performance', i_step)
 

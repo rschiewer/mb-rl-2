@@ -18,7 +18,11 @@ def visualize_env(env: gym.Env, canvas: plt.Figure | plt.Axes, **kwargs):
         plot_nav2d_env(env=env, canvas=canvas, **kwargs)
 
 
-def plot_maze_env(env, canvas: plt.Axes, observations: np.ndarray = None, goal_observations: np.ndarray = None):
+def plot_maze_env(env: gym.Env,
+                  canvas: plt.Axes,
+                  observations: np.ndarray = None,
+                  goal_observations: np.ndarray = None,
+                  n_trajs: int = 1):
     assert env_class_is(env, MazeEnv)
 
     # draw maze itself
@@ -52,11 +56,13 @@ def plot_maze_env(env, canvas: plt.Axes, observations: np.ndarray = None, goal_o
     prop_cycle = plt.rcParams['axes.prop_cycle']
     colors = prop_cycle.by_key()['color']
     if observations is not None:
+        observations = observations[:, :n_trajs]
         for i_traj in range(observations.shape[1]):
             c = colors[i_traj % len(colors)]
             for t in range(observations.shape[0]):
                 canvas.scatter(observations[t, i_traj, 4], observations[t, i_traj, 5], marker=f'${t + 1}$', c=c, s=25)
     if goal_observations is not None:
+        goal_observations = goal_observations[:, :n_trajs]
         for i_traj in range(goal_observations.shape[1]):
             c = colors[i_traj % len(colors)]
             for t in range(goal_observations.shape[0]):
@@ -66,7 +72,11 @@ def plot_maze_env(env, canvas: plt.Axes, observations: np.ndarray = None, goal_o
                                marker=f'${t + 1}$', c='white', s=25)
 
 
-def plot_nav2d_env(env, canvas: plt.Axes, observations: np.ndarray = None, goal_observations: np.ndarray = None):
+def plot_nav2d_env(env: gym.Env,
+                   canvas: plt.Axes,
+                   observations: np.ndarray = None,
+                   goal_observations: np.ndarray = None,
+                   n_trajs: int = 1):
     assert env_class_is(env, Nav2dEnv)
 
     # draw environment and borders
@@ -78,6 +88,7 @@ def plot_nav2d_env(env, canvas: plt.Axes, observations: np.ndarray = None, goal_
     prop_cycle = plt.rcParams['axes.prop_cycle']
     colors = prop_cycle.by_key()['color']
     if observations is not None:
+        observations = observations[:, :n_trajs]
         for i_traj in range(observations.shape[1]):
             c = colors[i_traj % len(colors)]
             # plot individual time steps
@@ -88,6 +99,7 @@ def plot_nav2d_env(env, canvas: plt.Axes, observations: np.ndarray = None, goal_
             canvas.scatter(reward_location[0], reward_location[1], marker='.', c=c, s=500)
             canvas.scatter(reward_location[0], reward_location[1], marker='$R$', c='white', s=45)
     if goal_observations is not None:
+        goal_observations = goal_observations[:, :n_trajs]
         for i_traj in range(goal_observations.shape[1]):
             c = colors[i_traj % len(colors)]
             for t in range(goal_observations.shape[0]):
