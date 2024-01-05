@@ -7,6 +7,7 @@ from torch.nn import ModuleList
 
 from mdm.models.building_blocks import InputEncoder, OutputDecoder
 from mdm.utils.torch_tools import layers_with_activation as lwa
+from mdm.models.fastrnns import STMCell
 
 RSSMStateType = Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
 
@@ -86,6 +87,8 @@ class RSSMCell(torch.nn.Module):
         # need both to satisfy torch script
         self._lstm = ModuleList([torch.nn.LSTMCell(d_det_core, hidden_size=d_h)]
                                 + [torch.nn.LSTMCell(d_h, hidden_size=d_h) for _ in range(n_hidden_layers - 1)])
+        #self._lstm = ModuleList([STMCell(d_det_core, hidden_size=d_h)]
+        #                        + [STMCell(d_h, hidden_size=d_h) for _ in range(n_hidden_layers - 1)])
         self._gru = ModuleList([torch.nn.GRUCell(d_det_core, hidden_size=d_h)]
                                + [torch.nn.GRUCell(d_h, hidden_size=d_h) for _ in range(n_hidden_layers - 1)])
         self._rnn_dropout = torch.nn.Dropout(p=hidden_dropout)
@@ -365,12 +368,12 @@ class RSSMCell(torch.nn.Module):
             # TODO: continuous bernoulli?
             z_smpl = torch.bernoulli(dist_params) + dist_params - dist_params.detach()
         else:  # categorical
-            #probs_reshaped = dist_params.reshape(dist_params.shape[0] * self.d_z, self.n_latent_categories)
-            #indices = torch.multinomial(probs_reshaped, 1, True)
-            #indices = indices.squeeze(-1)  # remove redundant extra dim coming from generating only one sample
-            #z_smpl = torch.nn.functional.one_hot(indices, self.n_latent_categories).to(dist_params)
-            #z_smpl = z_smpl + probs_reshaped - probs_reshaped.detach()  # straight-through gradient
-            #z_smpl = z_smpl.reshape(dist_params.shape[0], self.d_z * self.n_latent_categories)
+            # probs_reshaped = dist_params.reshape(dist_params.shape[0] * self.d_z, self.n_latent_categories)
+            # indices = torch.multinomial(probs_reshaped, 1, True)
+            # indices = indices.squeeze(-1)  # remove redundant extra dim coming from generating only one sample
+            # z_smpl = torch.nn.functional.one_hot(indices, self.n_latent_categories).to(dist_params)
+            # z_smpl = z_smpl + probs_reshaped - probs_reshaped.detach()  # straight-through gradient
+            # z_smpl = z_smpl.reshape(dist_params.shape[0], self.d_z * self.n_latent_categories)
             probs_reshaped = dist_params.reshape(dist_params.shape[0], self.d_z, self.n_latent_categories)
             z_smpl = torch.distributions.OneHotCategorical(probs=probs_reshaped).sample()
             z_smpl = z_smpl.to(probs_reshaped) + probs_reshaped - probs_reshaped.detach()
@@ -385,11 +388,11 @@ class RSSMCell(torch.nn.Module):
         elif self.latent_dist == 'bernoulli':
             z_smpl = torch.round(dist_params) + dist_params - dist_params.detach()
         else:  # categorical
-            #probs_reshaped = dist_params.reshape(dist_params.shape[0] * self.d_z, self.n_latent_categories)
-            #z_smpl = torch.argmax(probs_reshaped, dim=-1)
-            #z_smpl = torch.nn.functional.one_hot(z_smpl, num_classes=self.n_latent_categories)
-            #z_smpl = z_smpl + probs_reshaped - probs_reshaped.detach()  # straight-through gradient
-            #z_smpl = z_smpl.reshape(dist_params.shape[0], self.d_z * self.n_latent_categories)
+            # probs_reshaped = dist_params.reshape(dist_params.shape[0] * self.d_z, self.n_latent_categories)
+            # z_smpl = torch.argmax(probs_reshaped, dim=-1)
+            # z_smpl = torch.nn.functional.one_hot(z_smpl, num_classes=self.n_latent_categories)
+            # z_smpl = z_smpl + probs_reshaped - probs_reshaped.detach()  # straight-through gradient
+            # z_smpl = z_smpl.reshape(dist_params.shape[0], self.d_z * self.n_latent_categories)
             probs_reshaped = dist_params.reshape(dist_params.shape[0], self.d_z, self.n_latent_categories)
             z_smpl = torch.distributions.OneHotCategorical(probs=probs_reshaped).mode
             z_smpl = z_smpl.to(probs_reshaped) + probs_reshaped - probs_reshaped.detach()
@@ -429,6 +432,24 @@ class RSSMCell(torch.nn.Module):
 
         return {'o': o_smpl, 'o_dist': o_dist, 'r': r_smpl, 'r_dist': r_dist, 'terminal': term_smpl,
                 'terminal_dist': term_dist}
+
+    @torch.jit.ignore
+    def rssm_state_from_embedding(self,
+                                  s_embedding: torch.Tensor) -> RSSMStateType:
+        if self.d_s_embedding != self.d_z_smpl + self.d_h or self.n_hidden_layers > 1 or self.rnn_type != 'gru':
+            raise RuntimeError('Can\'t reconstruct state from this embedding!')
+
+        d_batch = s_embedding.shape[0]
+        # generate empty init state tuple and fill in h, z and s_embedding
+        state = self.init_state(d_batch)
+        # extract h and z sample from embedding, which is just a concatenation of the two
+        h = s_embedding[..., :self.d_h]
+        z_smpl = s_embedding[..., self.d_h:]
+        # re-pack state tuple
+        state = (h, z_smpl, state[2], state[3], state[4], s_embedding)
+
+        return state  # holds all information required to continue a rollout with the RSSM
+
 
 
 @torch.jit.script
