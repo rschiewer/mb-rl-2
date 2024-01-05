@@ -643,7 +643,7 @@ def train_gsa(model, level, pred, targets, eval_env, cfg, i_step, logger, sample
     loss = gsa.update_step(goal_simulation['agent'], first_step_mask=state_mask, **gsa_optimizers)
     logger.log(to_np(loss), Scope.TRAIN() / f'goal_seeking_agent/{level}/', i_step)
 
-    if i_step % cfg['trainer']['plot_interval'] == 0 and env_class_is(eval_env, MazeEnv):
+    if i_step % cfg['trainer']['plot_interval'] == 0:
         obs = numpyfy(goal_simulation['model']['o'])[:, :3]
         goal_obs = numpyfy(goal_obs)[None, :3]  # need to add a time dimension to goal observations as well
         with TempFigure(figsize=(10, 10)) as fig:
