@@ -9,16 +9,15 @@ from threading import Thread
 import multiprocessing
 
 import neptune
-from matplotlib.figure import Figure
+from matplotlib.pyplot import Figure
 from neptune import Run
 from neptune.types import File
 from neptune.utils import stringify_unsupported
 import numpy as np
-from PIL import Image
+from PIL.Image import Image
 
 from mdm.logging.logger import Logger, Scope
-from mdm.utils.utils import InMemoryFile
-
+from mdm.utils.utils import InMemoryFile, fig_to_img
 
 _NUMERIC_KINDS = set('buifc')
 
@@ -161,7 +160,9 @@ class NeptuneLogger(Logger):
         self._run[str(scope)].upload(stream_file)
         self.n_log_calls += 1
 
-    def log_plot(self, figure: Image, scope: Union[Scope, str], time_step: int = None):
+    def log_plot(self, figure: Image | Figure, scope: Union[Scope, str], time_step: int = None):
+        if isinstance(figure, Figure):
+            figure = fig_to_img(figure, clear_fig=False)
         self._run[str(scope)].append(figure)
         self.n_log_calls += 1
 
