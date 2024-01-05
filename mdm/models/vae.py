@@ -166,6 +166,14 @@ class VAE(torch.nn.Module):
 
         return x_rec_dist_params, x_rec_smpl
 
+    def gen_unconditionally(self,
+                            d_batch: int,
+                            device: str | torch.device):
+        d = self.prior_dist(torch.zeros(d_batch, self.d_z_smpl, device=device))
+        z_smpl = d.sample()
+        _, x_rec_smpl = self.decode(z_smpl, sample=False)
+        return x_rec_smpl
+
     def forward(self,
                 x: torch.Tensor,
                 sample: bool):
