@@ -11,6 +11,8 @@ from mdm.utils.utils import env_class_is, get_env_instance
 def visualize_env(env: gym.Env, canvas: plt.Figure | plt.Axes, **kwargs):
     if canvas is None:
         canvas = plt.figure().add_subplot()
+    elif isinstance(canvas, plt.Figure):
+        canvas = canvas.add_subplot()
 
     if env_class_is(env, MazeEnv):
         plot_maze_env(env=env, canvas=canvas, **kwargs)
