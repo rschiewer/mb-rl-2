@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import copy
-from itertools import chain
+from itertools import chain, combinations
 import random
 import sys
 
@@ -11,12 +11,11 @@ from torch.nn import ModuleList, ModuleDict
 
 from mdm.models.building_blocks import *
 from mdm.models.dynamics_model import DynamicsModel
-from mdm.models.rssm_cell import RSSMCell, rssm_stack_states, rssm_detach_state, \
-    rssm_state_keys, rssm_add_labels, rssm_remove_labels, RSSMStateType
+from mdm.models.rssm_cell import RSSMCell, rssm_stack_states, rssm_detach_state, rssm_state_keys, rssm_add_labels
 from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.utils.torch_tools import *
-from mdm.utils.utils import filter_mem_state_seq_to_batch, fig_to_img, append_memory, extend_memory, TempFigure, \
-    list_of_tuples_to_tuple_of_lists
+from mdm.utils.utils import (filter_mem_state_seq_to_batch, fig_to_img, append_memory, extend_memory, TempFigure,
+                             list_of_tuples_to_tuple_of_lists, list_of_dicts_to_dict_of_lists)
 from mdm.logging.logger import GlobalLogger, Scope
 from mdm.utils.gym_nav2d_tools import *
 from mdm.models.vae import VAE
@@ -100,15 +99,19 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         self.ema_update_interval = ema_update_interval
         self.temporal_activation_regularization = temporal_activation_regularization
         self.kl_balance = kl_balance
-        self.pessimism_coeff = 0.001
+        self.pessimism_coeff = 0.0001
         self.dbg_timestep = 0
         self.avg_chunk_dist_early = ModuleList([RunningMeanStd(shape=(mod.d_z,)) for mod in self.rssm_modules[:-1]])
         self.avg_chunk_dist_mid = ModuleList([RunningMeanStd(shape=(mod.d_z,)) for mod in self.rssm_modules[:-1]])
         self.avg_chunk_dist_late = ModuleList([RunningMeanStd(shape=(mod.d_z,)) for mod in self.rssm_modules[:-1]])
 
-        self.goal_autoencoder = VAE(d_x=rssm_modules[0].d_s_embedding, d_z=10, latent_dist='normal',
-                                    encoder_lws=[128, 64, 64], decoder_lws=[64, 64, 128], activation='relu',
-                                    n_latent_categories=0, layer_norm=True, beta=0.5)
+        self.goal_autoencoder = VAE(d_x=rssm_modules[0].d_s_embedding, d_z=50, latent_dist='normal',
+                                    encoder_lws=[200, 200, 100], decoder_lws=[100, 200, 200], activation='relu',
+                                    n_latent_categories=0, layer_norm=True, beta=0.01)
+        d_z = self.rssm_modules[0].d_z_smpl
+        d_goal_embedding = 50
+        self.goal_embedder = torch.nn.Sequential(lwa(lws=[d_z, 200, 200, 200, d_goal_embedding], activation='relu',
+                                                     layer_norm=True, name='goal_embedding'))
 
     @property
     def current_device(self):
@@ -191,6 +194,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                   n_steps: int = -1,
                   respect_mask: bool = True,
                   window_size: int | None = None,
+                  sample_action_autoencoder: bool = False,
                   **kwargs):
         assert level is not None
 
@@ -220,7 +224,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                                                    window_size=window_size).detach()
         if a is not None:
             simulated_ground_truth['a'] = flt['a'](stack_if_list(a[:n_steps]), mask=mask,
-                                                   window_size=window_size).detach()
+                                                   window_size=window_size, sample=sample_action_autoencoder).detach()
         if r is not None:
             simulated_ground_truth['r'] = flt['r'](stack_if_list(r[:n_steps]), mask=mask,
                                                    window_size=window_size).detach()
@@ -261,7 +265,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         for l in range(1, self.levels):
             filtered_trajectory = self.filter_up(o=memory[l - 1]['s_embedding'], a=targets[l - 1]['a'],
                                                  r=targets[l - 1]['r'], terminal=targets[l - 1]['terminal'],
-                                                 mask=targets[l - 1]['mask'], level=l, respect_mask=True)
+                                                 mask=targets[l - 1]['mask'], level=l, respect_mask=True,
+                                                 sample_action_autoencoder=True)
             # first time step of trajectory is always a zero action, terminal, reward and only an observation to
             # ground the model since there is no way to decide for an action before getting the first observation
             # filtered_trajectory['a'][0] = 0
@@ -278,6 +283,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         return memory, memory_ema, targets, model_state
 
     def pessimistic_loss(self, memory, targets, level):
+        rollout_lengths = [10, 5]
         start_state, start_state_mask = filter_mem_state_seq_to_batch(memory[level], targets[level]['mask'])
         start_state = rssm_detach_state(*start_state)
         rma, _ = self.r_max_agents[level]
@@ -287,7 +293,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         # do rollout from ground truth states, freeze agent parameters as we want to only update the model
         with FreezeParameters([rma]):
             current_state = start_state
-            for t in range(10):
+            for t in range(rollout_lengths[level]):
                 agent_o = rma.o_from_state(current_state)
                 _, a = rma(agent_o, sample=True)
                 current_state = world(a=a, last_state=current_state, use_posterior=False)
@@ -309,35 +315,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             pessimistic_loss = self.pessimism_coeff * masked_mean(pessimistic_loss, mask[:-1])
             # pessimistic_loss = 0.001 * masked_mean(v, mask)
         return pessimistic_loss
-
-    def agent_model_exploration(self,
-                                model_predictions: List[Dict[str, List[torch.Tensor]]],
-                                targets: List[Dict[str, torch.Tensor]],
-                                level: int):
-        # posterior start states for current level are in current level's predictions
-        # posterior start states for level below are in predictions one level below and just have to be filtered
-        start_state, start_state_mask = filter_mem_state_seq_to_batch(model_predictions[level],
-                                                                      targets[level]['terminal'])
-        start_state = rssm_detach_state(*start_state)
-        start_state_below = {k: torch.stack(v) for k, v in model_predictions[level - 1].items() if
-                             k in rssm_state_keys()}
-        # TODO: use masks here
-        # TODO: is that correct?
-        # TODO: the original start states are in the targets, we don't need to re-calculate them
-        start_state_below = {k: self.upwards_filters[level]['o'](v) for k, v in start_state_below.items()}
-        start_state_below = {k: list(v.unbind(0)) for k, v in start_state_below.items()}  # need lists
-        start_state_below, _ = filter_mem_state_seq_to_batch(start_state_below,
-                                                             model_predictions[level - 1]['terminal'])
-        start_state_below = rssm_detach_state(*start_state_below)
-
-        mem, mem_other, mem_targets, mem_below, state = self.forward_dynamic_action_autoenc(start_state,
-                                                                                            start_state_below,
-                                                                                            level=level, n_steps=10,
-                                                                                            sample_output=True,
-                                                                                            reconstruct=True,
-                                                                                            sample_state=True)
-
-        return mem, mem_targets, mem_below
 
     def _train_step(self,
                     training_data: Dict[str, torch.Tensor],
@@ -446,8 +423,14 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             loss_level = self.rssm_loss(pred[level], pred_ema[level], targets[level], targets[level]['mask'],
                                         self.kl_betas[level], self.kl_reg_betas[level], level)
 
-            # pessimistic_loss = self.pessimistic_loss(pred, targets, level)
-            # loss_level['total_pessimistic_loss'] = pessimistic_loss
+            pessimistic_loss = self.pessimistic_loss(pred, targets, level)
+            loss_level['total_pessimistic_loss'] = pessimistic_loss
+
+            # markov_loss = self.markovianity_loss(targets[level], level=level, delta_max=5)#len(targets[level]['o']))
+            # loss_level.update(markov_loss)
+
+            #markov_loss = self.markov_goal_embedding(targets[level], level=level, delta_max=5)
+            #loss_level.update(markov_loss)
 
             if level == 0:
                 s_embeddings = torch.stack(pred[level]['s_embedding']).detach()
@@ -472,6 +455,144 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 losses['total'] += v
 
         return losses, pred, targets
+
+    def markovianity_loss(self,
+                          targets: Dict[str, torch.Tensor],
+                          level: int,
+                          delta_max: int,
+                          delta_min: int = 2):
+        assert delta_max > delta_min, f'delta_max expected to be larger than delta_min'
+        assert delta_max <= len(targets['o']), f'delta_max can\'t be larger than available time steps'
+
+        d_time, d_batch = targets['a'].shape[:2]
+        model = self.rssm_modules[level]
+
+        # Get time windows from training data. Iterate over all time steps and cut out multiple subtrajectories of
+        # varying length that end in that time step. Note that the windows heavily overlap, but that's ok.
+        subtrajectories = []
+        for delta in range(delta_min, delta_max):
+            subtraj_current_delta = []
+            for t in reversed(range(delta, d_time)):
+                subtraj = {k: v[t - delta:t] for k, v in targets.items()}
+                subtraj_current_delta.append(subtraj)
+            # transform list of time window dicts to one large dict and concatenate at batch dimension
+            subtraj_current_delta = list_of_dicts_to_dict_of_lists(subtraj_current_delta)
+            subtraj_current_delta = {k: torch.concat(v, dim=1) for k, v in subtraj_current_delta.items()}
+            subtrajectories.append(subtraj_current_delta)
+        # Each element in subtrajectories is a batch of length <= delta_max that contains one subtrajectory for each
+        # batch item and time step except the first few time steps, as here the possible length for the subtrajectories
+        # is capped.
+
+        # produce rollouts and store final destination state for comparison
+        predictions = []
+        for batch in subtrajectories:
+            o = model.o_encoder(batch['o'])
+            a = batch['a']
+            states = model.scan(a=a, o_enc=o, start_state=None, posterior_steps=a.shape[0], sample_state=True)
+            # keep only last time step's s_embedding
+            final_state = states[-1]
+            s_embed = final_state[-1]
+            predictions.append(s_embed)
+        # for batches with smaller delta, more time steps were added to the batch as we could take them from closer to
+        # the trajectory start. Get rid of those for now for simplicity.
+        # cutoff = len(predictions[-1])  # choose batch with largest time window
+        # predictions = [pred[:cutoff] for pred in predictions]
+
+        # Each element in predictions is the final s_embedding of a subtrajectory rollout of some length. The rollout
+        # spans all possible time steps of the original trajectories in targets, starting with the last one to the
+        # earliest time step possible. Thue, by construction the batch index and end state stays the same over all the
+        # various rollouts in predictions except that shorter rollouts can be performed for earlier time
+        # steps of the trajectories. We can compute the similarity loss in a straightforward manner. Use expensive n^2
+        # comparison for now.
+        sim_loss = list(combinations(predictions, 2))  # for some reason, we need to explicitly make a list here
+        # In case we compare two rollouts where one subtrajectory was shorter, it covers more states from the
+        # beginning of the input trajectories. Here, truncate the states we have no comparison partner for.
+        sim_loss = [(a[:min(len(a), len(b))], b[:min(len(a), len(b))]) for a, b in sim_loss]
+        # compute MSE for each pair of rollouts
+        sim_loss = [torch.mean((pair[0] - pair[1]) ** 2) for pair in sim_loss]
+        sim_loss = torch.stack(sim_loss).mean()
+
+        # contrastive term that encourages the model to increase the difference of adjacent states, irrespective
+        # of the amount of time steps that came before them
+        contr_loss = [torch.mean((pred[:-1] - pred[1:]) ** 2) for pred in predictions]
+        contr_loss = -torch.stack(contr_loss).mean()
+
+        # clamp contrastive loss term at [-1.0, inf] to prevent it from destabilizing learning
+        total_markov_loss = sim_loss + torch.maximum(contr_loss, torch.tensor(-1.0).to(contr_loss))
+
+        return {'total_markov_loss': total_markov_loss, 'similarity_markov_loss': sim_loss,
+                'contrastive_markov_loss': contr_loss}
+
+    def markov_goal_embedding(self,
+                              targets: Dict[str, torch.Tensor],
+                              level: int,
+                              delta_max: int,
+                              delta_min: int = 2):
+        assert delta_max > delta_min, f'delta_max expected to be larger than delta_min'
+        assert delta_max <= len(targets['o']), f'delta_max can\'t be larger than available time steps'
+
+        d_time, d_batch = targets['a'].shape[:2]
+        model = self.rssm_modules[level]
+
+        # Get time windows from training data. Iterate over all time steps and cut out multiple subtrajectories of
+        # varying length that end in that time step. Note that the windows heavily overlap, but that's ok.
+        subtrajectories = []
+        for delta in range(delta_min, delta_max):
+            subtraj_current_delta = []
+            for t in reversed(range(delta, d_time)):
+                subtraj = {k: v[t - delta:t] for k, v in targets.items()}
+                subtraj_current_delta.append(subtraj)
+            # transform list of time window dicts to one large dict and concatenate at batch dimension
+            subtraj_current_delta = list_of_dicts_to_dict_of_lists(subtraj_current_delta)
+            subtraj_current_delta = {k: torch.concat(v, dim=1) for k, v in subtraj_current_delta.items()}
+            subtrajectories.append(subtraj_current_delta)
+        # Each element in subtrajectories is a batch of length <= delta_max that contains one subtrajectory for each
+        # batch item and time step except the first few time steps, as here the possible length for the subtrajectories
+        # is capped.
+
+        # produce rollouts and store final destination state for comparison
+        predictions = []
+        for batch in subtrajectories:
+            o = model.o_encoder(batch['o'])
+            a = batch['a']
+            states = model.scan(a=a, o_enc=o, start_state=None, posterior_steps=a.shape[0], sample_state=True)
+            # keep only last time step's s_repr
+            final_state = states[-1]
+            s_repr = final_state[-1]
+            # make sure we don't modify weights of the RSSM but only the goal embedder
+            s_repr = s_repr.detach()
+            # use the goal embedder to produce a goal embedding for the last time step's state
+            s_embedding = self.goal_embedder(s_repr)
+            predictions.append(s_embedding)
+        # for batches with smaller delta, more time steps were added to the batch as we could take them from closer to
+        # the trajectory start. Get rid of those for now for simplicity.
+        # cutoff = len(predictions[-1])  # choose batch with largest time window
+        # predictions = [pred[:cutoff] for pred in predictions]
+
+        # Each element in predictions is the final s_embedding of a subtrajectory rollout of some length. The rollout
+        # spans all possible time steps of the original trajectories in targets, starting with the last one to the
+        # earliest time step possible. Thue, by construction the batch index and end state stays the same over all the
+        # various rollouts in predictions except that shorter rollouts can be performed for earlier time
+        # steps of the trajectories. We can compute the similarity loss in a straightforward manner. Use expensive n^2
+        # comparison for now.
+        sim_loss = list(combinations(predictions, 2))  # for some reason, we need to explicitly make a list here
+        # In case we compare two rollouts where one subtrajectory was shorter, it covers more states from the
+        # beginning of the input trajectories. Here, truncate the states we have no comparison partner for.
+        sim_loss = [(a[:min(len(a), len(b))], b[:min(len(a), len(b))]) for a, b in sim_loss]
+        # compute MSE for each pair of rollouts
+        sim_loss = [torch.mean((pair[0] - pair[1]) ** 2) for pair in sim_loss]
+        sim_loss = torch.stack(sim_loss).mean()
+
+        # contrastive term that encourages the model to increase the difference of adjacent states, irrespective
+        # of the amount of time steps that came before them
+        contr_loss = [torch.mean((pred[:-1] - pred[1:]) ** 2) for pred in predictions]
+        contr_loss = -torch.stack(contr_loss).mean()
+
+        # clamp contrastive loss term at [-1.0, inf] to prevent it from destabilizing learning
+        total_markov_loss = sim_loss + torch.maximum(contr_loss, torch.tensor(-1.0).to(contr_loss))
+
+        return {'total_markov_loss': total_markov_loss, 'similarity_markov_loss': sim_loss,
+                'contrastive_markov_loss': contr_loss}
 
     def maybe_sample_warmup_steps(self,
                                   training_data: Dict[str, torch.Tensor],
@@ -524,9 +645,9 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         o_dist = rssm_cell.o_decoder.dist(torch.stack(pred['o_dist']))
         r_dist = rssm_cell.r_decoder.dist(torch.stack(pred['r_dist']))
         term_dist = rssm_cell.term_decoder.dist(torch.stack(pred['terminal_dist']))
-        # rec_o = self._neg_log_prob(o_dist, targets['o'], valid)
-        rec_o = self._mse(o_dist.base_dist.loc, targets['o'],
-                          valid)  # rllib and official dreamer code use MSE for obs loss
+        rec_o = self._neg_log_prob(o_dist, targets['o'], valid)
+        # rec_o = self._mse(o_dist.base_dist.loc, targets['o'],
+        #                  valid)  # rllib and official dreamer code use MSE for obs loss
         rec_r = self._neg_log_prob(r_dist, targets['r'], valid)
         rec_term = self._neg_log_prob(term_dist, targets['terminal'], valid)
 

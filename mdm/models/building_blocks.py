@@ -892,10 +892,11 @@ class AutoencodingUpwardsFilter(UpwardsFilter):
                 x: torch.Tensor,
                 mask: Optional[torch.Tensor] = None,
                 context: Optional[torch.Tensor] = None,
-                window_size: Optional[int] = None) -> torch.Tensor:
+                window_size: Optional[int] = None,
+                sample: bool = False) -> torch.Tensor:
         assert window_size in (self.window_size, None), 'Dynamic window size not supported by this class'
         x_perm = self._preproc_enc(x, mask)
-        _, x_enc = self.encoder(x_perm, sample=False)
+        _, x_enc = self.encoder(x_perm, sample=sample)
         return x_enc
 
     def eval_step(self,
@@ -1102,7 +1103,8 @@ class IdentityUpwardsFilter(UpwardsFilter):
                 x: torch.Tensor,
                 mask: torch.Tensor | None = None,
                 context: torch.Tensor | None = None,
-                window_size: int | None = None) -> torch.Tensor:
+                window_size: int | None = None,
+                **kwargs) -> torch.Tensor:
         return x
 
 

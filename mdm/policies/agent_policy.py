@@ -145,7 +145,7 @@ class HierarchicalLatentAgentPolicy(Policy):
         assert len(use_slow_world_model) == 1, "all agents should either use the slow world model or the fast one"
         assert len(o_key) == 1, "all agents should use the same observation key"
         self._use_ema_modules = use_slow_world_model.pop()
-        self.sample_world_model = False
+        self.sample_world_model = True
 
         self.reset()
 
@@ -201,7 +201,8 @@ class HierarchicalLatentAgentPolicy(Policy):
                                                  r=self.env_data_below_cache[i_lvl]['r'],
                                                  terminal=self.env_data_below_cache[i_lvl]['terminal'],
                                                  level=i_lvl, n_steps=n_steps,
-                                                 respect_mask=respect_mask)
+                                                 respect_mask=respect_mask,
+                                                 sample_action_autoencoder=False)
 
             # remove data used for this update step
             # self.env_data_below_cache[i_lvl]['o'] = self.env_data_below_cache[i_lvl]['o'][n_steps:]
