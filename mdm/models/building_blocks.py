@@ -895,7 +895,7 @@ class AutoencodingUpwardsFilter(UpwardsFilter):
                 window_size: Optional[int] = None) -> torch.Tensor:
         assert window_size in (self.window_size, None), 'Dynamic window size not supported by this class'
         x_perm = self._preproc_enc(x, mask)
-        _, x_enc = self.encoder(x_perm, sample=True)
+        _, x_enc = self.encoder(x_perm, sample=False)
         return x_enc
 
     def eval_step(self,
@@ -909,7 +909,7 @@ class AutoencodingUpwardsFilter(UpwardsFilter):
         x_perm = self._preproc_enc(x, mask)
         # encoder expects 2D x of shape (T_chunk, D) i.e. T_chunk became new data dimension
         x_enc_dist_params, x_enc = self.encoder(x_perm, sample=True)
-        x_rec_dist_params, x_rec = self.decoder(x_enc, sample=True)
+        x_rec_dist_params, x_rec = self.decoder(x_enc, sample=False)  # treat decoder as deterministic for now
 
         """
         # NOTE: this seems to consistently lead to worse reconstruction performance compared to MSE recon loss below
