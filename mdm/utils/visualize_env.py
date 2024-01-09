@@ -19,7 +19,8 @@ def visualize_env(env: gym.Env, canvas: plt.Figure | plt.Axes, **kwargs):
     elif env_class_is(env, Nav2dEnv):
         plot_nav2d_env(env=env, canvas=canvas, **kwargs)
 
-#def draw_timestep(canvas: plt.Axes, x: float, y:float, i_t: int, size: float = 1, fontweight: int = 300):
+
+# def draw_timestep(canvas: plt.Axes, x: float, y:float, i_t: int, size: float = 1, fontweight: int = 300):
 #    canvas.add_patch(Ellipse((x, y), width=0.05 * size, height=0.05 * size, fill=None))
 #    canvas.text(x, y, f'{t + 1}', c=c,
 #                horizontalalignment='center', verticalalignment='center_baseline', fontweight=fontweight)
@@ -85,6 +86,7 @@ def plot_nav2d_env(env: gym.Env,
                    canvas: plt.Axes,
                    observations: np.ndarray = None,
                    goal_observations: np.ndarray = None,
+                   rewards: np.ndarray = None,
                    n_trajs: int = 1):
     assert env_class_is(env, Nav2dEnv)
 
@@ -96,6 +98,7 @@ def plot_nav2d_env(env: gym.Env,
     # plot individual trajectories
     prop_cycle = plt.rcParams['axes.prop_cycle']
     colors = prop_cycle.by_key()['color']
+    zo = Counter()
     if observations is not None:
         observations = observations[:, :n_trajs]
         for i_traj in range(observations.shape[1]):
@@ -104,22 +107,44 @@ def plot_nav2d_env(env: gym.Env,
             for t in range(observations.shape[0]):
                 fontweight = 900 if t == 0 else 300
                 x, y = observations[t, i_traj, :2]
-                border = Ellipse((x, y), width=0.05, height=0.05, fill=True, color='white', zorder=i_traj+t*0.01)
-                canvas.add_patch(border)
-                border = Ellipse((x, y), width=0.05, height=0.05, fill=False, color=c, zorder=i_traj+(t+0.25)*0.01)
-                canvas.add_patch(border)
+
+                # draw step reward if available
+                if rewards is not None:
+                    reward_rect = Rectangle((x + 0.01, y + 0.01), 0.075, 0.04, fill=True, facecolor=c, edgecolor=c,
+                                            zorder=zo())
+                    canvas.add_patch(reward_rect)
+                    canvas.text(x + 0.05, y + 0.028, f'{rewards[t, i_traj]:1.2f}', c='white',
+                                horizontalalignment='center', verticalalignment='center_baseline',
+                                fontweight=800, fontsize='xx-small', zorder=zo())
+
+                # draw time step
+                step_dot = Ellipse((x, y), width=0.05, height=0.05, fill=True, facecolor='white', edgecolor=c,
+                                   zorder=zo())
+                canvas.add_patch(step_dot)
                 canvas.text(x, y, f'{t + 1}', c=c, horizontalalignment='center', verticalalignment='center_baseline',
-                            fontweight=fontweight, fontsize='small', zorder=i_traj+(t+0.5)*0.01)
+                            fontweight=fontweight, fontsize='small', zorder=zo())
+
             # plot reward location for completeness
-            reward_location = observations[0, i_traj, 2:4]
-            canvas.scatter(reward_location[0], reward_location[1], marker='x', c=c, s=50, zorder=i_traj+(t+0.75)*0.01)
+            reward_locations = observations[:, i_traj, 2:4]
+            canvas.scatter(reward_locations[:, 0], reward_locations[:, 1], marker='x', c=c, s=50, zorder=zo())
     if goal_observations is not None:
         goal_observations = goal_observations[:, :n_trajs]
         for i_traj in range(goal_observations.shape[1]):
             c = colors[i_traj % len(colors)]
             for t in range(goal_observations.shape[0]):
                 x, y = goal_observations[t, i_traj, :2]
-                canvas.scatter(x, y, marker='h', c=c, s=200, zorder=n_trajs+t*0.01)
+                canvas.scatter(x, y, marker='h', c=c, s=200, zorder=zo())
                 canvas.text(x, y, f'{t + 1}', c='white', horizontalalignment='center',
-                            verticalalignment='center_baseline', fontweight=900, fontsize='medium',
-                            zorder=n_trajs+(t+0.5)*0.01)
+                            verticalalignment='center_baseline', fontweight=900, fontsize='medium', zorder=zo())
+
+
+class Counter:
+
+    def __init__(self, start=0, increment=1):
+        self.current = start
+        self.increment = increment
+
+    def __call__(self, *args, **kwargs):
+        retval = self.current
+        self.current += self.increment
+        return retval
