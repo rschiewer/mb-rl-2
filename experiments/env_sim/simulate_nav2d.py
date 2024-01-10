@@ -13,7 +13,7 @@ from mdm.utils.utils import load_yaml, here, prepare_env, load_model_params, pre
 
 
 def main():
-    run_id = 'MBRL-5517'
+    run_id = 'MBRL-5522'
     n_trajs_to_vis = 1
     init_steps = 5
     sample_state = True

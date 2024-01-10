@@ -1,9 +1,12 @@
+import colorsys
+
 import numpy as np
 import gymnasium as gym
 from gym_nav2d.envs import Nav2dEnv
 from gymnasium_robotics.envs.maze.maze_v4 import MazeEnv
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, Ellipse
+from matplotlib.colors import to_rgb
 
 from mdm.utils.utils import env_class_is, get_env_instance
 
@@ -87,6 +90,7 @@ def plot_nav2d_env(env: gym.Env,
                    observations: np.ndarray = None,
                    goal_observations: np.ndarray = None,
                    rewards: np.ndarray = None,
+                   terminals: np.array = None,
                    n_trajs: int = 1):
     assert env_class_is(env, Nav2dEnv)
 
@@ -101,12 +105,28 @@ def plot_nav2d_env(env: gym.Env,
     zo = Counter()
     if observations is not None:
         observations = observations[:, :n_trajs]
+
+        if terminals is not None:
+            terminals = terminals[:, :n_trajs]
+            saturation = 1 - np.cumsum(terminals, axis=0)
+            saturation = np.clip(saturation, 0.1, 1.0)
+        else:
+            saturation = np.ones(observations.shape[:2], dtype=np.float32)
+
+        if rewards is not None:
+            rewards = rewards[:, :n_trajs]
+
         for i_traj in range(observations.shape[1]):
             c = colors[i_traj % len(colors)]
             # plot individual time steps
             for t in range(observations.shape[0]):
                 fontweight = 900 if t == 0 else 300
                 x, y = observations[t, i_traj, :2]
+
+                # make terminal time steps desaturated
+                c_rgb = to_rgb(c)
+                c_hsv = colorsys.rgb_to_hsv(*c_rgb)
+                c = colorsys.hsv_to_rgb(c_hsv[0], c_hsv[1] * saturation[t, i_traj], c_hsv[2])
 
                 # draw step reward if available
                 if rewards is not None:

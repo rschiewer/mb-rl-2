@@ -48,9 +48,9 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
         # actor_params = _new_actor_params
 
         if cfg['trainer']['subtrajectory_len'] > 0:
-            # model_batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
-            # model_batch = valid_subtrajectories_unbiased(batch, 15)
             model_batch = valid_subtrajectories_2(batch, cfg['trainer']['subtrajectory_len'])
+            # model_batch = valid_subtrajectories_unbiased(batch, 15)
+            #model_batch = valid_subtrajectories_2(batch, cfg['trainer']['subtrajectory_len'])
             # model_batch = valid_subtrajectories_2(batch, cfg['trainer']['subtrajectory_len'])
         else:
             model_batch = batch
@@ -123,6 +123,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                     train_gsa(model, level, pred, targets, eval_env, cfg, i_step, logger, sample_agents, use_her=False)
                     #train_goal_seeking_agent_one_step(model, level, pred, targets, eval_env, cfg, i_step, logger,
                     #                                 sample_agents)
+                    pass
 
                 if level > 0:
                     pass
@@ -149,13 +150,15 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 batch = to_tensors(trajs_orig, model.device)
                 batch = prepare_data(batch)
                 if cfg['trainer']['subtrajectory_len'] > 0:
-                    batch = valid_subtrajectories_2(batch, cfg['trainer']['subtrajectory_len'])
+                    batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
                 eval_steps = [-1] + cfg['trainer']['model_train_steps'][1:]
                 eval_losses, pred, targets = model.eval_step(batch, model_steps=eval_steps, sample_state=False,
                                                              sample_output=False,
                                                              force_warmup=[-1 for _ in range(model.levels)])
                 logger.log(to_np(eval_losses), Scope.TEST(), i_step)
-                log_prediction_error_plot(batch, cfg, i_step, logger, model)
+
+                if i_step % cfg['trainer']['plot_interval'] == 0:
+                    log_prediction_error_plot(batch, cfg, i_step, logger, model)
 
                 # flat agent
                 eval_mem_flat = []
@@ -187,8 +190,28 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                     # probe L0 goal seeking agent
                     # nav2d_gsa_plot(cfg, eval_env, eval_steps, i_step, logger, model, train_driver)
 
-                if env_class_is(eval_env, Nav2dEnv):
+                if env_class_is(eval_env, Nav2dEnv) and i_step % cfg['trainer']['plot_interval'] == 0:
                     latent_state_pca_plot(model, eval_env, eval_steps, i_step, logger)
+
+                    # plot samples from goal autoencoder prior
+                    g_sampled = model.goal_autoencoder.gen_unconditionally(d_batch=256, device=batch['o'].device)
+                    g_o_sampled = model.rssm_modules[0].decode(g_sampled, sample=False, reconstruct_observation=True)['o']
+                    g_o_sampled = numpyfy(g_o_sampled)
+                    with TempFigure(figsize=(10, 4)) as fig:
+                        ax_0 = fig.add_subplot(1, 3, 1)
+                        ax_1 = fig.add_subplot(1, 3, 2)
+                        ax_2 = fig.add_subplot(1, 3, 3)
+                        ax_0.scatter(g_o_sampled[:, 0], g_o_sampled[:, 1], marker='.')
+                        ax_1.scatter(g_o_sampled[:, 2], g_o_sampled[:, 3], marker='x')
+                        ax_2.plot(np.sqrt(np.sum((g_o_sampled[:, :2] - g_o_sampled[:, 2:4]) ** 2, axis=-1)), label='calc')
+                        ax_2.plot(g_o_sampled[:, -1], label='orig')
+
+                        ax_0.set_xlim([-1.1, 1.1])
+                        ax_0.set_ylim([-1.1, 1.1])
+                        ax_1.set_xlim([-1.1, 1.1])
+                        ax_1.set_ylim([-1.1, 1.1])
+                        plt.legend()
+                        logger.log_plot(fig, Scope.TRAIN() / f'goal_autoencoder_sampled', i_step)
 
                 """
                 if env_class_is(eval_env, Nav2dEnv):
@@ -624,30 +647,50 @@ def train_gsa(model, level, pred, targets, eval_env, cfg, i_step, logger, sample
     gsa, gsa_optimizers = model.goal_seeking_agents[level]
 
     # get start states from model rollout
-    state = {k: v for k, v in pred[level].items() if k in rssm_state_keys()}
+    state = {k: v[:-1] for k, v in pred[level].items() if k in rssm_state_keys()}
     # fold time into batch dimension, i.e. concatenate the different time steps along batch dimension
     state = {k: torch.concat(v, dim=0) for k, v in state.items()}
-    state_mask = torch.concat(targets[level]['mask'].unbind(0), dim=0)  # reshape should also work
+    state_mask = torch.concat(targets[level]['mask'].unbind(0)[:-1], dim=0)  # reshape should also work
 
     # sample random goals from model
-    d_batch = state['s_embedding'].shape[0]
-    device = state['s_embedding'].device
-    goal_sample = model.goal_autoencoder.gen_unconditionally(d_batch=d_batch, device=device)
-    goal_obs = model.rssm_modules[level].decode(goal_sample, sample=False, reconstruct_observation=True)['o']
+    #d_batch = state['s_embedding'].shape[0]
+    #device = state['s_embedding'].device
+    #goal_sample = model.goal_autoencoder.gen_unconditionally(d_batch=d_batch, device=device)
+    #goal_obs = model.rssm_modules[level].decode(goal_sample, sample=False, reconstruct_observation=True)['o']
+    # take last time step of trajectories as goals
+    #goal_state = {k: v[-1] for k, v in pred[level].items() if k in rssm_state_keys()}
+    #goal = goal_state['s_embedding']
 
-    # perform gsa seeking rollout
-    state = rssm_detach_state(**state)  # prevent gradients to flow into previous chunk
+    # we want last *valid* time step of trajectories as goals, use PickOneUpwardsFilter and masking for that
+    goal_s_embed = torch.stack(pred[level]['s_embedding'])
+    flt = PickOneUpwardsFilter(window_size=len(pred[level]['o']), offset=-1)
+    goal = flt(goal_s_embed, mask=targets[level]['mask'])
+    # PickOneUpwardsFilter retains time dimension of 1 at the front, remove it
+    goal = goal[0]
+    # copy goals for every time step
+    d_time = len(pred[level]['o'])
+    goal = goal.repeat(d_time - 1, 1)
+    # this makes the goal sample more noisy and thus adds diversity to the goals
+    #_, _, _, goal = model.goal_autoencoder(goal, sample=True)
+    goal = goal.detach()
+    goal_obs = model.rssm_modules[level].decode(goal, sample=False, reconstruct_observation=True)['o']
+
+    # perform gsa rollout
+    state = rssm_detach_state(**state)  # prevent gradients from flowing back through start states
     goal_simulation = gsa.act_in_sim(env_start_state=state, sim_env=model, n_steps=15,
-                                     goal=goal_sample, sample_states=True,
+                                     goal=goal, sample_states=True,
                                      sample_actions=sample_agents, expl_noise=gsa.eps, reconstruct=True)
     loss = gsa.update_step(goal_simulation['agent'], first_step_mask=state_mask, **gsa_optimizers)
     logger.log(to_np(loss), Scope.TRAIN() / f'goal_seeking_agent/{level}/', i_step)
 
     if i_step % cfg['trainer']['plot_interval'] == 0:
         obs = numpyfy(goal_simulation['model']['o'])
+        rewards = numpyfy(goal_simulation['agent']['r'])
+        terminals = numpyfy(goal_simulation['agent']['terminal'])
         goal_obs = numpyfy(goal_obs)[None]  # need to add a time dimension to goal observations as well
         with TempFigure(figsize=(10, 10)) as fig:
-            visualize_env(eval_env, fig, observations=obs, goal_observations=goal_obs, n_trajs=2)
+            visualize_env(eval_env, fig, observations=obs, goal_observations=goal_obs, rewards=rewards,
+                          terminals=terminals, n_trajs=2)
             logger.log_plot(fig, Scope.TRAIN() / f'goal_seeking_agent/{level}/goal_seeking_train_performance', i_step)
 
 

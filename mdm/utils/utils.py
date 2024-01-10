@@ -1120,6 +1120,18 @@ def list_of_tuples_to_tuple_of_lists(list_of_tpls: List[Any]):
     return state
 
 
+def list_of_dicts_to_dict_of_lists(list_of_dicts: List[Dict[Any, Any]]):
+    ret = {k: [] for k in list_of_dicts[0].keys()}
+    for i,x in enumerate(list_of_dicts):
+        try:
+            for k, v in x.items():
+                ret[k].append(v)
+        except KeyError:
+            print(f'Unexpected key {k} in {i}-th list element found.',
+                  f'Expected keys are: {list_of_dicts[0].keys()}')
+    return ret
+
+
 def store_model_params(model, model_opt, path, logger, *, store_locally, upload):
     # make sure the save directory exists and infer final path for the file
     if not os.path.exists(path):

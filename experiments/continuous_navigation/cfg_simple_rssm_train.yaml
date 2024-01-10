@@ -13,7 +13,7 @@ repeat_terminal_state: False
 mdm:
    rssm_modules:
       # RSSM no. 1
-      -  d_z: 32
+      -  d_z: 20
          d_h: 300
          d_a: <infer>
          d_s_embedding: null
@@ -26,7 +26,7 @@ mdm:
          layer_norm: True
          activation: "relu"
          rnn_type: "gru"
-         latent_dist: "categorical"  #"normal" "categorical" "bernoulli"
+         latent_dist: "normal"  #"normal" "categorical" "bernoulli"
          n_latent_categories: 32
          o_encoder:
             class: "MLPEncoder"
@@ -54,7 +54,7 @@ mdm:
    links: [ ]  # Links for observation filters between RSSM levels
    upwards_filters: [ ]
    warmup_steps: [ 'rand' ]
-   kl_betas: [ 1.0 ] #[ 0.1 ]
+   kl_betas: [ 0.5 ] #[ 0.1 ]
    kl_reg_betas: [ 0.0 ]
    ema_regularization: 0.0
    ema_coeff: 0.95
@@ -68,11 +68,12 @@ optim:
    lr: 0.0002 #0.0002
 
 trainer:
-   n_train_steps: 10000
+   n_train_steps: 20000
    freeze_model: False
    stop_collect: False
-   eval_interval: 200
-   d_batch: 32
+   eval_interval: 100
+   plot_interval: 250
+   d_batch: 128
    subtrajectory_len: 50
    collect_envs: 20
    collect_interval: 50

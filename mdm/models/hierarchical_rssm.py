@@ -45,7 +45,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         assert len(upwards_filters) == len(rssm_modules) - 1
         for filters in upwards_filters:
             window_sizes = set([f.window_size for f in filters.values()])
-            assert len(window_sizes) == 1
+            assert len(window_sizes) == 1, f'All filters must have the same window size'
 
         lvl_k_link = 'o'  # only here to make the loop in eval_step() method work
         lvl_0_filters = {k: IdentityUpwardsFilter() for k in self._filter_names}
@@ -215,8 +215,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         if respect_mask:
             assert mask is not None
             assert torch.allclose(torch.round(mask), mask), 'Mask seems to contain values other than 1.0 and 0.0'
-        else:
-            mask = None
 
         simulated_ground_truth = {}
         if o is not None:
@@ -228,6 +226,10 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         if r is not None:
             simulated_ground_truth['r'] = flt['r'](stack_if_list(r[:n_steps]), mask=mask,
                                                    window_size=window_size).detach()
+            obs_diff = torch.mean((simulated_ground_truth['o'][:-1] - simulated_ground_truth['o'][1:]) ** 2, dim=-1,
+                                  keepdim=True)
+            simulated_ground_truth['r'][1:] += obs_diff
+
         if terminal is not None:
             simulated_ground_truth['terminal'] = flt['terminal'](stack_if_list(terminal[:n_steps]), mask=mask,
                                                                  window_size=window_size).detach()
@@ -265,7 +267,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         for l in range(1, self.levels):
             filtered_trajectory = self.filter_up(o=memory[l - 1]['s_embedding'], a=targets[l - 1]['a'],
                                                  r=targets[l - 1]['r'], terminal=targets[l - 1]['terminal'],
-                                                 mask=targets[l - 1]['mask'], level=l, respect_mask=True,
+                                                 mask=targets[l - 1]['mask'], level=l, respect_mask=False,
                                                  sample_action_autoencoder=True)
             # first time step of trajectory is always a zero action, terminal, reward and only an observation to
             # ground the model since there is no way to decide for an action before getting the first observation
@@ -429,8 +431,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             # markov_loss = self.markovianity_loss(targets[level], level=level, delta_max=5)#len(targets[level]['o']))
             # loss_level.update(markov_loss)
 
-            #markov_loss = self.markov_goal_embedding(targets[level], level=level, delta_max=5)
-            #loss_level.update(markov_loss)
+            # markov_loss = self.markov_goal_embedding(targets[level], level=level, delta_max=5)
+            # loss_level.update(markov_loss)
 
             if level == 0:
                 s_embeddings = torch.stack(pred[level]['s_embedding']).detach()

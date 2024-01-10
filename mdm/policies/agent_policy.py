@@ -119,6 +119,7 @@ class HierarchicalLatentAgentPolicy(Policy):
                  exploration_noise: float = 0.0,
                  stochastic: bool = False):
         super().__init__()
+        chunk_length_offset = 0
 
         self.model = model
         self.exploration_noise = exploration_noise
@@ -127,7 +128,8 @@ class HierarchicalLatentAgentPolicy(Policy):
         self.env_data_below_cache = [self._empty_cache() for _ in range(model.levels)]
         self.act_cache = [[] for _ in range(model.levels)]
         self.action_queue = []
-        self.next_state_update = model.strides
+        self.chunk_lengths = tuple([x + chunk_length_offset for x in model.strides])
+        self.next_state_update = list(self.chunk_lengths)
         self.level_active = [None for _ in range(model.levels)]
         self.flight_record = [{} for _ in range(model.levels)]
         self.action_history = [[] for _ in range(model.levels)]
@@ -157,7 +159,7 @@ class HierarchicalLatentAgentPolicy(Policy):
         self.grounded_env_states = [None for _ in self.model.rssm_modules]
         self.env_data_below_cache = [self._empty_cache() for _ in self.model.rssm_modules]
         self.act_cache = [[] for _ in self.model.rssm_modules]
-        self.next_state_update = self.model.strides
+        self.next_state_update = list(self.chunk_lengths)
         self.level_active = [False for _ in self.model.rssm_modules]
         self.flight_record = [{'z': [], 'o': [], 'a': [], 'r': [], 'terminal': [], 'time_step': [], 'z_post': []}
                               for _ in self.model.rssm_modules]
@@ -292,11 +294,11 @@ class HierarchicalLatentAgentPolicy(Policy):
             for i_lvl in reversed(range(0, i_highest)):
                 state = self.grounded_env_states[i_lvl]
                 agent = self.model.goal_seeking_agents[i_lvl][0]
-                n_steps = self.model.strides[i_lvl + 1]
+                n_steps = self.chunk_lengths[i_lvl + 1]
                 new_goals = []
                 for goal in goals_from_above:
                     simulation = agent.act_in_sim(env_start_state=state, sim_env=self.model, n_steps=n_steps, goal=goal,
-                                                  sample_actions=self.stochastic, expl_noise=0.05,
+                                                  sample_actions=self.stochastic, expl_noise=0.0,
                                                   sample_states=self.sample_world_model, reconstruct=i_lvl > 0)
                     # simulation['agent']['a'] = [torch.zeros_like(x) for x in simulation['agent']['a']]
                     state = simulation['model_state']

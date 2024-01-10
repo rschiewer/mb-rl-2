@@ -29,7 +29,7 @@ def main():
     parser.add_argument('-n_collect', type=int)
     args = parser.parse_args()
 
-    cfg = load_yaml(here() / 'cfg_simple_rssm_train.yaml')
+    cfg = load_yaml(here() / 'cfg_rssm_train.yaml')
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
     if args.d_batch:
@@ -140,6 +140,7 @@ def main():
         # train_mem.extend(collected_data_trajectories)
         GymEpisodeDriver(collect_env, det_policy).interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
         GymEpisodeDriver(collect_env, expl_policy).interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
+        #GymEpisodeDriver(collect_env, None).interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
         #GymEpisodeDriver(collect_env, expl_policy).interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
         #d.interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
         #d.interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)

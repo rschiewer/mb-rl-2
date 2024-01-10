@@ -1074,6 +1074,18 @@ def plot_grad_flow(named_parameters):
     plt.tight_layout()
 
 
+def check_tensor(x: torch.Tensor,
+                 neg_bound: float | None = None,
+                 pos_bound: float | None = None):
+    if torch.isnan(x).any():
+        raise ValueError(f'Found NAN values in tensor')
+    if torch.isinf(x).any():
+        raise ValueError(f'Found inf values in tensor')
+    if neg_bound is not None and torch.any(x < neg_bound):
+        raise ValueError(f'Found value smaller than {neg_bound} in tensor')
+    if pos_bound is not None and torch.any(x > pos_bound):
+        raise ValueError(f'Found value greater than {pos_bound} in tensor')
+
 class Moments(torch.nn.Module):
 
     def __init__(self, impl='mean_std', decay=0.99, max=1e8, eps=0.0, perclo=5, perchi=95):

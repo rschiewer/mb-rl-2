@@ -23,7 +23,7 @@ from mdm.models.rssm_cell import RSSMStateType, rssm_detach_state, rssm_add_labe
 from mdm.utils.torch_tools import layers_with_activation as lwa, SquashedNormal, RunningMeanStd
 from mdm.utils.torch_tools import (FuzzyDeviceMixin, compute_mask, detach_dist, stack_dists,
                                    concat_dists, TanhBijector, clip_but_pass_gradient, FreezeParameters,
-                                   plot_grad_flow, masked_mean, masked_var)
+                                   plot_grad_flow, masked_mean, masked_var, check_tensor)
 from mdm.utils.utils import fig_to_img, append_memory, numpyfy, extend_memory, list_of_tuples_to_tuple_of_lists
 from mdm.logging.logger import GlobalLogger, Scope, Logger
 
@@ -60,7 +60,7 @@ class ActorCriticAgent(torch.nn.Module):
         super().__init__()
 
         if goal_seeking:
-            d_o = 2 * d_o + 1
+            d_o = 2 * d_o
 
         self.level = level
         self.observation_type = observation_type
@@ -191,7 +191,7 @@ class ActorCriticAgent(torch.nn.Module):
 
             # repeat the goal over the time dimension to match the format in env_states
             if self.goal_seeking:
-                goal = goal.detach()  # goals come from upper level management and should not be changed by workers
+                #goal = goal.detach()  # goals come from upper level management and should not be changed by workers
                 # encode goal and observations for easier comparison
                 #_, goal_enc = obs_autoenc.encode(goal, sample=False)
                 #_, obs_enc = obs_autoenc.encode(s_embed_stacked, sample=False)
@@ -200,17 +200,33 @@ class ActorCriticAgent(torch.nn.Module):
                 #goal[:, :goal_enc.shape[-1]] = goal_enc
                 #s_embed_stacked = torch.zeros_like(s_embed_stacked)
                 #s_embed_stacked[:, :, :obs_enc.shape[-1]] = obs_enc
+
+                #goal = goal.detach()  # goals come from upper level management and should not be changed by workers
                 # repeat the same goal for each time step
-                #goal_tiled = torch.repeat_interleave(goal.unsqueeze(0), repeats=n_steps + 1, dim=0)
-                goal_tiled = goal.unsqueeze(0).expand(n_steps + 1, -1, -1)
-                agent_r = self.goal_similarity(s_embed_stacked, goal_tiled)
+                #goal_tiled = goal.unsqueeze(0).expand(n_steps + 1, -1, -1)
+                #agent_r = self.goal_similarity(s_embed_stacked, goal_tiled)
+                #agent_r = list(agent_r.unbind(0))
+                #agent_term = pred['terminal']
+                goal = world.decode(goal.detach(), sample=False, reconstruct_observation=True)['o']
+                goal_tiled = goal.unsqueeze(0).expand(n_steps + 1, -1, -1).clone()  # clone to be on the safe side for now
+                state_obs = torch.stack(env_memory['o'])
+                #goal[:, 2:] = 0
+                #state_obs[:, :, 2:] = 0
+                agent_r = self.goal_similarity(state_obs, goal_tiled)
                 agent_term = self.goal_terminal(agent_r)
 
                 agent_r = list(agent_r.unbind(0))
                 agent_term = list(agent_term.unbind(0))
+                #agent_term = [torch.zeros_like(t) for t in pred['terminal']]  # completely disable actual env term flag
+                pred['r'] = None
             else:
                 agent_r = pred['r']
                 agent_term = pred['terminal']
+
+            #if self.level > 0:
+            #    _, _, _, s_embed_rec = obs_autoenc(s_embed_stacked, sample=False)
+            #    novelty_loss = torch.mean((s_embed_stacked - s_embed_rec) ** 2, dim=-1, keepdim=True)
+            #    agent_r = [r_t + reconstr_loss_t for r_t, reconstr_loss_t in zip(agent_r, novelty_loss)]
 
             ema_a_dist_mock = [torch.zeros_like(x) for x in agent_act_dists]
             extend_memory(agent_memory, {'o': agent_obs, 'a': agent_acts, 'r': agent_r, 'terminal': agent_term,
@@ -254,7 +270,7 @@ class ActorCriticAgent(torch.nn.Module):
                 mu: torch.Tensor,
                 sigma: torch.Tensor):
         # sigma = torch.full_like(sigma, 0.1)
-        d = torch.distributions.Normal(loc=mu, scale=sigma)
+        #d = torch.distributions.Normal(loc=mu, scale=sigma)
         #d = torch.distributions.TransformedDistribution(d, [TanhBijector()])
         d = SquashedNormal(loc=mu, scale=sigma)
         # d = torch.distributions.Independent(d, 1)
@@ -327,7 +343,7 @@ class ActorCriticAgent(torch.nn.Module):
         a_log_prob = self._a_log_prob(a_dist, a.detach())
 
         if self.goal_seeking:
-            gamma = 1.0
+            gamma = 0.95
             lambda_ = 0.95
         else:
             gamma = 0.99
@@ -386,7 +402,7 @@ class ActorCriticAgent(torch.nn.Module):
         # lambda_returns = calc_returns_simple(r[:-1], terminal[:-1], bootstrap, 0.99)
 
         #if self.goal_seeking:
-        #    lambda_returns_actor = r[1:]# - torch.linalg.vector_norm(a[1:], dim=-1).unsqueeze(-1)
+        #    lambda_returns_actor = lambda_returns
         #else:
         ret_mean, ret_std = self.return_running_average(lambda_returns, mask_t1_to_H)  # update and return stats
         lambda_returns_actor = self.return_running_average.normalize(lambda_returns, ret_mean, ret_std)
@@ -642,21 +658,46 @@ class ActorCriticAgent(torch.nn.Module):
         #    return - torch.mean(torchd.kl_divergence(goal, o) + torchd.kl_divergence(o, goal), dim=-1, keepdim=True)
         # similarity = torch.pow(0.99, torch.mean(torch.abs(o - goal) ** 2, dim=-1, keepdim=True))
 
-        o_norm = torch.linalg.vector_norm(o, dim=-1, keepdim=True)
-        goal_norm = torch.linalg.vector_norm(goal, dim=-1, keepdim=True)
-        norm = torch.maximum(o_norm, goal_norm).detach()
-        similarity = torch.linalg.vecdot(goal / norm, o / norm, dim=-1).unsqueeze(-1)
+        #o_norm = torch.linalg.vector_norm(o, dim=-1, keepdim=True)
+        #goal_norm = torch.linalg.vector_norm(goal, dim=-1, keepdim=True)
+        #norm = torch.maximum(o_norm, goal_norm).detach()
+        #similarity = torch.linalg.vecdot(goal / norm, o / norm, dim=-1).unsqueeze(-1)
 
         #similarity = torch.where(similarity < 0.999, 0.0, 1.0)
 
-        #similarity = - torch.mean(torch.abs(o - goal), dim=-1, keepdim=True)
+        similarity = - torch.nn.functional.mse_loss(o, goal, reduction='none').mean(dim=-1, keepdim=True)
+        #similarity = - torch.mean(torch.sqrt((o - goal) ** 2), dim=-1, keepdim=True)
         #similarity = torch.where(similarity >= -0.0001, 1.0, 0.0)
+        check_tensor(similarity)
         return similarity
 
     @staticmethod
-    def goal_terminal(similarity: torch.Tensor):
-        #torch.where(similarity >= -0.0001, 1.0, 0.0)  # MSE
-        return torch.where(similarity > 0.99, 1.0, 0.0)  # SDP
+    def goal_terminal(agent_r: torch.Tensor):
+        # nav2d with varying goals
+        #term_zone_core_radius = 0.0005
+        #term_zone_perimeter_radius = 0.001
+
+        # nav2d with varying goals
+        term_zone_core_radius = 0.0005
+        term_zone_perimeter_radius = 0.001
+
+        # sigmoid is close to 1.0 at x=3.0 and close to 0.0 at x=-3.0
+        sig_min = -5.0
+        sig_max = 5.0
+        # transform reward so that
+        # * terminal ≈ 0.0 if distance >= term_zone_perimeter_radius
+        # * terminal > 0.0 if term_zone_core_radius <= distance <= term_zone_perimeter_radius
+        # * terminal ≈ 1.0 if distance <= term_zone_core_radius
+
+        offset = (term_zone_perimeter_radius + term_zone_core_radius) / 2
+        magnification = (sig_max - sig_min) / (term_zone_perimeter_radius - term_zone_core_radius)
+        agent_term = (agent_r + offset) * magnification
+        #agent_term = torch.clamp(agent_term, -3.0, 3.0)  # stabilize
+        agent_term = torch.sigmoid(agent_term)
+
+        check_tensor(agent_term, neg_bound=0.0, pos_bound=1.0)
+
+        return agent_term
 
     @torch.jit.export
     def o_from_state(self,
@@ -677,8 +718,7 @@ class ActorCriticAgent(torch.nn.Module):
                          goal: Optional[torch.Tensor] = None):
         o = self.o_from_state(step)
         if self.goal_seeking:
-            similarity = self.goal_similarity(o, goal)
-            return torch.concat([o, goal, similarity], dim=-1)
+            return torch.concat([o, goal], dim=-1)
         else:
             return o
 

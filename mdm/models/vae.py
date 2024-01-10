@@ -184,6 +184,7 @@ class VAE(torch.nn.Module):
     def eval_step(self,
                   x: torch.Tensor,
                   mask: torch.Tensor = None):
+        x = x.detach()
         z_dist_params, z_smpl, x_rec_dist_params, x_rec_smpl = self(x, sample=True)
 
         if self.output_dist is None:
