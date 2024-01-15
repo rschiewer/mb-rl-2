@@ -132,6 +132,7 @@ class HierarchicalLatentAgentPolicy(Policy):
         self.next_state_update = list(self.chunk_lengths)
         self.level_active = [None for _ in range(model.levels)]
         self.flight_record = [{} for _ in range(model.levels)]
+        self.planning_record = [{} for _ in range(model.levels)]
         self.action_history = [[] for _ in range(model.levels)]
         self.chunk_history = []
 
@@ -163,6 +164,8 @@ class HierarchicalLatentAgentPolicy(Policy):
         self.level_active = [False for _ in self.model.rssm_modules]
         self.flight_record = [{'z': [], 'o': [], 'a': [], 'r': [], 'terminal': [], 'time_step': [], 'z_post': []}
                               for _ in self.model.rssm_modules]
+        self.planning_record = [{'o': [], 'a': [], 'r': [], 'terminal': [], 'time_step': []}
+                                for _ in self.model.rssm_modules]
         self.action_queue = []
         self.chunk_history = []
         self.action_history = [[] for _ in self.model.rssm_modules]
@@ -281,6 +284,8 @@ class HierarchicalLatentAgentPolicy(Policy):
                                       sample_actions=self.stochastic, sample_states=self.sample_world_model,
                                       expl_noise=self.exploration_noise, reconstruct=i_highest > 0)
         a_agent = simulation['agent']['a'][1:]  # remove frst action from record as it's padding
+        model_sim = {k: v[1:] for k, v in simulation['model'].items()}  # remove first time step as it's the input
+        extend_memory(self.planning_record[i_highest], model_sim)
 
         assert len(a_agent) == 1
 
@@ -306,6 +311,9 @@ class HierarchicalLatentAgentPolicy(Policy):
                     self.act_cache[i_lvl] += a_agent
                     self.action_history[i_lvl] += a_agent
                     self.chunk_history.extend([chunk_id for _ in a_agent])
+                    # store planning results to record for later
+                    model_sim = {k: v[1:] for k, v in simulation['model'].items()}
+                    extend_memory(self.planning_record[i_lvl], model_sim)
                     if i_lvl > 0:
                         new_goals += simulation['model']['o'][1:]
                 goals_from_above = new_goals
@@ -410,6 +418,35 @@ class HierarchicalLatentAgentPolicy(Policy):
         if isinstance(env, CacheLastStepEnv):  # remove batch dimension if it's not a vector env
             action = action[0]
         return action.detach().cpu().numpy()
+
+
+def extract_plan(policy: HierarchicalLatentAgentPolicy):
+    model = policy.model
+    planning_record = policy.planning_record
+    flight_record = policy.flight_record
+
+    o = [[] for _ in policy.model.rssm_modules]
+    r = [[] for _ in policy.model.rssm_modules]
+    terminal = [[] for _ in policy.model.rssm_modules]
+
+    # lowest level has reconstructed ground truth data, take this first
+    env_o = torch.stack(flight_record[0]['o'])
+    env_r = torch.stack(flight_record[0]['r'])
+    env_terminal = torch.stack(flight_record[0]['terminal'])
+
+    for i_lvl, record in enumerate(planning_record):
+        o[i_lvl] = torch.stack(record['o'])
+        # decode goal to observation if we're at an higher level
+        if i_lvl > 0:
+            i_current_lvl = i_lvl
+            while i_current_lvl > 0:
+                o[i_lvl] = model.rssm_modules[i_current_lvl - 1].decode(o[i_lvl], sample=False,
+                                                                        reconstruct_observation=True)['o']
+                i_current_lvl -= 1
+        r[i_lvl] = torch.stack(record['r'])
+        terminal[i_lvl] = torch.stack(record['terminal'])
+
+    return [{'o': o_, 'r': r_, 'terminal': terminal_} for o_, r_, terminal_ in zip(o, r, terminal)]
 
 
 def extract_train_data(policy: HierarchicalLatentAgentPolicy,

@@ -1,6 +1,6 @@
 ---
 neptune_cfg: "../neptune_settings.yaml"
-env_name: "gym_nav2d:nav2dHard-v0" #"gym_nav2d:nav2dHard-v0" # "PointMaze_UMaze-v3"#"InvertedPendulum-v4" #"Ant-v4" #"PointMaze_UMaze_static-v3" #"InvertedPendulum-v4" #"dm_control/cheetah-run-v0"# "gym_nav2d:nav2dEasySparse-v0" #"HalfCheetah-v4"#"InvertedPendulum-v4" #"gym_nav2d:nav2dEasySparse-v0" #"gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-v0"
+env_name: "PointMaze_UMaze_static_far-v3" #"gym_nav2d:nav2dHard-v0" # "PointMaze_UMaze-v3"#"InvertedPendulum-v4" #"Ant-v4" #"PointMaze_UMaze_static-v3" #"InvertedPendulum-v4" #"dm_control/cheetah-run-v0"# "gym_nav2d:nav2dEasySparse-v0" #"HalfCheetah-v4"#"InvertedPendulum-v4" #"gym_nav2d:nav2dEasySparse-v0" #"gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-v0"
 prefill_memory: "random" #"offline-dataset" # "random", False
 prefill_episodes: 10
 train_samples: null #"nav2d_Easy_train.samples" #"nav2d_Easy_train.samples"
@@ -17,7 +17,7 @@ mdm:
          d_h: 300
          d_a: <infer>
          d_s_embedding: null
-         s_embedding_lws: [ 200, 200, 200 ]
+         s_embedding_lws: [ 200, 200 ]
          n_hidden_layers: 1
          hidden_dropout: 0.1
          epsilon: 0.1
@@ -30,7 +30,7 @@ mdm:
          n_latent_categories: 32
          o_encoder:
             class: "MLPEncoder"
-            d_x_encoded: 64
+            d_x_encoded: 100
             lws: [ 250, 250, 250 ]
             layer_norm: True
             activation: "relu"
@@ -54,7 +54,7 @@ mdm:
    links: [ ]  # Links for observation filters between RSSM levels
    upwards_filters: [ ]
    warmup_steps: [ 'rand' ]
-   kl_betas: [ 0.5 ] #[ 0.1 ]
+   kl_betas: [ 0.1 ] #[ 0.1 ]
    kl_reg_betas: [ 0.0 ]
    ema_regularization: 0.0
    ema_coeff: 0.95
@@ -73,7 +73,7 @@ trainer:
    stop_collect: False
    eval_interval: 100
    plot_interval: 250
-   d_batch: 128
+   d_batch: 256
    subtrajectory_len: 50
    collect_envs: 20
    collect_interval: 50
@@ -93,7 +93,7 @@ agents:
       -  observation_type: 's_embedding'
          eps_exploration_init: 0.9
          eps_exploration_coeff: 0.999
-         eps_exploration_min: 0.1
+         eps_exploration_min: 0.05
          act_entropy_exploration_coeff: 0.0003
          learn_act_entropy_exploration_coeff: False
          target_act_entropy: "auto"

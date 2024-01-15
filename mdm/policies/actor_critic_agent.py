@@ -487,6 +487,7 @@ class ActorCriticAgent(torch.nn.Module):
             mu_mean = masked_mean(mu[1:-1], mask_t1_to_Hm1)
             sigma_mean = masked_mean(sigma[1:-1], mask_t1_to_Hm1)
 
+        """
         if self.goal_seeking:
             opts = np.get_printoptions()
             np.set_printoptions(precision=3, linewidth=120, floatmode='fixed', legacy='1.13')
@@ -500,6 +501,7 @@ class ActorCriticAgent(torch.nn.Module):
             #print(Back.YELLOW, Fore.BLACK, terminal.detach().cpu().numpy().squeeze(), Style.RESET_ALL)
             #print(Back.RED, Fore.WHITE, r.detach().cpu().numpy().squeeze(), Style.RESET_ALL)
             np.set_printoptions(**opts)
+        """
 
         losses = {'total': loss,
                   'policy': policy_loss,
@@ -673,13 +675,16 @@ class ActorCriticAgent(torch.nn.Module):
 
     @staticmethod
     def goal_terminal(agent_r: torch.Tensor):
-        # nav2d with varying goals
+        # nav2d with varying reward positions
         #term_zone_core_radius = 0.0005
         #term_zone_perimeter_radius = 0.001
 
-        # nav2d with varying goals
-        term_zone_core_radius = 0.0005
-        term_zone_perimeter_radius = 0.001
+        # PointMaze_UMaze with varying reward positions
+        #term_zone_core_radius = 0.001
+        #term_zone_perimeter_radius = 0.003
+
+        term_zone_core_radius = 0.001
+        term_zone_perimeter_radius = 0.1
 
         # sigmoid is close to 1.0 at x=3.0 and close to 0.0 at x=-3.0
         sig_min = -5.0

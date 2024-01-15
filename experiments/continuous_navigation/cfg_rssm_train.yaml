@@ -1,6 +1,6 @@
 ---
 neptune_cfg: "../neptune_settings.yaml"
-env_name: "gym_nav2d:nav2dHard-v0" #"gym_nav2d:nav2dHard-v0" #"PointMaze_UMaze_static-v3" #"HalfCheetah-v4" #"PointMaze_UMaze-v3" #"InvertedPendulum-v4"# "gym_nav2d:nav2dEasySparse-v0" #"gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-v0"
+env_name: "PointMaze_UMaze_static_1-v3" #"gym_nav2d:nav2dHard-v0" #"PointMaze_UMaze_static-v3" #"HalfCheetah-v4" #"PointMaze_UMaze-v3" #"InvertedPendulum-v4"# "gym_nav2d:nav2dEasySparse-v0" #"gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-v0"
 prefill_memory: "random" #"offline-dataset" # "random", False
 prefill_episodes: 10
 train_samples: null #"nav2d_Easy_train.samples" #"nav2d_Easy_train.samples"
@@ -30,7 +30,7 @@ mdm:
          n_latent_categories: 16
          o_encoder:
             class: "MLPEncoder"
-            d_x_encoded: 64
+            d_x_encoded: 100
             lws: [ 250, 250, 250 ]
             layer_norm: True
             activation: "relu"
@@ -54,7 +54,7 @@ mdm:
       # RSSM no. 2
       -  d_z: 20
          d_h: 300
-         d_a: 8
+         d_a: 12
          d_s_embedding: null
          s_embedding_lws: [ 200, 200 ]
          n_hidden_layers: 1
@@ -68,10 +68,10 @@ mdm:
          latent_dist: "normal"  #"normal" "categorical" "bernoulli"
          o_encoder:
             class: "MLPEncoder"
+            d_x_encoded: 200
             lws: [ 250, 250, 250 ]
             layer_norm: True
             activation: "relu"
-            d_x_encoded: 32
          o_decoder:
             class: "GaussianDecoder"
             lws: [ 250, 250, 250 ]
@@ -94,7 +94,7 @@ mdm:
       # Connection between RSSM1 and RSSM2
       -  o:
             class: "PickOneUpwardsFilter"
-            window_size: 4
+            window_size: 8
             offset: -1
          #a:
          #   class: "LearnableUpwardsFilter"
@@ -105,13 +105,13 @@ mdm:
          #   model_type: "det_tanh"
          r:
             class: "AvgUpwardsFilter"  # sum makes resulting reward invariant w.r.t. chunk size for incomplete chunks
-            window_size: 4
+            window_size: 8
          terminal:
             class: "MaxUpwardsFilter"
-            window_size: 4
+            window_size: 8
          mask:
             class: "MinUpwardsFilter"
-            window_size: 4
+            window_size: 8
    warmup_steps: [ 'rand', 'rand' ]
    kl_betas: [ 0.1, 0.1 ]
    kl_reg_betas: [ 0.0, 0.0 ]

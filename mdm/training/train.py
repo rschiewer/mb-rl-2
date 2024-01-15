@@ -136,7 +136,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
         # assert np.isclose((p0 - p1).detach().cpu().numpy(), 0), 'Model parameters changed during agent training!'
 
         if i_step % cfg['trainer']['collect_interval'] == 0 and i_step < stop_collect:
-            collect_fn(explore=True)
+            collect_fn(explore=True, i_step=i_step)
 
         # eval =========================================================================================================
         if i_step % cfg['trainer']['eval_interval'] == 0:
@@ -652,15 +652,14 @@ def train_gsa(model, level, pred, targets, eval_env, cfg, i_step, logger, sample
     state = {k: torch.concat(v, dim=0) for k, v in state.items()}
     state_mask = torch.concat(targets[level]['mask'].unbind(0)[:-1], dim=0)  # reshape should also work
 
+    """
     # sample random goals from model
-    #d_batch = state['s_embedding'].shape[0]
-    #device = state['s_embedding'].device
-    #goal_sample = model.goal_autoencoder.gen_unconditionally(d_batch=d_batch, device=device)
-    #goal_obs = model.rssm_modules[level].decode(goal_sample, sample=False, reconstruct_observation=True)['o']
-    # take last time step of trajectories as goals
-    #goal_state = {k: v[-1] for k, v in pred[level].items() if k in rssm_state_keys()}
-    #goal = goal_state['s_embedding']
+    d_batch = state['s_embedding'].shape[0]
+    device = state['s_embedding'].device
+    goal = model.goal_autoencoder.gen_unconditionally(d_batch=d_batch, device=device)
+    goal_obs = model.rssm_modules[level].decode(goal, sample=False, reconstruct_observation=True)['o']
 
+    """
     # we want last *valid* time step of trajectories as goals, use PickOneUpwardsFilter and masking for that
     goal_s_embed = torch.stack(pred[level]['s_embedding'])
     flt = PickOneUpwardsFilter(window_size=len(pred[level]['o']), offset=-1)

@@ -32,6 +32,9 @@ def plot_maze_env(env: gym.Env,
                   canvas: plt.Axes,
                   observations: np.ndarray = None,
                   goal_observations: np.ndarray = None,
+                  rewards: np.ndarray = None,
+                  terminals: np.ndarray = None,
+                  draw_background: bool = True,
                   n_trajs: int = 1):
     assert env_class_is(env, MazeEnv)
 
@@ -43,18 +46,21 @@ def plot_maze_env(env: gym.Env,
     width = instance.maze.map_width
     start_locations = instance.maze.unique_reset_locations
     goal_locations = instance.maze.unique_goal_locations
-    maze_map = instance.maze.maze_map
-    # remove maze_map start and goal locations
-    for row in maze_map:
-        for x in range(len(row)):
-            if type(row[x]) is str:
-                row[x] = 0
-    maze_map = np.array(maze_map)
-    left = - width / 2
-    right = width / 2
-    bottom = - length / 2
-    top = length / 2
-    canvas.imshow(maze_map, extent=(left, right, bottom, top))
+
+    if draw_background:
+        maze_map = instance.maze.maze_map
+        # remove maze_map start and goal locations
+        for row in maze_map:
+            for x in range(len(row)):
+                if type(row[x]) is str:
+                    row[x] = 0
+        maze_map = np.array(maze_map)
+        left = - width / 2
+        right = width / 2
+        bottom = - length / 2
+        top = length / 2
+        canvas.imshow(maze_map, extent=(left, right, bottom, top))
+
     for loc in start_locations:
         canvas.scatter(loc[0], loc[1], marker='.', c='red', s=500)
         canvas.scatter(loc[0], loc[1], marker='$S$', c='white', s=45)
@@ -156,6 +162,17 @@ def plot_nav2d_env(env: gym.Env,
                 canvas.scatter(x, y, marker='h', c=c, s=200, zorder=zo())
                 canvas.text(x, y, f'{t + 1}', c='white', horizontalalignment='center',
                             verticalalignment='center_baseline', fontweight=900, fontsize='medium', zorder=zo())
+
+
+def plot_halfcheetah(env: gym.Env,
+                     canvas: plt.Axes,
+                     observations: np.ndarray,
+                     n_trajs: int = 1):
+    # get relevant observation elements
+    # 0: z-cooord of front tip
+    # 1: angle of front tip
+    # 2:
+    pass
 
 
 class Counter:

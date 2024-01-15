@@ -59,7 +59,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                                                    window_size=window_size, encoder_lws=[100, 100, 100],
                                                    decoder_lws=[100, 100, 100],
                                                    activation='relu', layer_norm=True, epsilon=0.1,
-                                                   beta=0.01, reg_sigma=1.0)
+                                                   beta=0.001)
             # window_size = level['o'].window_size
             # mask_and_action_filters = {'mask': MinUpwardsFilter(window_size), 'a': ConstUpwardsFilter(window_size, 0)}
             # level.update(mask_and_action_filters)
@@ -99,7 +99,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         self.ema_update_interval = ema_update_interval
         self.temporal_activation_regularization = temporal_activation_regularization
         self.kl_balance = kl_balance
-        self.pessimism_coeff = 0.0001
+        self.pessimism_coeff = 0.0000
         self.dbg_timestep = 0
         self.avg_chunk_dist_early = ModuleList([RunningMeanStd(shape=(mod.d_z,)) for mod in self.rssm_modules[:-1]])
         self.avg_chunk_dist_mid = ModuleList([RunningMeanStd(shape=(mod.d_z,)) for mod in self.rssm_modules[:-1]])
@@ -228,7 +228,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                                                    window_size=window_size).detach()
             obs_diff = torch.mean((simulated_ground_truth['o'][:-1] - simulated_ground_truth['o'][1:]) ** 2, dim=-1,
                                   keepdim=True)
-            simulated_ground_truth['r'][1:] += obs_diff
+            #simulated_ground_truth['r'][1:] += obs_diff
 
         if terminal is not None:
             simulated_ground_truth['terminal'] = flt['terminal'](stack_if_list(terminal[:n_steps]), mask=mask,
@@ -305,11 +305,12 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             # compute eqn (4) from https://arxiv.org/abs/2204.12581
             o = torch.stack(mem['s_embedding'])
             r = torch.stack(mem['r'])
-            v = torch.minimum(rma.critic_net(o), rma.ema_critic_net(o))
-            v = rma.return_running_average.normalize(v, rma.return_running_average.mean, rma.return_running_average.var)
+            v = rma.critic_net(o)
+            #v = torch.minimum(rma.critic_net(o), rma.ema_critic_net(o))
+            #v = rma.return_running_average.normalize(v, rma.return_running_average.mean, rma.return_running_average.var)
             z = torch.stack(mem['z'])
             z_dist_params = torch.stack(mem['z_prior'])
-            z_log_prob = self.rssm_modules[level].z_dist(z_dist_params).log_prob(z.detach()).unsqueeze(-1)
+            ##z_log_prob = self.rssm_modules[level].z_dist(z_dist_params).log_prob(z.detach()).unsqueeze(-1)
             mask = compute_mask(mem['terminal'], first_step_mask=start_state_mask)
             # pessimistic_loss = (r[:-1] + 0.99 * v[1:]).detach() * z_log_prob[1:]
             pessimistic_loss = (r[:-1] + 0.99 * v[1:])

@@ -7,6 +7,7 @@ import neptune
 from mdm.training.train import train_model, agent_eval_mode
 from mdm.utils.build_models import build_model_opt, build_rssms, build_agents, cfg_infer_missing_values
 from mdm.utils.utils import *
+from mdm.utils.visualize_env import visualize_env
 from mdm.utils.torch_tools import to_tensors
 from mdm.training.offline_rl_driver import OfflineRLDriver, SamplingType
 from mdm.logging.neptune_logger import NeptuneLogger
@@ -116,11 +117,11 @@ def main():
         collect_driver.interact(cfg['prefill_episodes'], test_mem, progress_bar=True)
     test_driver = OfflineRLDriver(test_mem, sampling_type=SamplingType.RANDOM)
 
-    def simple_collect_fn(explore: bool):
+    def simple_collect_fn(explore: bool, i_step: int):
         agent = r_max_agents[0][0]
         agent.eval()
         collect_env.reset()
-        #expl_noise = 0.3 if explore else 0.0
+        # expl_noise = 0.3 if explore else 0.0
         expl_noise = 0.05
         policy = LatentAgentPolicy(agent, model, stochastic=True, exploration_noise=expl_noise)
         d = GymEpisodeDriver(collect_env, policy)
@@ -128,10 +129,10 @@ def main():
         # collected_data_trajectories = collect_data(collect_env, -1, policy)
         # train_mem.extend(collected_data_trajectories)
 
-    def collect_fn(explore: bool):
+    def collect_fn(explore: bool, i_step: int):
         agent_eval_mode(r_max_agents + goal_seeking_agents)
         collect_env.reset()
-        #expl_noise = 0.3 if explore else 0.0
+        # expl_noise = 0.3 if explore else 0.0
         det_policy = HierarchicalLatentAgentPolicy(model, stochastic=True, exploration_noise=0.01)
         expl_policy = HierarchicalLatentAgentPolicy(model, stochastic=False,
                                                     exploration_noise=cfg['trainer']['fixed_agent_expl_noise'])
@@ -140,10 +141,21 @@ def main():
         # train_mem.extend(collected_data_trajectories)
         GymEpisodeDriver(collect_env, det_policy).interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
         GymEpisodeDriver(collect_env, expl_policy).interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
-        #GymEpisodeDriver(collect_env, None).interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
-        #GymEpisodeDriver(collect_env, expl_policy).interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
-        #d.interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
-        #d.interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
+        # GymEpisodeDriver(collect_env, None).interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
+        # GymEpisodeDriver(collect_env, expl_policy).interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
+        # d.interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
+        # d.interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
+
+        plan = extract_plan(det_policy)
+
+        with TempFigure() as fig:
+            for i_lvl, plan_lvl in enumerate(plan):
+                axis = fig.add_subplot(1, len(plan), i_lvl+1)
+                axis.set_title(f'Level {i_lvl} Plan')
+                plan_lvl = {k: numpyfy(v) for k, v in plan_lvl.items()}
+                visualize_env(collect_env, axis, observations=plan_lvl['o'], rewards=plan_lvl['r'],
+                              terminals=plan_lvl['terminal'])
+            logger.log_plot(fig, Scope.TRAIN() / 'eval_policy_plan', i_step)
 
         # collect_env.reset()
         # agent_eval_mode(r_max_agents + goal_seeking_agents)

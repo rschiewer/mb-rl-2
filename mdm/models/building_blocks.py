@@ -851,7 +851,7 @@ class AutoencodingUpwardsFilter(UpwardsFilter):
                  layer_norm: bool,
                  epsilon: float,
                  beta: float,
-                 reg_sigma: float):
+                 reg_sigma: float = 1.0):
         super(AutoencodingUpwardsFilter, self).__init__(window_size)
         self.encoder = SquashedGaussianEncoder(s_x_orig=s_x_orig, d_x_encoded=d_x_enc, lws=encoder_lws,
                                                activation=activation, layer_norm=layer_norm, epsilon=epsilon)
