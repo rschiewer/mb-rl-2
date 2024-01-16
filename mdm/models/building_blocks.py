@@ -6,7 +6,8 @@ from abc import ABC, abstractmethod
 import torch
 import numpy as np
 from mdm.utils.torch_tools import (layers_with_activation as lwa, get_dist_params,
-                                   sample_from_categorical, ManagedStatefulTrainingModule, unsqueeze_right, masked_mean, TanhBijector)
+                                   sample_from_categorical, ManagedStatefulTrainingModule, unsqueeze_right, masked_mean,
+                                   TanhBijector)
 
 RnnStateType = TypeVar('RnnStateType', torch.Tensor, Tuple[torch.Tensor, torch.Tensor])
 
@@ -866,19 +867,42 @@ class AutoencodingUpwardsFilter(UpwardsFilter):
                  d_x_enc: int,
                  window_size: int,
                  encoder_lws: List[int],
+                 encoder_type: str,
                  decoder_lws: List[int],
+                 decoder_type: str,
                  activation: str,
                  layer_norm: bool,
                  epsilon: float,
                  beta: float,
                  reg_sigma: float = 1.0):
         super(AutoencodingUpwardsFilter, self).__init__(window_size)
-        self.encoder = SquashedGaussianEncoder(s_x_orig=s_x_orig, d_x_encoded=d_x_enc, lws=encoder_lws,
-                                               activation=activation, layer_norm=layer_norm, epsilon=epsilon)
+
+        if encoder_type == 'squashed_normal':
+            self.encoder = SquashedGaussianEncoder(s_x_orig=s_x_orig, d_x_encoded=d_x_enc, lws=encoder_lws,
+                                                   activation=activation, layer_norm=layer_norm, epsilon=epsilon)
+        elif encoder_type == 'normal':
+            self.encoder = GaussianEncoder(s_x_orig=s_x_orig, d_x_encoded=d_x_enc, lws=encoder_lws,
+                                           activation=activation, layer_norm=layer_norm, epsilon=epsilon)
+        elif encoder_type == 'mlp':
+            self.encoder = MLPEncoder(s_x_orig=s_x_orig, d_x_encoded=d_x_enc, lws=encoder_lws,
+                                      activation=activation, layer_norm=layer_norm)
+        else:
+            raise ValueError(f'Unknown encoder type: {encoder_type}')
+
+        if decoder_type == 'squashed_normal':
+            self.decoder = SquashedGaussianDecoder(s_x_orig=s_x_orig, d_x_encoded=d_x_enc, lws=decoder_lws,
+                                                   activation=activation, layer_norm=layer_norm, epsilon=epsilon)
+        elif decoder_type == 'normal':
+            self.decoder = GaussianDecoder(s_x_orig=s_x_orig, d_x_encoded=d_x_enc, lws=decoder_lws,
+                                           activation=activation, layer_norm=layer_norm, epsilon=epsilon)
+        elif decoder_type == 'mlp':
+            self.decoder = MLPDecoder(s_x_orig=s_x_orig, d_x_encoded=d_x_enc, lws=decoder_lws,
+                                      activation=activation, layer_norm=layer_norm)
+        else:
+            raise ValueError(f'Unknown decoder type: {decoder_type}')
+
         # self.decoder = MLPDecoder(s_x_orig=s_x_orig, d_x_encoded=d_x_enc, lws=decoder_lws, activation=activation,
         #                          layer_norm=layer_norm, final_activation='tanh')
-        self.decoder = SquashedGaussianDecoder(s_x_orig=s_x_orig, d_x_encoded=d_x_enc, lws=decoder_lws,
-                                               activation=activation, layer_norm=layer_norm, epsilon=epsilon)
         self.mask_filter = MaxUpwardsFilter(window_size=window_size)
         self.beta = beta
         self.reg_sigma = reg_sigma
@@ -1142,4 +1166,4 @@ class ConstUpwardsFilter(UpwardsFilter):
                 window_size: int | None = None) -> torch.Tensor:
         x, mask, n_pad = self._preproc(x, mask, 0.0, window_size)
         x = x[:, 0]
-        return torch.zeros_like(x)
+        return torch.full_like(x, self.constant)
