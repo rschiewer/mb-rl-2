@@ -639,6 +639,26 @@ class MLPDecoder(OutputDecoder):
         return None, x
 
 
+def pad_time_series(x: torch.Tensor,
+                    pad_value: float,
+                    window_size: int):
+    d_time, d_batch = x.shape[:2]
+    overhang = d_time % window_size
+
+    if overhang == 0:
+        n_pad = 0
+    else:
+        n_pad = window_size - overhang
+
+    if n_pad > 0:
+        pad_shp = list(x.shape)
+        pad_shp[0] = n_pad
+        x_pad = torch.full(pad_shp, pad_value, device=x.device)
+        x = torch.concat([x, x_pad], dim=0)
+
+    return x, n_pad
+
+
 class UpwardsFilter(torch.nn.Module):
 
     def __init__(self,
