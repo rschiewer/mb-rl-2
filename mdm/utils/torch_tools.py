@@ -683,7 +683,7 @@ def pack_rnn_state(rnn_state: RnnStateType):
 
 
 def to_tensors(mem: List[Dict[str, int | float | np.single | np.double | bool | np.ndarray]],
-               device: torch.device,
+               device: torch.device | str,
                dtypes: Union[List, Tuple] = None,
                padding: Union[List, Tuple, str] = None):
     assert padding is None, 'padding argument is deprecated'
