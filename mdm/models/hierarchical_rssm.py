@@ -56,11 +56,11 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             d_a_above = rssm_modules[i_level + 1].d_a
             d_s_embedding = rssm_modules[i_level].d_s_embedding
             window_size = level['o'].window_size
-            level['a'] = AutoencodingUpwardsFilter(s_x_orig=(window_size, d_s_embedding),
+            level['a'] = AutoencodingUpwardsFilter(s_x_orig=(window_size, d_a_below),
                                                    d_x_enc=d_a_above,
                                                    window_size=window_size, encoder_lws=[200, 100, 100],
                                                    encoder_type='squashed_normal', decoder_lws=[100, 100, 200],
-                                                   decoder_type='normal', activation='relu', layer_norm=True,
+                                                   decoder_type='squashed_normal', activation='relu', layer_norm=True,
                                                    epsilon=0.1, beta=0.01)
             # window_size = level['o'].window_size
             # mask_and_action_filters = {'mask': MinUpwardsFilter(window_size), 'a': ConstUpwardsFilter(window_size, 0)}
@@ -101,7 +101,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         self.ema_update_interval = ema_update_interval
         self.temporal_activation_regularization = temporal_activation_regularization
         self.kl_balance = kl_balance
-        self.pessimism_coeff = 0.0003
+        self.pessimism_coeff = 0.0000
         self.dbg_timestep = 0
         self.avg_chunk_dist_early = ModuleList([RunningMeanStd(shape=(mod.d_z,)) for mod in self.rssm_modules[:-1]])
         self.avg_chunk_dist_mid = ModuleList([RunningMeanStd(shape=(mod.d_z,)) for mod in self.rssm_modules[:-1]])
@@ -223,41 +223,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             simulated_ground_truth['o'] = flt['o'](stack_if_list(o[:n_steps]), mask=mask,
                                                    window_size=window_size).detach()
         if a is not None:
-            if level > 0:
-                assert o is not None
-                if window_size is None:
-                    window_size = flt['a'].window_size
-                # a_stacked = stack_if_list(a[:n_steps])
-                # o_stacked = stack_if_list(o[:n_steps])
-                # x = torch.concat([a_stacked, o_stacked], dim=-1)
-                x = stack_if_list(o[:n_steps])
-                if mask is None:
-                    mask = torch.zeros(*x.shape[:2], 1).to(x)
-                # add very first starting state, which is zero state by definition
-                x_t0 = self.rssm_modules[level].zero_s_embedding(d_batch=x.shape[1], device=x.device)
-                x_t0_to_T = torch.concat([x_t0.unsqueeze(0), x], dim=0)
-                mask_t0 = torch.zeros_like(mask[0])
-                mask_t0_to_T = torch.concat([mask_t0.unsqueeze(0), mask], dim=0)
-                # get overlapping start and end states of chunks
-                #   s_0 s_1 s_2 s_3 s_4 s_5 s_6 ...
-                #   |___chunk_1___|
-                #               |___chunk_2___|
-                get_frst_flt = PickOneUpwardsFilter(window_size=window_size, offset=0)
-                get_last_flt = PickOneUpwardsFilter(window_size=window_size, offset=-1)
-                chunk_start_states = get_frst_flt(x_t0_to_T, mask=mask_t0_to_T)
-                chunk_end_states = get_last_flt(x, mask=mask)
-                # pad x and mask to make modification easier
-                x, _ = pad_time_series(x, 0.0, window_size=window_size)
-                x_mask, _ = pad_time_series(mask, 1.0, window_size=window_size)
-                # now zero-out x and fill in first and last states as first two time steps in each chunk
-                for i_chunk, t in enumerate(range(0, len(x), window_size)):
-                    x[t] = chunk_start_states[i_chunk]
-                    x[t + 1] = chunk_end_states[i_chunk]
-            else:
-                x = stack_if_list(a[:n_steps])
-                x_mask = mask
-            simulated_ground_truth['a'] = flt['a'](x, mask=x_mask, window_size=window_size,
-                                                   sample=sample_action_autoencoder).detach()
+            simulated_ground_truth['a'] = flt['a'](stack_if_list(a[:n_steps]), mask=mask,
+                                                   window_size=window_size, sample=sample_action_autoencoder).detach()
         if r is not None:
             simulated_ground_truth['r'] = flt['r'](stack_if_list(r[:n_steps]), mask=mask,
                                                    window_size=window_size).detach()
@@ -304,11 +271,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                                                  r=targets[l - 1]['r'], terminal=targets[l - 1]['terminal'],
                                                  mask=targets[l - 1]['mask'], level=l, respect_mask=False,
                                                  sample_action_autoencoder=True)
-            # first time step of trajectory is always a zero action, terminal, reward and only an observation to
-            # ground the model since there is no way to decide for an action before getting the first observation
-            # filtered_trajectory['a'][0] = 0
-            # filtered_trajectory['r'][0] = 0
-            # filtered_trajectory['terminal'][0] = 0
             memory[l], memory_ema[l], model_state[l] = self.forward_static(filtered_trajectory,
                                                                            start_state=model_state[l], level=l,
                                                                            n_steps=-1, n_warmup=warmup_steps[l],
@@ -478,9 +440,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
             if level < self.levels - 1:
                 # action autoencoder with static upfiltered trajectory data
-                # s_a_concat = torch.concat([targets[level]['a'], torch.stack(pred[level]['s_embedding'])], dim=-1)
-                s_embed = torch.stack(pred[level]['s_embedding'])
-                loss_act_autoenc = self.action_autoencoder_loss(s_embed, targets[level]['mask'], level + 1)
+                loss_act_autoenc = self.action_autoencoder_loss(targets[level]['a'], targets[level]['mask'], level + 1)
                 loss_level.update(loss_act_autoenc)
 
             loss_level = {f'{k}_{level}': v for k, v in loss_level.items()}

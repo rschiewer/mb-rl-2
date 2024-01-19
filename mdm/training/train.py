@@ -1,10 +1,15 @@
 import math
+import random
 import textwrap
 from math import ceil
 
 import gym_nav2d.envs
+import torch
 from gymnasium_robotics.envs.maze.maze_v4 import MazeEnv
+from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
+import umap
+from sklearn.manifold import TSNE
 from matplotlib.colors import hsv_to_rgb, to_rgba
 from matplotlib.patches import Rectangle
 from tqdm import tqdm
@@ -50,7 +55,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
         if cfg['trainer']['subtrajectory_len'] > 0:
             model_batch = valid_subtrajectories_2(batch, cfg['trainer']['subtrajectory_len'])
             # model_batch = valid_subtrajectories_unbiased(batch, 15)
-            #model_batch = valid_subtrajectories_2(batch, cfg['trainer']['subtrajectory_len'])
+            # model_batch = valid_subtrajectories_2(batch, cfg['trainer']['subtrajectory_len'])
             # model_batch = valid_subtrajectories_2(batch, cfg['trainer']['subtrajectory_len'])
         else:
             model_batch = batch
@@ -73,6 +78,67 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
         # make_dot(train_losses['o_0'], dict(model.named_parameters())).view()
         # quit()
         # make_dot(train_losses['term_0'], dict(model.named_parameters())).view()
+
+        if i_step % cfg['trainer']['plot_interval'] == 0:
+            # take all trajectories in memory to produce clustering of action sequences
+            trajectory_sample = train_driver.memory
+            if len(trajectory_sample) > 5000:  # in case there are too many trajectories, take a large random subset
+                random.shuffle(trajectory_sample)
+                trajectory_sample = trajectory_sample[:5000]
+
+            trajectory_sample = to_tensors(trajectory_sample, device='cpu')  # we don't do computations, using cpu is ok
+            trajectory_sample = prepare_data(trajectory_sample, remove_keys=['o', 'r', 'terminal', 'truncated'])
+
+            # extract subsequences
+            flt = UpwardsFilter(window_size=8)
+            a_subsequences = flt(trajectory_sample['a'], mask=trajectory_sample['mask'])
+            # move intra-chunk time dimension behind batch dimension, so
+            # [i_chunk, t_in_chunk, B, D] -> [i_chunk, B, t_in_chunk, D]
+            a_subsequences = a_subsequences.swapaxes(1, 2)
+            # merge chunk index dimension and batch dimension, as we only care about the action subsequences and not
+            # from which trajectory and what time steps they came from
+            a_subsequences = a_subsequences.reshape(-1, 8, a_subsequences.shape[-1])
+            # merge intra-chunk time dimension with action dimension, as each action subsequence is considered one data
+            # point as a whole
+            a_subsequences = a_subsequences.reshape(a_subsequences.shape[0], -1)
+            # bring tensors back to numpy
+            a_subsequences = numpyfy(a_subsequences)
+
+            # cluster
+            n_clusters = 5
+            n_dims = 2
+            kmeans = KMeans(n_clusters=n_clusters)
+            kmeans.fit(a_subsequences)
+            clusters = kmeans.predict(a_subsequences)
+
+            # reduce data dimensionality for plotting
+            #dim_reducer = PCA(n_components=n_dims)
+            dim_reducer = umap.UMAP(n_components=n_dims)
+            #dim_reducer = TSNE(n_components=n_dims, perplexity=50)
+            low_dim_subsequences = dim_reducer.fit_transform(a_subsequences)
+
+            # plotting
+            prop_cycle = plt.rcParams['axes.prop_cycle']
+            color_list = list(prop_cycle.by_key()['color'])
+            colors = [color_list[i % len(color_list)] for i in clusters]
+            with TempFigure(figsize=(8, 8)) as fig:
+                if n_dims == 2:
+                    ax = fig.add_subplot(1, 1, 1)
+                    ax.scatter(low_dim_subsequences[:, 0], low_dim_subsequences[:, 1], c=colors)
+                else:
+                    ax = fig.add_subplot(1, 1, 1, projection='3d')
+                    ax.scatter(low_dim_subsequences[:, 0], low_dim_subsequences[:, 1],
+                               low_dim_subsequences[:, 2], c=colors)
+                # add some info about the reliability of the clustering
+                if isinstance(dim_reducer, PCA):
+                    informativeness = ' | '.join([str(x) for x in dim_reducer.explained_variance_ratio_])
+                elif isinstance(dim_reducer, TSNE):
+                    informativeness = str(dim_reducer.kl_divergence_)
+                else:
+                    informativeness = ''
+                ax.set_title(informativeness)
+                #plt.show()
+                logger.log_plot(fig, Scope.TRAIN() / f'action_sequence_clustering', i_step)
 
         logger.log(to_np(train_losses), Scope.TRAIN(), i_step)
 
@@ -118,10 +184,10 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                     #                                    logger, sample_agents)
                     # train_goal_seeking_agent_goals_above(model, level, pred, targets, eval_env, cfg, i_step, logger,
                     #                                     sample_agents)
-                    #train_goal_seeking_agent_goals_above_with_agent(model, level, pred, targets, eval_env, cfg, i_step,
+                    # train_goal_seeking_agent_goals_above_with_agent(model, level, pred, targets, eval_env, cfg, i_step,
                     #                                                logger, sample_agents, use_her=False)
                     train_gsa(model, level, pred, targets, eval_env, cfg, i_step, logger, sample_agents, use_her=False)
-                    #train_goal_seeking_agent_one_step(model, level, pred, targets, eval_env, cfg, i_step, logger,
+                    # train_goal_seeking_agent_one_step(model, level, pred, targets, eval_env, cfg, i_step, logger,
                     #                                 sample_agents)
                     pass
 
@@ -195,7 +261,8 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
 
                     # plot samples from goal autoencoder prior
                     g_sampled = model.goal_autoencoder.gen_unconditionally(d_batch=256, device=batch['o'].device)
-                    g_o_sampled = model.rssm_modules[0].decode(g_sampled, sample=False, reconstruct_observation=True)['o']
+                    g_o_sampled = model.rssm_modules[0].decode(g_sampled, sample=False, reconstruct_observation=True)[
+                        'o']
                     g_o_sampled = numpyfy(g_o_sampled)
                     with TempFigure(figsize=(10, 4)) as fig:
                         ax_0 = fig.add_subplot(1, 3, 1)
@@ -203,7 +270,8 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                         ax_2 = fig.add_subplot(1, 3, 3)
                         ax_0.scatter(g_o_sampled[:, 0], g_o_sampled[:, 1], marker='.')
                         ax_1.scatter(g_o_sampled[:, 2], g_o_sampled[:, 3], marker='x')
-                        ax_2.plot(np.sqrt(np.sum((g_o_sampled[:, :2] - g_o_sampled[:, 2:4]) ** 2, axis=-1)), label='calc')
+                        ax_2.plot(np.sqrt(np.sum((g_o_sampled[:, :2] - g_o_sampled[:, 2:4]) ** 2, axis=-1)),
+                                  label='calc')
                         ax_2.plot(g_o_sampled[:, -1], label='orig')
 
                         ax_0.set_xlim([-1.1, 1.1])
@@ -670,7 +738,7 @@ def train_gsa(model, level, pred, targets, eval_env, cfg, i_step, logger, sample
     d_time = len(pred[level]['o'])
     goal = goal.repeat(d_time - 1, 1)
     # this makes the goal sample more noisy and thus adds diversity to the goals
-    #_, _, _, goal = model.goal_autoencoder(goal, sample=True)
+    # _, _, _, goal = model.goal_autoencoder(goal, sample=True)
     goal = goal.detach()
     goal_obs = model.rssm_modules[level].decode(goal, sample=False, reconstruct_observation=True)['o']
 

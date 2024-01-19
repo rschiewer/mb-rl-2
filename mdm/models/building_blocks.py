@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Tuple, Optional, Sequence, Union, TypeVar, Dict, List
 from abc import ABC, abstractmethod
 
@@ -1167,3 +1168,50 @@ class ConstUpwardsFilter(UpwardsFilter):
         x, mask, n_pad = self._preproc(x, mask, 0.0, window_size)
         x = x[:, 0]
         return torch.full_like(x, self.constant)
+
+
+class EMAClustering(UpwardsFilter):
+    
+    def __init__(self,
+                 window_size: int,
+                 s_x_orig: Tuple[int],
+                 n_centroids: int):
+        super().__init__(window_size)
+
+        d_x = np.prod(s_x_orig)
+        self.s_x_orig = s_x_orig
+        self.d_x = d_x
+        self.n_centroids = n_centroids
+
+        self.centroids = torch.nn.Parameter(torch.empty((n_centroids, d_x), dtype=None, device=None),
+                                            requires_grad=False)
+        torch.nn.init.kaiming_uniform_(self.centroids, a=math.sqrt(5))
+
+    @torch.jit.ignore
+    def forward(self,
+                x: torch.Tensor,
+                mask: torch.Tensor | None = None,
+                context: torch.Tensor | None = None,
+                window_size: int | None = None) -> torch.Tensor:
+        d_batch = x.shape[1]
+        x_preproc = self._preproc(x)
+
+        centroids_expanded = torch.repeat_interleave(self.centroids, repeats=d_batch, dim=0)
+        d = torch.inner(centroids_expanded, x_preproc)
+
+    def _preproc(self,
+                 x: torch.Tensor,
+                 mask: Optional[torch.Tensor] = None,
+                 pad_value: float = 0,
+                 window_size: Optional[int] = None,
+                 assert_binary_mask: bool = False):
+        # chunk and pad x, shape goes from (T, B, D) to (T', T_chunk, B, D)
+        x_pad, mask_pad, n_pad = super()._preproc(x=x, mask=mask, pad_value=pad_value, window_size=window_size,
+                                       assert_binary_mask=assert_binary_mask)
+        # shift chunk time dim (1) to become new first data dim (2), afterwards shape is (T', B, T_chunk, D)
+        x_perm = torch.permute(x_pad, (0, 2, 1, 3))
+        mask_perm = torch.permute(mask_pad, (0, 2, 1, 3))
+        # flatten the two data dimensions to one
+        x_rs = x_perm.reshape(*x_perm.shape[:2], -1)
+        mask_rs = mask_perm.reshape(*mask_perm[:2], -1)
+        return x_rs, mask_rs, n_pad

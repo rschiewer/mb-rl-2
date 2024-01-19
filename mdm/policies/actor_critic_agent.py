@@ -684,7 +684,7 @@ class ActorCriticAgent(torch.nn.Module):
         #term_zone_perimeter_radius = 0.003
 
         term_zone_core_radius = 0.001
-        term_zone_perimeter_radius = 0.1
+        term_zone_perimeter_radius = 0.2
 
         # sigmoid is close to 1.0 at x=3.0 and close to 0.0 at x=-3.0
         sig_min = -5.0

@@ -7,7 +7,7 @@ train_samples: null #"nav2d_Easy_train.samples" #"nav2d_Easy_train.samples"
 test_samples: null #"nav2d_EasySparse_expert.samples" #"nav2d_Easy_expert.samples"
 checkpoint_path: "checkpoints"
 model_save_path: "trained_models"
-pretrained_model: null # 'MBRL-5475' "MBRL-2908"
+pretrained_model: null #"MBRL-5667" # 'MBRL-5475' "MBRL-2908"
 repeat_terminal_state: False
 
 mdm:
@@ -54,7 +54,7 @@ mdm:
       # RSSM no. 2
       -  d_z: 20
          d_h: 300
-         d_a: 50
+         d_a: 16
          d_s_embedding: null
          s_embedding_lws: [ 200, 200 ]
          n_hidden_layers: 1
