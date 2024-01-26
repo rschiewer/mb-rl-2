@@ -98,7 +98,7 @@ def cfg_infer_missing_values(cfg: dict,
 
         # calculate observation dimension for RSSM encoders/decoders
         if i_module == 0:
-            module_args['d_a'] = env.action_space.shape[0]
+            module_args['d_a'] = infer_a_dim(env)
             s_o = env.observation_space.shape
         else:
             if cfg['mdm']['links'][i_module - 1] == 'z':
