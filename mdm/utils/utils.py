@@ -1115,6 +1115,17 @@ def prepare_env(env: gym.Env):
     return env
 
 
+def infer_a_dim(env: gym.Env):
+    if isinstance(env.action_space, gym.spaces.Box):
+        assert len(env.action_space.shape) == 1
+        d_a = env.action_space.shape[0]
+    elif isinstance(env.action_space, gym.spaces.Discrete):
+        d_a = env.action_space.n
+    else:
+        raise RuntimeError(f'Unsupported action space {env.action_space} of environment {env}.')
+
+
+
 def list_of_tuples_to_tuple_of_lists(list_of_tpls: List[Any]):
     state = tuple([list(x) for x in zip(*list_of_tpls)])
     return state
