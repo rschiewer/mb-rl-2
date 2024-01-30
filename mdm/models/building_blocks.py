@@ -1171,33 +1171,174 @@ class ConstUpwardsFilter(UpwardsFilter):
 
 
 class EMAClustering(UpwardsFilter):
-    
+
     def __init__(self,
                  window_size: int,
-                 s_x_orig: Tuple[int],
-                 n_centroids: int):
+                 s_x_orig: int | Tuple[int],
+                 n_centroids: int,
+                 alpha: float):
         super().__init__(window_size)
 
-        d_x = np.prod(s_x_orig)
+        d_x = np.prod(s_x_orig) * window_size
         self.s_x_orig = s_x_orig
         self.d_x = d_x
         self.n_centroids = n_centroids
+        self.alpha = alpha
 
         self.centroids = torch.nn.Parameter(torch.empty((n_centroids, d_x), dtype=None, device=None),
                                             requires_grad=False)
         torch.nn.init.kaiming_uniform_(self.centroids, a=math.sqrt(5))
+
+    def calc_distances(self,
+                       x_preproc: torch.Tensor,
+                       mask_preproc: torch.Tensor,
+                       centroids: torch.nn.Parameter):
+        # fold trajectory time dimension into batch dimension
+        T, B = x_preproc.shape[:2]
+        x_preproc_rs = x_preproc.reshape(T * B, x_preproc.shape[-1])
+        mask_preproc_rs = x_preproc.reshape(T * B, mask_preproc.shape[-1])
+        # after reshaping, mask becomes dtype float32 for some reason, maybe a bug
+        # mask_preproc_rs = mask_preproc_rs.to(torch.bool)
+
+        # repeat data s.t. there is one copy per centroid, repeat each batch item n_centroid times directly after its
+        # original place in the tensor
+        x_expanded = torch.repeat_interleave(x_preproc_rs, repeats=self.n_centroids, dim=0)
+        mask_expanded = torch.repeat_interleave(mask_preproc_rs, repeats=self.n_centroids, dim=0)
+        # repeat centroids s.t. there is one full set of centroids per data item. In contrast to the data, the
+        # centroid sets are repeated as a whole
+        centroids_expanded = centroids.repeat(T * B, 1)
+        # compute distance
+        v = x_expanded - centroids_expanded
+        # mask out distances that belong to invalid time steps
+        # v = v * mask_expanded  # make difference vector zero for masked actions
+        d = torch.sqrt(torch.sum(v ** 2, dim=-1))
+        # d = torch.where(mask_expanded >= 1.0 - 1e-5, torch.inf, d)  # make distance infinite
+        # reshape d so we have original batch item index in first dimension
+        d = d.reshape(T, B, self.n_centroids)
+        v = v.reshape(T, B, self.n_centroids, self.d_x)
+        return d, v
+
+    def calc_distances_debug(self,
+                             x_preproc: torch.Tensor,
+                             mask_preproc: torch.Tensor):
+        T, B = x_preproc.shape[:2]
+        dists_T = []
+        vecs_T = []
+        for t in range(T):
+            dists_B = []
+            vecs_B = []
+            for b in range(B):
+                x_current = x_preproc[t, b]
+                x_to_c_dists = []
+                x_to_c_vecs = []
+                for c in self.centroids:
+                    v = x_current - c
+                    d = torch.sqrt(torch.sum(v ** 2, dim=-1))
+                    x_to_c_vecs.append(v)
+                    x_to_c_dists.append(d)
+                dists_B.append(torch.stack(x_to_c_dists))
+                vecs_B.append(torch.stack(x_to_c_vecs))
+            dists_T.append(torch.stack(dists_B))
+            vecs_T.append(torch.stack(vecs_B))
+        dists = torch.stack(dists_T)
+        vecs = torch.stack(vecs_T)
+
+        return dists, vecs
+
+    def update_centroids_debug(self,
+                               d: torch.Tensor,
+                               v: torch.Tensor):
+        T, B = d.shape[:2]
+        avg_d_to_winner = torch.tensor(0.0).to(d)
+        count = 0
+        for t in range(T):
+            for b in range(B):
+                i_winner = torch.argmin(d[t, b])
+                avg_d_to_winner += d[t, b, i_winner]
+                v_winner_to_x = v[t, b, i_winner]
+                c_update = (1 - self.alpha) * self.centroids[i_winner] + self.alpha * v_winner_to_x
+                self.centroids[i_winner].copy_(c_update)
+                count += 1
+        avg_d_to_winner /= count
+        return {'monitoring_avg_dist_to_center': avg_d_to_winner}
+
+    def update_centroids(self,
+                         x_preproc: torch.Tensor,
+                         mask_preproc: torch.Tensor,
+                         d: torch.Tensor,
+                         v: torch.Tensor,
+                         centroids: torch.nn.Parameter):
+        T, B = x_preproc.shape[:2]
+        # again fold batch into time dimension
+        x_preproc_rs = x_preproc.reshape(T * B, -1)
+        mask_preproc_rs = mask_preproc.reshape(T * B, -1)
+        v_rs = v.reshape(T * B, self.n_centroids, -1)
+        d_rs = d.reshape(T * B, self.n_centroids)
+
+        # get index of closest centroid per batch item
+        i_win = torch.argmin(d_rs, dim=-1)
+
+        # maybe there's a more elegant way without loop
+        avg_dist_to_center = torch.tensor(0.0).to(d)
+        for i in range(self.n_centroids):
+            if not torch.sum(i_win == i):  # if the current centroid did not have any winners, ignore it
+                continue
+            # get all data points that have current centroid as winner
+            cluster_members = x_preproc_rs[i_win == i]
+            # calculate center of all members
+            cluster_members_center_of_mass = cluster_members.mean(dim=0)
+            # calculate distance of centroid to cluster_members_center_of_mass for bookkeeping
+            d = torch.sqrt(torch.sum((centroids[i] - cluster_members_center_of_mass) ** 2))
+            avg_dist_to_center = avg_dist_to_center + d
+            # update centroid's position
+            c_new = (1 - self.alpha) * centroids[i] + self.alpha * cluster_members_center_of_mass
+            centroids[i].copy_(c_new)
+        avg_dist_to_center = avg_dist_to_center / self.n_centroids
+
+        return {'monitoring_avg_dist_to_center': avg_dist_to_center}
+
+    def eval_step(self,
+                  x: torch.Tensor,
+                  mask: torch.Tensor | None = None,
+                  context: torch.Tensor | None = None,
+                  window_size: int | None = None):
+        x_preproc, mask_preproc, _ = self._preproc(x, mask=mask, pad_value=0, window_size=window_size,
+                                                   assert_binary_mask=True)
+
+        d, v = self.calc_distances(x_preproc, mask_preproc, self.centroids)
+        ret = self.update_centroids(x_preproc, mask_preproc, d, v, self.centroids)
+        d2, _ = self.calc_distances(x_preproc, mask_preproc, self.centroids)
+
+        # calculate the relative amount of data points that changed their cluster membership
+        winner_before = self._get_winner(d)
+        winner_after = self._get_winner(d2)
+        changed = torch.sum(torch.abs(winner_before - winner_after), dim=-1) > 0.0
+        n_changes = torch.where(changed, 1.0, 0.0).mean()
+        ret.update({'monitoring_avg_cluster_change': n_changes})
+
+        return ret
 
     @torch.jit.ignore
     def forward(self,
                 x: torch.Tensor,
                 mask: torch.Tensor | None = None,
                 context: torch.Tensor | None = None,
-                window_size: int | None = None) -> torch.Tensor:
-        d_batch = x.shape[1]
-        x_preproc = self._preproc(x)
+                window_size: int | None = None,
+                sample: bool = None) -> torch.Tensor:
+        x_preproc, mask_preproc, _ = self._preproc(x, mask=mask, pad_value=0, window_size=window_size,
+                                                   assert_binary_mask=True)
 
-        centroids_expanded = torch.repeat_interleave(self.centroids, repeats=d_batch, dim=0)
-        d = torch.inner(centroids_expanded, x_preproc)
+        d, v = self.calc_distances(x_preproc, mask_preproc, self.centroids)
+        i_win_onehot = self._get_winner(d)
+
+        return i_win_onehot
+
+    def _get_winner(self,
+                    d: torch.Tensor):
+        i_win = torch.argmin(d, dim=-1)
+        i_win_onehot = torch.nn.functional.one_hot(i_win, num_classes=self.n_centroids)
+        i_win_onehot = i_win_onehot.to(dtype=torch.float32)
+        return i_win_onehot
 
     def _preproc(self,
                  x: torch.Tensor,
@@ -1205,13 +1346,17 @@ class EMAClustering(UpwardsFilter):
                  pad_value: float = 0,
                  window_size: Optional[int] = None,
                  assert_binary_mask: bool = False):
+        assert assert_binary_mask, 'Binary mask required'
+
         # chunk and pad x, shape goes from (T, B, D) to (T', T_chunk, B, D)
         x_pad, mask_pad, n_pad = super()._preproc(x=x, mask=mask, pad_value=pad_value, window_size=window_size,
-                                       assert_binary_mask=assert_binary_mask)
+                                                  assert_binary_mask=True)
+        # make mask exactly match shape of x as this is important later on
+        mask_pad = mask_pad.repeat(1, 1, 1, x.shape[-1])
         # shift chunk time dim (1) to become new first data dim (2), afterwards shape is (T', B, T_chunk, D)
         x_perm = torch.permute(x_pad, (0, 2, 1, 3))
         mask_perm = torch.permute(mask_pad, (0, 2, 1, 3))
         # flatten the two data dimensions to one
         x_rs = x_perm.reshape(*x_perm.shape[:2], -1)
-        mask_rs = mask_perm.reshape(*mask_perm[:2], -1)
+        mask_rs = mask_perm.reshape(*mask_perm.shape[:2], -1)
         return x_rs, mask_rs, n_pad
