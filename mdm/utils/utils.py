@@ -1118,7 +1118,9 @@ def prepare_env(env: gym.Env):
     # Flatten observation dicts
     if isinstance(env.unwrapped, minigrid.minigrid_env.MiniGridEnv):
         #env = minigrid.wrappers.FullyObsWrapper(env)
-        env = minigrid.wrappers.FlatObsWrapper(env)
+        env = minigrid.wrappers.ImgObsWrapper(env)
+        #env = minigrid.wrappers.FlatObsWrapper(env)
+        env = gym.wrappers.FlattenObservation(env)
     elif isinstance(env.observation_space, gym.spaces.dict.Dict):
         env = gym.wrappers.FlattenObservation(env)
     return env
