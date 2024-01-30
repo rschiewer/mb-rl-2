@@ -1,4 +1,5 @@
 import gymnasium as gym
+import minigrid
 
 static_u_maze_map_small = [[1, 1, 1, 1, 1],
                            [1, 'g', 0, 0, 1],
