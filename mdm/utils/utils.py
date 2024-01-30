@@ -15,6 +15,7 @@ from functools import reduce
 import gymnasium as gym
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
+import minigrid.minigrid_env
 import numpy.ma as ma
 import pandas as pd
 import torch
@@ -1109,21 +1110,31 @@ def numpyfy(x: torch.Tensor | List[torch.Tensor] | Tuple[torch.Tensor],
 
 
 def prepare_env(env: gym.Env):
-    env = gym.wrappers.RescaleAction(env, min_action=-1.0, max_action=1.0)
-    if isinstance(env.observation_space, gym.spaces.dict.Dict):
+    # limit continuous action spaces to [-1.0, 1.0] to match the SquashedGaussian of the agent, we could also use a
+    # clip action wrapper and not restrict the agent's actions
+    if isinstance(env.action_space, gym.spaces.Box):
+        env = gym.wrappers.RescaleAction(env, min_action=-1.0, max_action=1.0)
+
+    # Flatten observation dicts
+    if isinstance(env.unwrapped, minigrid.minigrid_env.MiniGridEnv):
+        #env = minigrid.wrappers.FullyObsWrapper(env)
+        env = minigrid.wrappers.FlatObsWrapper(env)
+    elif isinstance(env.observation_space, gym.spaces.dict.Dict):
         env = gym.wrappers.FlattenObservation(env)
     return env
 
 
-def infer_a_dim(env: gym.Env):
+def infer_action_info(env: gym.Env):
     if isinstance(env.action_space, gym.spaces.Box):
         assert len(env.action_space.shape) == 1
         d_a = env.action_space.shape[0]
+        is_discrete = False
     elif isinstance(env.action_space, gym.spaces.Discrete):
         d_a = env.action_space.n
+        is_discrete = True
     else:
         raise RuntimeError(f'Unsupported action space {env.action_space} of environment {env}.')
-
+    return d_a, is_discrete
 
 
 def list_of_tuples_to_tuple_of_lists(list_of_tpls: List[Any]):
