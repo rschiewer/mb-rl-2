@@ -881,9 +881,9 @@ class SquashedNormal(torch.distributions.transformed_distribution.TransformedDis
 
     def entropy(self):
         raise NotImplementedError('There\'s no analytic expression for SquashedGaussian entropy')
-        #return self.base_dist.entropy()
+        # return self.base_dist.entropy()
 
-    #def log_prob(self, value, pre_tanh_value=None, epsilon=1e-6):
+    # def log_prob(self, value, pre_tanh_value=None, epsilon=1e-6):
     #    if pre_tanh_value is None:
     #        pre_tanh_value = torch.log((1 + value) / (1 - value)) / 2
     #    norm_lp = self.base_dist.log_prob(pre_tanh_value).sum(dim=-1)
@@ -921,7 +921,7 @@ class TanhBijector(torch.distributions.Transform):
         self.domain = torch.distributions.constraints.real
         self.codomain = torch.distributions.constraints.interval(-1.0, 1.0)
 
-    #def atanh(self, x):
+    # def atanh(self, x):
     #    return 0.5 * torch.log((1 + x) / (1 - x))
 
     def sign(self):
@@ -931,7 +931,7 @@ class TanhBijector(torch.distributions.Transform):
         return torch.tanh(x)
 
     def _inverse(self, y):
-        #y = torch.clamp(y, min=-1.0 + 1e-5, max=1.0 - 1e-5)
+        # y = torch.clamp(y, min=-1.0 + 1e-5, max=1.0 - 1e-5)
         y = torch.atanh(y)
         return y
 
@@ -967,6 +967,11 @@ def concat_tensor_dicts(x: List[Dict[str, torch.Tensor]],
             x_concat[k].append(v)
     x_concat = {k: torch.concat(v, dim=dim) for k, v in x_concat.items()}
     return x_concat
+
+
+def dim_to_list(x: torch.Tensor,
+                dim: int):
+    return list(x.unbind(dim))
 
 
 # from https://github.com/rlworkgroup/garage/blob/master/src/garage/torch/distributions/tanh_normal.py
@@ -1085,6 +1090,7 @@ def check_tensor(x: torch.Tensor,
         raise ValueError(f'Found value smaller than {neg_bound} in tensor')
     if pos_bound is not None and torch.any(x > pos_bound):
         raise ValueError(f'Found value greater than {pos_bound} in tensor')
+
 
 class Moments(torch.nn.Module):
 
