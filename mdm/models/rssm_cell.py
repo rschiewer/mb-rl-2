@@ -356,7 +356,8 @@ class RSSMCell(torch.nn.Module):
             # This ensures that the kl divergence and log probabilities stay well behaved
             # see https://github.com/ray-project/ray/blob/0b0431cad08cb56ce09921f47903eda525dd3e21/rllib/algorithms/dreamerv3/tf/models/components/representation_layer.py#L105C9-L105C79
             probs = 0.99 * probs + 0.01 * (1.0 / self.n_latent_categories)
-            z_dist = probs.reshape(probs.shape[0], self.d_z * self.n_latent_categories)
+            logits = torch.log(probs)
+            z_dist = logits.reshape(logits.shape[0], self.d_z * self.n_latent_categories)
         return z_dist
 
     def z_sample(self,
@@ -368,15 +369,16 @@ class RSSMCell(torch.nn.Module):
             # TODO: continuous bernoulli?
             z_smpl = torch.bernoulli(dist_params) + dist_params - dist_params.detach()
         else:  # categorical
-            # probs_reshaped = dist_params.reshape(dist_params.shape[0] * self.d_z, self.n_latent_categories)
-            # indices = torch.multinomial(probs_reshaped, 1, True)
+            # logits_rs = dist_params.reshape(dist_params.shape[0] * self.d_z, self.n_latent_categories)
+            # indices = torch.multinomial(logits_rs, 1, True)
             # indices = indices.squeeze(-1)  # remove redundant extra dim coming from generating only one sample
             # z_smpl = torch.nn.functional.one_hot(indices, self.n_latent_categories).to(dist_params)
-            # z_smpl = z_smpl + probs_reshaped - probs_reshaped.detach()  # straight-through gradient
+            # z_smpl = z_smpl + logits_rs - logits_rs.detach()  # straight-through gradient
             # z_smpl = z_smpl.reshape(dist_params.shape[0], self.d_z * self.n_latent_categories)
-            probs_reshaped = dist_params.reshape(dist_params.shape[0], self.d_z, self.n_latent_categories)
-            z_smpl = torch.distributions.OneHotCategorical(probs=probs_reshaped).sample()
-            z_smpl = z_smpl.to(probs_reshaped) + probs_reshaped - probs_reshaped.detach()
+            logits_rs = dist_params.reshape(dist_params.shape[0], self.d_z, self.n_latent_categories)
+            probs_rs = torch.nn.functional.softmax(logits_rs)
+            z_smpl = torch.distributions.OneHotCategorical(logits=logits_rs).sample()
+            z_smpl = z_smpl.to(probs_rs) + probs_rs - probs_rs.detach()
             z_smpl = z_smpl.reshape(dist_params.shape[0], self.d_z * self.n_latent_categories)
         return z_smpl
 
@@ -388,14 +390,15 @@ class RSSMCell(torch.nn.Module):
         elif self.latent_dist == 'bernoulli':
             z_smpl = torch.round(dist_params) + dist_params - dist_params.detach()
         else:  # categorical
-            # probs_reshaped = dist_params.reshape(dist_params.shape[0] * self.d_z, self.n_latent_categories)
-            # z_smpl = torch.argmax(probs_reshaped, dim=-1)
+            # logits_rs = dist_params.reshape(dist_params.shape[0] * self.d_z, self.n_latent_categories)
+            # z_smpl = torch.argmax(logits_rs, dim=-1)
             # z_smpl = torch.nn.functional.one_hot(z_smpl, num_classes=self.n_latent_categories)
-            # z_smpl = z_smpl + probs_reshaped - probs_reshaped.detach()  # straight-through gradient
+            # z_smpl = z_smpl + logits_rs - logits_rs.detach()  # straight-through gradient
             # z_smpl = z_smpl.reshape(dist_params.shape[0], self.d_z * self.n_latent_categories)
-            probs_reshaped = dist_params.reshape(dist_params.shape[0], self.d_z, self.n_latent_categories)
-            z_smpl = torch.distributions.OneHotCategorical(probs=probs_reshaped).mode
-            z_smpl = z_smpl.to(probs_reshaped) + probs_reshaped - probs_reshaped.detach()
+            logits_rs = dist_params.reshape(dist_params.shape[0], self.d_z, self.n_latent_categories)
+            probs_rs = torch.nn.functional.softmax(logits_rs)
+            z_smpl = torch.distributions.OneHotCategorical(logits=logits_rs).mode
+            z_smpl = z_smpl.to(logits_rs) + probs_rs - probs_rs.detach()
             z_smpl = z_smpl.reshape(dist_params.shape[0], self.d_z * self.n_latent_categories)
         return z_smpl
 
@@ -410,7 +413,7 @@ class RSSMCell(torch.nn.Module):
             z_dist = torch.distributions.Bernoulli(probs=dist_params)
             z_dist = torch.distributions.Independent(z_dist, 1)
         else:  # categorical
-            z_dist = torch.distributions.OneHotCategorical(probs=dist_params)
+            z_dist = torch.distributions.OneHotCategorical(logits=dist_params)
         return z_dist
 
     @torch.jit.export
