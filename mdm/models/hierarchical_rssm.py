@@ -62,6 +62,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                                                    encoder_type='squashed_normal', decoder_lws=[100, 100, 200],
                                                    decoder_type='squashed_normal', activation='relu', layer_norm=True,
                                                    epsilon=0.1, beta=0.01)
+            #level['a'] = EMAClustering(window_size=window_size, s_x_orig=d_a_below, n_centroids=d_a_above, alpha=0.01)
             # window_size = level['o'].window_size
             # mask_and_action_filters = {'mask': MinUpwardsFilter(window_size), 'a': ConstUpwardsFilter(window_size, 0)}
             # level.update(mask_and_action_filters)
