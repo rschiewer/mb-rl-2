@@ -1,12 +1,15 @@
+from __future__ import annotations
+
 import copy
 import math
 import random
 from itertools import chain
 from typing import Tuple, Sequence, Optional, Dict, List, Union
+from enum import IntEnum
 from collections import namedtuple, OrderedDict
 from copy import deepcopy
 
-#from torchrl.objectives.value.functional import (td_lambda_return_estimate, _fast_td_lambda_return_estimate,
+# from torchrl.objectives.value.functional import (td_lambda_return_estimate, _fast_td_lambda_return_estimate,
 #                                                 vec_td_lambda_return_estimate)
 
 import gymnasium as gym
@@ -35,6 +38,7 @@ class ActorCriticAgent(torch.nn.Module):
                  observation_type: str,
                  d_o: int,
                  d_a: int,
+                 discrete_actions: bool = False,
                  actor_lws: Sequence[int] = (),
                  actor_act_fn: str = 'relu',
                  actor_layer_norm: bool = True,
@@ -66,6 +70,7 @@ class ActorCriticAgent(torch.nn.Module):
         self.observation_type = observation_type
         self.d_a = d_a
         self.d_o = d_o
+        self.discrete_actions = discrete_actions
         self.ema_coeff = ema_update_coeff
         self.beta = tr_policy_kl_coeff
         self.eps = torch.nn.Parameter(torch.tensor(eps_exploration_init, dtype=torch.float32), requires_grad=False)
@@ -85,7 +90,12 @@ class ActorCriticAgent(torch.nn.Module):
         self.use_slow_value_target = use_slow_value_target
         self.goal_seeking = goal_seeking
 
-        self.actor_net = torch.nn.Sequential(lwa(lws=[d_o, *actor_lws, d_a * 2], activation=actor_act_fn,
+        if discrete_actions:
+            act_net_final = d_a
+        else:
+            act_net_final = 2 * d_a
+
+        self.actor_net = torch.nn.Sequential(lwa(lws=[d_o, *actor_lws, act_net_final], activation=actor_act_fn,
                                                  layer_norm=actor_layer_norm, name='actor_net'))
         self.critic_net = torch.nn.Sequential(lwa(lws=[d_o, *critic_lws, 1], activation=critic_act_fn,
                                                   layer_norm=critic_layer_norm, name='critic_net'))
@@ -103,6 +113,16 @@ class ActorCriticAgent(torch.nn.Module):
         self.goal_reached_eps = 0.05
         self.min_float = torch.finfo().eps
 
+    def _check_a(self,
+                 a: torch.Tensor):
+        if self.discrete_actions:
+            a_sum = a.sum(dim=-1)
+            if not torch.allclose(a_sum, torch.ones_like(a_sum)):
+                raise RuntimeError(f'Invalid one-hot action: {a}')
+        else:
+            if torch.any(a > 1.0) or torch.any(a < -1.0):
+                raise RuntimeError(f'Invalid continuous action: {a}')
+
     def forward(self,
                 o: torch.Tensor,
                 sample: bool,
@@ -112,31 +132,39 @@ class ActorCriticAgent(torch.nn.Module):
             o = o.unsqueeze(0)
 
         a_dist_params = self._a_dist_params(o)
-        mu, sigma = a_dist_params.unbind(-1)
-        a_dist = self._a_dist(mu, sigma)
+        a_dist = self._a_dist(a_dist_params)
+        a_smpl = self._a_smpl(a_dist, sample=sample)
 
-        if sample:
-            a_smpl = a_dist.rsample()
-        else:
-            #a_smpl = torch.nn.functional.tanh(mu)
-            a_smpl = a_dist.mean
+        #if expl_noise > 0.0:
+        #    a_smpl = self._a_noise(a_dist, a_smpl, expl_noise)
 
-        if expl_noise > 0.0:
-            noise = torch.distributions.Normal(loc=torch.zeros_like(mu), scale=torch.full_like(mu, expl_noise)).sample()
-            #a_smpl = a_smpl + noise
-            a_smpl = torch.clamp(a_smpl + noise, -1.0 + 1e-5, 1.0 - 1e-5)
-
-        #a_smpl = torch.tanh(a_smpl)
-
-        if torch.any(a_smpl > 1.0) or torch.any(a_smpl < -1.0):
-            raise RuntimeError(f'Invalid action: {a_smpl}')
-
-        # clipped = torch.clamp(a_smpl, -1.0 + 1e-6, 1.0 - 1e-6)
-        # a_smpl = clipped.detach() + a_smpl - a_smpl.detach()
-        # a_smpl = clipped
-        # a_smpl = torch.tanh(a_smpl)
+        self._check_a(a_smpl)
 
         return a_dist_params, a_smpl
+
+    def filler_a(self,
+                 d_batch: int,
+                 device: torch.device | str,
+                 dtype: torch.dtype = torch.float32):
+        if self.discrete_actions:
+            a = torch.zeros(d_batch, self.d_a, dtype=dtype, device=device)
+            a[:, 0] = 1
+        else:
+            a = torch.zeros(d_batch, self.d_a, dtype=dtype, device=device)
+        return a
+
+    def filler_a_dist_params(self,
+                             d_batch: int,
+                             device: torch.device | str,
+                             dtype: torch.dtype = torch.float32
+                             ):
+        if self.discrete_actions:
+            d_params = torch.full((d_batch, self.d_a,), 1 / self.d_a, dtype=dtype, device=device)
+        else:
+            mu = torch.zeros(d_batch, self.d_a, dtype=dtype, device=device)
+            sigma = torch.ones(d_batch, self.d_a, dtype=dtype, device=device)
+            d_params = torch.stack([mu, sigma], -1)
+        return d_params
 
     @torch.jit.ignore
     def act_in_sim(self,
@@ -162,9 +190,11 @@ class ActorCriticAgent(torch.nn.Module):
         ema_env_mem = {}
 
         env_states = [env_start_state]
+        d_batch = env_start_state[-1].shape[0]
+        device = env_start_state[-1].device
         agent_obs = [self.fuse_o_with_goal(env_start_state, goal)]
-        agent_acts = [torch.zeros(env_start_state[-1].shape[0], self.d_a, device=env_start_state[-1].device)]
-        agent_act_dists = [torch.ones(env_start_state[-1].shape[0], self.d_a, 2, device=env_start_state[-1].device)]
+        agent_acts = [self.filler_a(d_batch, device)]
+        agent_act_dists = [self.filler_a_dist_params(d_batch, device)]
         obs_autoenc = sim_env.goal_autoencoder
         with FreezeParameters([world, obs_autoenc]):
             for t in range(n_steps):
@@ -191,39 +221,36 @@ class ActorCriticAgent(torch.nn.Module):
 
             # repeat the goal over the time dimension to match the format in env_states
             if self.goal_seeking:
-                #goal = goal.detach()  # goals come from upper level management and should not be changed by workers
+                # goal = goal.detach()  # goals come from upper level management and should not be changed by workers
                 # encode goal and observations for easier comparison
-                #_, goal_enc = obs_autoenc.encode(goal, sample=False)
-                #_, obs_enc = obs_autoenc.encode(s_embed_stacked, sample=False)
+                # _, goal_enc = obs_autoenc.encode(goal, sample=False)
+                # _, obs_enc = obs_autoenc.encode(s_embed_stacked, sample=False)
                 # insert observation and goal encodings into their respective tensors
-                #goal = torch.zeros_like(goal)
-                #goal[:, :goal_enc.shape[-1]] = goal_enc
-                #s_embed_stacked = torch.zeros_like(s_embed_stacked)
-                #s_embed_stacked[:, :, :obs_enc.shape[-1]] = obs_enc
+                # goal = torch.zeros_like(goal)
+                # goal[:, :goal_enc.shape[-1]] = goal_enc
+                # s_embed_stacked = torch.zeros_like(s_embed_stacked)
+                # s_embed_stacked[:, :, :obs_enc.shape[-1]] = obs_enc
 
-                #goal = goal.detach()  # goals come from upper level management and should not be changed by workers
+                # goal = goal.detach()  # goals come from upper level management and should not be changed by workers
                 # repeat the same goal for each time step
-                #goal_tiled = goal.unsqueeze(0).expand(n_steps + 1, -1, -1)
-                #agent_r = self.goal_similarity(s_embed_stacked, goal_tiled)
-                #agent_r = list(agent_r.unbind(0))
-                #agent_term = pred['terminal']
+                # goal_tiled = goal.unsqueeze(0).expand(n_steps + 1, -1, -1)
+                # agent_r = self.goal_similarity(s_embed_stacked, goal_tiled)
+                # agent_r = list(agent_r.unbind(0))
+                # agent_term = pred['terminal']
                 goal = world.decode(goal.detach(), sample=False, reconstruct_observation=True)['o']
-                goal_tiled = goal.unsqueeze(0).expand(n_steps + 1, -1, -1).clone()  # clone to be on the safe side for now
+                goal_tiled = goal.unsqueeze(0).expand(n_steps + 1, -1, -1).clone()  # clone to be safe
                 state_obs = torch.stack(env_memory['o'])
-                #goal[:, 2:] = 0
-                #state_obs[:, :, 2:] = 0
                 agent_r = self.goal_similarity(state_obs, goal_tiled)
                 agent_term = self.goal_terminal(agent_r)
 
                 agent_r = list(agent_r.unbind(0))
                 agent_term = list(agent_term.unbind(0))
-                #agent_term = [torch.zeros_like(t) for t in pred['terminal']]  # completely disable actual env term flag
                 pred['r'] = None
             else:
                 agent_r = pred['r']
                 agent_term = pred['terminal']
 
-            #if self.level > 0:
+            # if self.level > 0:
             #    _, _, _, s_embed_rec = obs_autoenc(s_embed_stacked, sample=False)
             #    novelty_loss = torch.mean((s_embed_stacked - s_embed_rec) ** 2, dim=-1, keepdim=True)
             #    agent_r = [r_t + reconstr_loss_t for r_t, reconstr_loss_t in zip(agent_r, novelty_loss)]
@@ -235,7 +262,7 @@ class ActorCriticAgent(torch.nn.Module):
         return {'agent': agent_memory, 'model': env_memory, 'model_state': env_states[-1], 'ema_model': ema_env_mem}
 
     @staticmethod
-    def _check(a, agent_o, last_env_state, pred):
+    def _check_inp(a, agent_o, last_env_state, pred):
         if torch.isnan(last_env_state[0]).any() or torch.isinf(last_env_state[0]).any():
             raise RuntimeError(f'Invalid env state in act_in_sim: {last_env_state[0]}')
         if torch.isnan(agent_o).any() or torch.isinf(agent_o).any():
@@ -255,25 +282,72 @@ class ActorCriticAgent(torch.nn.Module):
     def _a_dist_params(self,
                        o: torch.Tensor):
         params = self.actor_net(o)
-        mu, logvar = torch.tensor_split(params, 2, -1)
-        mu = torch.tanh(mu)  # limit total range of mu but make it easy for the actor net to saturate it
 
-        #logvar = logvar + 3.0  # make initial variance high
-        #sigma = torch.nn.functional.softplus(logvar) + self.min_scale
-        #sigma = torch.nn.functional.sigmoid(logvar) + self.min_scale  # limit total range of sigma
-        logvar = torch.clamp(logvar, -3, 2)  # from rllib
-        sigma = torch.exp(logvar) + self.min_scale
-        d = torch.stack([mu, sigma], dim=-1)
-        return d
+        if self.discrete_actions:
+            params = torch.nn.functional.softmax(params, dim=-1)
+            params = 0.99 * params + 0.01 * (1.0 / self.d_a)  # avoids numerical instability
+            params = torch.log(params)
+            #params = torch.nn.functional.softmax(params, dim=-1)  # re-normalize
+        else:
+            mu, logvar = torch.tensor_split(params, 2, -1)
+            mu = torch.tanh(mu)  # limit total range of mu but make it easy for the actor net to saturate it
+
+            # logvar = logvar + 3.0  # make initial variance high
+            # sigma = torch.nn.functional.softplus(logvar) + self.min_scale
+            # sigma = torch.nn.functional.sigmoid(logvar) + self.min_scale  # limit total range of sigma
+            logvar = torch.clamp(logvar, -3, 2)  # from rllib
+            sigma = torch.exp(logvar) + self.min_scale
+            params = torch.stack([mu, sigma], dim=-1)
+        return params
+
+    def _a_noise(self,
+                 a_dist: torch.distributions.Normal | torch.distributions.OneHotCategorical,
+                 a_smpl: torch.Tensor,
+                 noise: float):
+        if self.discrete_actions:
+            if noise > random.random():
+                d_batch = a_smpl.shape[0]
+                a_smpl_noise = torch.randint(self.d_a, d_batch)
+                a_smpl_noise = torch.nn.functional.one_hot(a_smpl_noise, self.d_a)
+            else:
+                a_smpl_noise = a_smpl
+            #params = torch.nn.functional.softmax(a_dist.probs + noise)
+            #a_dist = self._a_dist(params)
+            #a_smpl_noise = self._a_smpl(a_dist, sample=True)
+        else:
+            noise_dist = torch.distributions.Normal(loc=torch.zeros_like(a_smpl), scale=torch.full_like(a_smpl, noise))
+            a_smpl_noise = torch.clamp(a_smpl + noise_dist.sample(), -1.0 + 1e-5, 1.0 - 1e-5)
+        return a_smpl_noise
+
+    def _a_smpl(self,
+                a_dist: torch.distributions.Normal | torch.distributions.OneHotCategorical,
+                sample: bool):
+        if self.discrete_actions:
+            if sample:
+                a_smpl = a_dist.sample()
+                a_smpl = a_smpl + a_dist.probs - a_dist.probs.detach()
+            else:
+                a_smpl = torch.argmax(a_dist.probs, dim=-1)
+                a_smpl = torch.nn.functional.one_hot(a_smpl, self.d_a) #+ a_dist.probs - a_dist.probs.detach()
+            a_smpl = a_smpl.to(dtype=torch.float32)
+        else:
+            if sample:
+                a_smpl = a_dist.rsample()
+            else:
+                a_smpl = a_dist.mean
+        return a_smpl
 
     def _a_dist(self,
-                mu: torch.Tensor,
-                sigma: torch.Tensor):
-        # sigma = torch.full_like(sigma, 0.1)
-        #d = torch.distributions.Normal(loc=mu, scale=sigma)
-        #d = torch.distributions.TransformedDistribution(d, [TanhBijector()])
-        d = SquashedNormal(loc=mu, scale=sigma)
-        # d = torch.distributions.Independent(d, 1)
+                a_dist_params: torch.Tensor):
+        if self.discrete_actions:
+            d = torch.distributions.OneHotCategorical(logits=a_dist_params)
+        else:
+            mu, sigma = a_dist_params.unbind(-1)
+            # sigma = torch.full_like(sigma, 0.1)
+            # d = torch.distributions.Normal(loc=mu, scale=sigma)
+            # d = torch.distributions.TransformedDistribution(d, [TanhBijector()])
+            d = SquashedNormal(loc=mu, scale=sigma)
+            d = torch.distributions.Independent(d, 1)
         return d
 
     # see https://github.com/ray-project/ray/blob/d9722d2bafe8d7fd4ffb95f4ac64701720526c56/rllib/models/torch/torch_action_dist.py#L337
@@ -281,12 +355,21 @@ class ActorCriticAgent(torch.nn.Module):
     def _a_log_prob(self,
                     a_dist_params: torch.Tensor,
                     a: torch.Tensor):
-        mu, sigma = a_dist_params.unbind(-1)
-        d = self._a_dist(mu, sigma)
-        #a = torch.clamp(a, -1.0 + 1e-5, 1.0 - 1e-5)  # clamp actions to avoid numerical instability
-        #a = torch.atanh(a)
-        a_log_prob = d.log_prob(a)#.unsqueeze(-1)
-        #a_log_prob = a_log_prob.sum(dim=-1, keepdim=True)  # sum over action dimension
+        d = self._a_dist(a_dist_params)
+        # a = torch.clamp(a, -1.0 + 1e-5, 1.0 - 1e-5)  # clamp actions to avoid numerical instability
+        # a = torch.atanh(a)
+        # make [0, ..., 0, 1, 0, ... 0] to [ eps, ..., eps, 1 - eps, eps, ..., eps] for stability
+        # but preserve gradients if possible, so avoid torch.clamp
+        # eps = 1e-5
+        # a = a - self.d_a * eps
+        # a = torch.clamp(a, 0.0, 1.0)
+        # a = a + eps
+
+        if self.discrete_actions:
+            a = torch.round(a).to(dtype=torch.int)
+
+        a_log_prob = d.log_prob(a).unsqueeze(-1)
+        # a_log_prob = a_log_prob.sum(dim=-1, keepdim=True)  # sum over action dimension
 
         return a_log_prob
 
@@ -332,7 +415,7 @@ class ActorCriticAgent(torch.nn.Module):
                   for_train_step: bool = False):
         # In general: First time step comes from replay memory, so the first action is zero padding and not optimized by
         # the actor. The last action doesn't yield any outcome and is thus not optimized either. Only the critic can
-        # optimize the first time step. It doesn't optimize the last time step howeve, as it serves as the bootstrap
+        # optimize the first time step. It doesn't optimize the last time step however, as it serves as the bootstrap
         # value estimate for all previous time steps.
         o = torch.stack(o)
         r = torch.stack(r)
@@ -364,7 +447,6 @@ class ActorCriticAgent(torch.nn.Module):
             mask_t1_to_H = mask[:-1]
             mask_t1_to_Hm1 = mask[:-2]
 
-
         # prevent critic net parameters from being updated through policy loss but let gradients of policy loss flow
         # through value network back into simulated environment
         # with FreezeParameters([self.critic_net]):
@@ -383,35 +465,35 @@ class ActorCriticAgent(torch.nn.Module):
         else:
             v_actor = v_actor_online
 
-        #r_mean, r_std = self.return_running_average(r, mask)
-        #r = self.return_running_average.normalize(r, r_mean, r_std)
+        # r_mean, r_std = self.return_running_average(r, mask)
+        # r = self.return_running_average.normalize(r, r_mean, r_std)
 
         lambda_returns = self.compute_targets_dreamer_v2(r, terminal, v_actor, gamma, lambda_)
 
-        #lambda_returns = td_lambda_return_estimate(gamma, lambda_, v_actor[1:], r[:-1],
+        # lambda_returns = td_lambda_return_estimate(gamma, lambda_, v_actor[1:], r[:-1],
         #                                           terminal[:-1].to(torch.bool), time_dim=0)
 
-        #lambda_returns = _fast_td_lambda_return_estimate(gamma, lambda_, v_actor[1:].transpose(0, 1),
+        # lambda_returns = _fast_td_lambda_return_estimate(gamma, lambda_, v_actor[1:].transpose(0, 1),
         #                                                 r[:-1].transpose(0, 1),
         #                                                 terminal[:-1].to(torch.bool).transpose(0, 1),
         #                                                 terminal[:-1].to(torch.bool).transpose(0, 1))
-        #lambda_returns = lambda_returns.transpose(0, 1)
+        # lambda_returns = lambda_returns.transpose(0, 1)
 
         # lambda_returns = calc_lambda_returns(r[1:], terminal[1:], v_actor[:-1], bootstrap, gamma, lambda_)
 
         # lambda_returns = calc_returns_simple(r[:-1], terminal[:-1], bootstrap, 0.99)
 
-        #if self.goal_seeking:
+        # if self.goal_seeking:
         #    lambda_returns_actor = lambda_returns
-        #else:
+        # else:
         ret_mean, ret_std = self.return_running_average(lambda_returns, mask_t1_to_H)  # update and return stats
         lambda_returns_actor = self.return_running_average.normalize(lambda_returns, ret_mean, ret_std)
         v_actor = self.return_running_average.normalize(v_actor, ret_mean, ret_std)
-        #lambda_returns_actor = lambda_returns
+        # lambda_returns_actor = lambda_returns
 
-        #params = {**dict(self.named_parameters())}
-        #make_dot(lambda_returns_actor.sum(), params).view()
-        #quit()
+        # params = {**dict(self.named_parameters())}
+        # make_dot(lambda_returns_actor.sum(), params).view()
+        # quit()
 
         # ACTOR
         if self.dynamics_loss:
@@ -432,8 +514,13 @@ class ActorCriticAgent(torch.nn.Module):
         # policy_loss = torch.sum(policy_loss)
 
         # ACTION ENTROPY LOSS
-        #act_entropy = self._a_dist_entropy(a_dist[1:-1])
-        act_entropy = torch.sum(a_log_prob[1:-1], dim=-1, keepdim=True)  # sum over action dim
+        # act_entropy = self._a_dist_entropy(a_dist[1:-1])
+        # act_entropy = torch.sum(a_log_prob[1:-1], dim=-1, keepdim=True)  # sum over action dim
+        if self.discrete_actions:
+            #act_entropy = a_log_prob[1:-1] #self._a_dist(a_dist_params=a_dist[1:-1]).entropy().unsqueeze(-1)
+            act_entropy = self._a_dist(a_dist_params=a_dist[1:-1]).entropy().unsqueeze(-1)
+        else:
+            act_entropy = a_log_prob[1:-1]  # squashed Gaussian doesn't have closed form entropy
         # act_entropy_loss = torch.sum(act_entropy_loss * valid)  # sum over T and B
         act_entropy_loss = - self.alpha.detach() * masked_mean(act_entropy, mask_t1_to_Hm1)
         # act_entropy_loss = - torch.maximum(self.alpha.detach(), torch.zeros_like(self.alpha)) * act_entropy_loss
@@ -442,7 +529,6 @@ class ActorCriticAgent(torch.nn.Module):
         # see https://github.com/ray-project/ray/blob/cb5bb4e7763994db4f4e765ce9dc74376d7eedca/rllib/algorithms/sac/sac_tf_policy.py#L415
         if self.learn_aplha:
             alpha_loss = self.alpha * (a_log_prob[1:-1].detach() + self.target_act_entropy)
-            # alpha_loss = - torch.sum(alpha_loss * valid)
             alpha_loss = - masked_mean(alpha_loss, mask_t1_to_Hm1)
         else:
             alpha_loss = torch.zeros_like(policy_loss)
@@ -452,13 +538,10 @@ class ActorCriticAgent(torch.nn.Module):
             value_target = lambda_returns
             v_ema_critic = self.ema_critic_net(o.detach()[:-1])
             ema_value_loss = torch.nn.functional.smooth_l1_loss(v_ema_critic, value_target.detach(), reduction='none')
-            # ema_value_loss = torch.sum(ema_value_loss * valid)
             ema_value_loss = masked_mean(ema_value_loss, mask_t1_to_H)
 
         v_critic = self.critic_net(o.detach()[:-1])
         value_loss = torch.nn.functional.smooth_l1_loss(v_critic, value_target.detach(), reduction='none')
-        # value_loss = (v_critic - value_target.detach()) ** 2
-        # value_loss = torch.sum(value_loss * valid)
         value_loss = masked_mean(value_loss, mask_t1_to_H)
 
         # TODO: currently last action is not trained, we can change that and record last state in act_in_sim as well
@@ -483,9 +566,13 @@ class ActorCriticAgent(torch.nn.Module):
             ema_v_mean = masked_mean(v_ema_critic, mask_t1_to_H)
             v_result_mean = masked_mean(v_actor[1:], mask_t1_to_H)
             lambda_returns_mean = masked_mean(lambda_returns, mask_t1_to_H)
-            mu, sigma = a_dist.unbind(-1)
-            mu_mean = masked_mean(mu[1:-1], mask_t1_to_Hm1)
-            sigma_mean = masked_mean(sigma[1:-1], mask_t1_to_Hm1)
+            if self.discrete_actions:
+                mu_mean = masked_mean(a_dist[1:-1], mask_t1_to_Hm1)
+                sigma_mean = torch.tensor(0.0).to(mu_mean)
+            else:
+                mu, sigma = a_dist.unbind(-1)
+                mu_mean = masked_mean(mu[1:-1], mask_t1_to_Hm1)
+                sigma_mean = masked_mean(sigma[1:-1], mask_t1_to_Hm1)
 
         """
         if self.goal_seeking:
@@ -527,9 +614,6 @@ class ActorCriticAgent(torch.nn.Module):
                   'monitoring_lambda_returns': lambda_returns_mean,
                   'monitoring_faction_valid': torch.sum(1 - mask_t1_to_H) / torch.sum(torch.ones_like(mask_t1_to_H)),
                   'monitoring_bootstrap': v_actor[-1].mean()}
-
-        # if for_train_step:
-        #    losses['mask_t1_to_H'] = mask_t1_to_H
 
         invalid_losses = ''
         for k, v in losses.items():
@@ -606,7 +690,7 @@ class ActorCriticAgent(torch.nn.Module):
         #                             for p in self.actor_net.parameters()])
         # plt.hist(actor_grads, bins=100)
         # plt.show()
-        #torch.nn.utils.clip_grad_value_(self.parameters(), 1.0)
+        # torch.nn.utils.clip_grad_value_(self.parameters(), 1.0)
         torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
 
         # if logger:
@@ -650,41 +734,31 @@ class ActorCriticAgent(torch.nn.Module):
     @staticmethod
     def goal_similarity(o: torch.Tensor,
                         goal: torch.Tensor) -> torch.Tensor:
-        # if isinstance(o, torch.Tensor) and isinstance(goal, torch.Tensor):
-        #    return - torch.mean(torch.abs(o - goal) ** 2, dim=-1, keepdim=True)
-        # elif isinstance(o, torch.Tensor) and isinstance(goal, Distribution):
-        #    return torch.mean(goal.log_prob(o), dim=-1, keepdim=True)
-        # elif isinstance(o, Distribution) and isinstance(goal, torch.Tensor):
-        #    return torch.mean(o.log_prob(goal), dim=-1, keepdim=True)
-        # else:
-        #    return - torch.mean(torchd.kl_divergence(goal, o) + torchd.kl_divergence(o, goal), dim=-1, keepdim=True)
-        # similarity = torch.pow(0.99, torch.mean(torch.abs(o - goal) ** 2, dim=-1, keepdim=True))
+        # o_norm = torch.linalg.vector_norm(o, dim=-1, keepdim=True)
+        # goal_norm = torch.linalg.vector_norm(goal, dim=-1, keepdim=True)
+        # norm = torch.maximum(o_norm, goal_norm).detach()
+        # similarity = torch.linalg.vecdot(goal / norm, o / norm, dim=-1).unsqueeze(-1)
 
-        #o_norm = torch.linalg.vector_norm(o, dim=-1, keepdim=True)
-        #goal_norm = torch.linalg.vector_norm(goal, dim=-1, keepdim=True)
-        #norm = torch.maximum(o_norm, goal_norm).detach()
-        #similarity = torch.linalg.vecdot(goal / norm, o / norm, dim=-1).unsqueeze(-1)
-
-        #similarity = torch.where(similarity < 0.999, 0.0, 1.0)
+        # similarity = torch.where(similarity < 0.999, 0.0, 1.0)
 
         similarity = - torch.nn.functional.mse_loss(o, goal, reduction='none').mean(dim=-1, keepdim=True)
-        #similarity = - torch.mean(torch.sqrt((o - goal) ** 2), dim=-1, keepdim=True)
-        #similarity = torch.where(similarity >= -0.0001, 1.0, 0.0)
+        # similarity = - torch.mean(torch.sqrt((o - goal) ** 2), dim=-1, keepdim=True)
+        # similarity = torch.where(similarity >= -0.0001, 1.0, 0.0)
         check_tensor(similarity)
         return similarity
 
     @staticmethod
     def goal_terminal(agent_r: torch.Tensor):
         # nav2d with varying reward positions
-        #term_zone_core_radius = 0.0005
-        #term_zone_perimeter_radius = 0.001
+        # term_zone_core_radius = 0.0005
+        # term_zone_perimeter_radius = 0.001
 
         # PointMaze_UMaze with varying reward positions
-        #term_zone_core_radius = 0.001
-        #term_zone_perimeter_radius = 0.003
+        # term_zone_core_radius = 0.001
+        # term_zone_perimeter_radius = 0.003
 
         term_zone_core_radius = 0.001
-        term_zone_perimeter_radius = 0.2
+        term_zone_perimeter_radius = 0.1
 
         # sigmoid is close to 1.0 at x=3.0 and close to 0.0 at x=-3.0
         sig_min = -5.0
@@ -697,7 +771,7 @@ class ActorCriticAgent(torch.nn.Module):
         offset = (term_zone_perimeter_radius + term_zone_core_radius) / 2
         magnification = (sig_max - sig_min) / (term_zone_perimeter_radius - term_zone_core_radius)
         agent_term = (agent_r + offset) * magnification
-        #agent_term = torch.clamp(agent_term, -3.0, 3.0)  # stabilize
+        # agent_term = torch.clamp(agent_term, -3.0, 3.0)  # stabilize
         agent_term = torch.sigmoid(agent_term)
 
         check_tensor(agent_term, neg_bound=0.0, pos_bound=1.0)

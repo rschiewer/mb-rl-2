@@ -3,6 +3,7 @@ import gymnasium as gym
 from mdm.models.rssm_cell import RSSMCell
 from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.models.building_blocks import *
+from mdm.utils.utils import infer_action_info
 
 
 def build_model_opt(model: torch.nn.Module, cfg: dict):
@@ -40,15 +41,12 @@ def build_rssms(cfg: dict):
 def build_agents(cfg: dict,
                  env: gym.Env,
                  device: torch.device):
-    if not isinstance(env.action_space, gym.spaces.Box):
-        raise ValueError('Only enviornments with continuous action space are supported')
-
-    def gen_agent_fn(level: int, goal_seeking: bool, cfg) -> (
+    def gen_agent_fn(level: int, goal_seeking: bool, _cfg: dict) -> (
             ActorCriticAgent, torch.optim.Optimizer, torch.optim.Optimizer):
-        agent = ActorCriticAgent(level=level, observation_key=None, goal_seeking=goal_seeking, **cfg)
+        agent = ActorCriticAgent(level=level, observation_key=None, goal_seeking=goal_seeking, **_cfg)
         agent = agent.to(device)
-        actor_optimizer = torch.optim.Adam(agent.actor_net.parameters(), lr=cfg['lr_actor'])
-        critic_optimizer = torch.optim.Adam(agent.critic_net.parameters(), lr=cfg['lr_critic'])
+        actor_optimizer = torch.optim.Adam(agent.actor_net.parameters(), lr=_cfg['lr_actor'])
+        critic_optimizer = torch.optim.Adam(agent.critic_net.parameters(), lr=_cfg['lr_critic'])
         # make one optimizer for all parameters not actor or critic net related
         exclude_params = list(agent.actor_net.parameters()) + list(agent.critic_net.parameters())
         remaining_params = []
@@ -60,7 +58,7 @@ def build_agents(cfg: dict,
                     break
             if not found:
                 remaining_params.append(p)
-        other_params_optimizer = torch.optim.Adam(remaining_params, lr=cfg['lr_other'])
+        other_params_optimizer = torch.optim.Adam(remaining_params, lr=_cfg['lr_other'])
         return agent, {'actor_optimizer': actor_optimizer, 'critic_optimizer': critic_optimizer,
                        'other_optimizer': other_params_optimizer}
 
@@ -73,7 +71,6 @@ def build_agents(cfg: dict,
         if agent_lvl < len(cfg['mdm']['rssm_modules']) - 1:
             cfg_goal_seeking = cfg['agents']['goal_seeking'][agent_lvl]
             goal_seeking_agents.append(gen_agent_fn(agent_lvl, True, cfg_goal_seeking))
-    # goal_seeking_agents.append(None)  # no homing agent needed on last level
 
     return r_max_agents, goal_seeking_agents
 
@@ -98,7 +95,7 @@ def cfg_infer_missing_values(cfg: dict,
 
         # calculate observation dimension for RSSM encoders/decoders
         if i_module == 0:
-            module_args['d_a'] = infer_a_dim(env)
+            module_args['d_a'], is_discrete = infer_action_info(env)
             s_o = env.observation_space.shape
         else:
             if cfg['mdm']['links'][i_module - 1] == 'z':
@@ -142,9 +139,12 @@ def cfg_infer_missing_values(cfg: dict,
         d_h = cfg['mdm']['rssm_modules'][agent_lvl]['d_h']
 
         cfg_r_max = cfg['agents']['r_max'][agent_lvl]
-        #if agent_lvl == 0:
-        #    cfg_r_max['min_a'] = tuple(env.action_space.low)
-        #    cfg_r_max['max_a'] = tuple(env.action_space.high)
+        # in case of lvl 0 model, infer action type from environment
+        if agent_lvl == 0:
+            _, cfg_r_max['discrete_actions'] = infer_action_info(env)
+            assert not cfg_r_max['discrete_actions'] or not cfg_r_max['dynamics_loss'],\
+                'Discrete action agent must use reinforce agent loss'
+        # always infer action dimension from world model
         cfg_r_max['d_a'] = cfg['mdm']['rssm_modules'][agent_lvl]['d_a']
         if cfg_r_max['observation_type'] == 'z':
             cfg_r_max['d_o'] = d_z
@@ -155,10 +155,14 @@ def cfg_infer_missing_values(cfg: dict,
 
         if agent_lvl < len(cfg['mdm']['rssm_modules']) - 1:
             cfg_goal_seeking = cfg['agents']['goal_seeking'][agent_lvl]
-            #if agent_lvl == 0:
-            #    cfg_goal_seeking['min_a'] = tuple(env.action_space.low)
-            #    cfg_goal_seeking['max_a'] = tuple(env.action_space.high)
+            # in case of lvl 0 model, infer action type from environment
+            if agent_lvl == 0:
+                _, cfg_goal_seeking['discrete_actions'] = infer_action_info(env)
+                assert not cfg_goal_seeking['discrete_actions'] or not cfg_goal_seeking['dynamics_loss'], \
+                    'Discrete action agent must use reinforce agent loss'
+            # always infer action dimension from world model
             cfg_goal_seeking['d_a'] = cfg['mdm']['rssm_modules'][agent_lvl]['d_a']
+
             if cfg_goal_seeking['observation_type'] == 'z':
                 cfg_goal_seeking['d_o'] = d_z
             elif cfg_goal_seeking['observation_type'] == 'h':

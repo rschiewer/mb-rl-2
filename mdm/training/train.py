@@ -38,14 +38,17 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
 
     # actor_params = np.sum(
     #    record_parameters(model.r_max_agents[0][0].actor_net, reduction_fn=lambda x: x.ravel().mean()))
-    logger.n_log_calls = 0
+    if cfg['agents']['r_max'][0]['discrete_actions']:
+        n_categories = {'a': cfg['agents']['r_max'][0]['d_a']}
+    else:
+        n_categories = {}
 
     for i_step in tqdm(range(cfg['trainer']['n_train_steps']), desc='Training Progress'):
         logger.log({'n_env_interactions': count_env_interactions(train_driver.memory)}, Scope.TRAIN(), i_step)
 
         batch = train_driver.interact(cfg['trainer']['d_batch'])
         batch = to_tensors(batch, device='cuda')
-        batch = prepare_data(batch)
+        batch = prepare_data(batch, n_categories=n_categories)
 
         # _new_actor_params = np.sum(
         #    record_parameters(model.r_max_agents[0][0].actor_net, reduction_fn=lambda x: x.ravel().mean()))
@@ -87,7 +90,8 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 trajectory_sample = trajectory_sample[:5000]
 
             trajectory_sample = to_tensors(trajectory_sample, device='cpu')  # we don't do computations, using cpu is ok
-            trajectory_sample = prepare_data(trajectory_sample, remove_keys=['o', 'r', 'terminal', 'truncated'])
+            trajectory_sample = prepare_data(trajectory_sample, n_categories=n_categories,
+                                             remove_keys=['o', 'r', 'terminal', 'truncated'])
 
             # extract subsequences
             flt = UpwardsFilter(window_size=8)
@@ -214,7 +218,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 trajs_orig = test_driver.interact(cfg['trainer']['d_batch'])
                 # trajs_orig = add_no_ops(trajs_orig, model.strides[1])
                 batch = to_tensors(trajs_orig, model.device)
-                batch = prepare_data(batch)
+                batch = prepare_data(batch, n_categories=n_categories)
                 if cfg['trainer']['subtrajectory_len'] > 0:
                     batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
                 eval_steps = [-1] + cfg['trainer']['model_train_steps'][1:]
@@ -281,50 +285,6 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                         plt.legend()
                         logger.log_plot(fig, Scope.TRAIN() / f'goal_autoencoder_sampled', i_step)
 
-                """
-                if env_class_is(eval_env, Nav2dEnv):
-                    returns_flat = [t['r'].sum() for t in eval_mem_flat]
-                    worst_flat = np.argmin(returns_flat)
-                    returns_hierarchical = [t['r'].sum() for t in eval_mem_hierarchical]
-                    worst_hierac = np.argmin(returns_hierarchical)
-                    with TempFigure() as fig:
-                        fig, anim = visualize_overlaid_trajectories(eval_mem_flat[worst_flat], figure=fig)
-                        vid_flat = anim_to_vid(anim)
-                        vid_flat.name = 'flat_agent_acting'
-                    with TempFigure() as fig:
-                        fig, anim = visualize_overlaid_trajectories(eval_mem_hierarchical[worst_hierac], figure=fig)
-                        vid_hierarchical = anim_to_vid(anim)
-                        vid_hierarchical.name = 'hierarchical_agent_acting'
-                    logger.log({'flat_agent': vid_flat, 'hierarchical_agent': vid_hierarchical},
-                               Scope.TEST() / 'agent_action_videos/', i_step)
-
-                    # model l0 simulation plot, works only for nav2d env
-                    warmup_steps = model.maybe_sample_warmup_steps(training_data=batch, model_steps=model_train_steps,
-                                                                   warmup_steps=cfg['eval']['warmup_steps'])
-                    pred, pred_ema, _, _ = model.forward_all_levels(ground_truth_trajectory=batch,
-                                                                    warmup_steps=warmup_steps,
-                                                                    model_steps=model_train_steps,
-                                                                    sample_state=True,
-                                                                    sample_output=False)
-                    trajs_orig_pad = trajectories_from_simulation(batch)  # to get padded version of orig trajectories
-                    trajs_sim = trajectories_from_simulation(pred[0])
-                    with TempFigure() as fig:
-                        fig, anim = visualize_overlaid_trajectories(trajs_sim[0], trajs_orig_pad[0], figure=fig)
-                        vid = anim_to_vid(anim)
-                        vid.name = 'model_sim'
-                    logger.log({'model': vid}, Scope.TEST() / 'model_prediction_video/0', i_step)
-
-                    if model.levels > 1:
-                        trajs_sim = trajectories_from_simulation(pred[1], model, 1)
-                        # truncate to original trajectory length
-                        l_traj_orig = trajs_orig_pad[0]['o'].shape[0]
-                        trajs_sim = [{k: v[:l_traj_orig] for k, v in traj.items()} for traj in trajs_sim]
-                        with TempFigure() as fig:
-                            fig, anim = visualize_overlaid_trajectories(trajs_sim[0], trajs_orig_pad[0], figure=fig)
-                            vid = anim_to_vid(anim)
-                            vid.name = 'model_sim'
-                        logger.log({'model': vid}, Scope.TEST() / 'model_prediction_video/1', i_step)
-                """
                 # log model and agent params
                 # log_params(model, logger, Scope.PARAMETERS() / 'model', time_step=i_step)
                 # for i_ag, ag in enumerate(r_max_agents):
@@ -1328,8 +1288,8 @@ def record_episode(cfg, i_step, logger, model, video_env):
     # record an episode
     video_env.reset()
     video_env.get_wrapper_attr('start_video_recorder')()
-    policy = HierarchicalLatentAgentPolicy(model, stochastic=False, exploration_noise=0.0)
-    # policy = LatentAgentPolicy(model.r_max_agents[0][0], model, explore=False)
+    #policy = HierarchicalLatentAgentPolicy(model, stochastic=True, exploration_noise=0.0)
+    policy = LatentAgentPolicy(model.r_max_agents[0][0], model, exploration_noise=0.0, stochastic=True)
     traj = collect_data(video_env, cfg['eval']['eval_steps'], policy)
     traj = traj[0]  # we collect only a single trajectory, remove list wrapper
     video_env.get_wrapper_attr('close_video_recorder')()

@@ -37,7 +37,12 @@ class LatentAgentPolicy(Policy):
         else:
             self._current_env_state = None
 
-        self.sample_world_model = False
+        self.sample_world_model = True
+
+        if agent.discrete_actions:
+            self.one_hot_keys = {'a': agent.d_a}
+        else:
+            self.one_hot_keys = {}
 
     def reset(self):
         self._current_env_state = None
@@ -65,7 +70,7 @@ class LatentAgentPolicy(Policy):
             o, a, r, terminal, truncated = [x.unsqueeze(1) for x in (o, a, r, terminal, truncated)]
         # prepare data
         env_data = {'o': o, 'a': a, 'r': r, 'terminal': terminal, 'truncated': truncated, 'mask': torch.zeros_like(r)}
-        env_data = prepare_data(env_data)
+        env_data = prepare_data(env_data, n_categories=self.one_hot_keys)
 
         for k, v in env_data.items():
             if torch.isnan(v).any():
@@ -93,6 +98,10 @@ class LatentAgentPolicy(Policy):
             raise RuntimeError(f'Invalid NAN action: {a}')
         if torch.isinf(a).any():
             raise RuntimeError(f'Invalid inf action: {a}')
+
+        # transform one-hot actions to int index format
+        if 'a' in self.one_hot_keys:
+            a = torch.argmax(a, dim=-1)
 
         if isinstance(env, CacheLastStepEnv):  # remove batch dimension if it's not a vector env
             a = a[0]
@@ -150,6 +159,11 @@ class HierarchicalLatentAgentPolicy(Policy):
         self._use_ema_modules = use_slow_world_model.pop()
         self.sample_world_model = True
 
+        if model.r_max_agents[0][0].discrete_actions:
+            self.one_hot_keys = {'a': model.r_max_agents[0][0].d_a}
+        else:
+            self.one_hot_keys = {}
+
         self.reset()
 
     @staticmethod
@@ -183,7 +197,7 @@ class HierarchicalLatentAgentPolicy(Policy):
         if isinstance(env, CacheLastStepEnv):  # add batch dim if unbatched env
             o, a, r, terminal, truncated = [x.unsqueeze(1) for x in (o, a, r, terminal, truncated)]
         env_data = {'o': o, 'a': a, 'r': r, 'terminal': terminal, 'truncated': truncated, 'mask': torch.empty_like(r)}
-        env_data = prepare_data(env_data, remove_keys=['truncated', 'mask'])
+        env_data = prepare_data(env_data, remove_keys=['truncated', 'mask'], n_categories=self.one_hot_keys)
         env_data = {k: list(v.unbind(0)) for k, v in env_data.items()}
         return env_data
 
@@ -414,6 +428,10 @@ class HierarchicalLatentAgentPolicy(Policy):
             self._replan()
 
         action = self.action_queue.pop(0)
+
+        # check if we have one-hot actions, in that case we need to transform actions back to int index format
+        if 'a' in self.one_hot_keys:
+            action = torch.argmax(action, dim=-1)
 
         if isinstance(env, CacheLastStepEnv):  # remove batch dimension if it's not a vector env
             action = action[0]
