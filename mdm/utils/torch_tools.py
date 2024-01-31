@@ -191,8 +191,12 @@ class RunningMeanStd(torch.jit.ScriptModule):
     # https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
     def __init__(self,
                  epsilon: float = 1e-4,
-                 shape: tuple = ()):
+                 shape: int | Tuple[int] = ()):
         super().__init__()
+
+        if type(shape) is int:
+            shape = (shape,)
+
         """Tracks the mean, variance and count of values."""
         self._mean = torch.nn.Parameter(torch.zeros(*shape, dtype=torch.float64), requires_grad=False)
         self._var = torch.nn.Parameter(torch.ones(*shape, dtype=torch.float64), requires_grad=False)
