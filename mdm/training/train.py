@@ -116,9 +116,9 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
             clusters = kmeans.predict(a_subsequences)
 
             # reduce data dimensionality for plotting
-            #dim_reducer = PCA(n_components=n_dims)
+            # dim_reducer = PCA(n_components=n_dims)
             dim_reducer = umap.UMAP(n_components=n_dims)
-            #dim_reducer = TSNE(n_components=n_dims, perplexity=50)
+            # dim_reducer = TSNE(n_components=n_dims, perplexity=50)
             low_dim_subsequences = dim_reducer.fit_transform(a_subsequences)
 
             # plotting
@@ -141,7 +141,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 else:
                     informativeness = ''
                 ax.set_title(informativeness)
-                #plt.show()
+                # plt.show()
                 logger.log_plot(fig, Scope.TRAIN() / f'action_sequence_clustering', i_step)
 
         logger.log(to_np(train_losses), Scope.TRAIN(), i_step)
@@ -310,28 +310,28 @@ def model_dispersion(model, batch, logger):
     n_stp = [-1 for _ in range(model.levels)]
 
     # predict using two times the same batch with sampling
-    pred_offline_0, _, _, _ = model.forward_all_levels(batch, warmup_steps=n_wu, model_steps=n_stp,
-                                                       sample_output=False, sample_state=True)
-    pred_offline_1, _, _, _ = model.forward_all_levels(batch, warmup_steps=n_wu, model_steps=n_stp,
-                                                       sample_output=False, sample_state=True)
+    pred_offline_0, _, _ = model.forward_all_levels(batch, warmup_steps=n_wu, model_steps=n_stp,
+                                                    sample_output=False, sample_state=True)
+    pred_offline_1, _, _ = model.forward_all_levels(batch, warmup_steps=n_wu, model_steps=n_stp,
+                                                    sample_output=False, sample_state=True)
     s_diff_0 = torch.stack(pred_offline_0[0]['s_embedding']) - torch.stack(pred_offline_1[0]['s_embedding'])
     s_diff_0 = torch.mean(torch.abs(s_diff_0), dim=(1, 2)).detach().cpu().numpy()
 
     # predict using two times the same batch withOUT sampling
-    pred_offline_2, _, _, _ = model.forward_all_levels(batch, warmup_steps=n_wu, model_steps=n_stp,
-                                                       sample_output=False, sample_state=False)
-    pred_offline_3, _, _, _ = model.forward_all_levels(batch, warmup_steps=n_wu, model_steps=n_stp,
-                                                       sample_output=False, sample_state=False)
+    pred_offline_2, _, _ = model.forward_all_levels(batch, warmup_steps=n_wu, model_steps=n_stp,
+                                                    sample_output=False, sample_state=False)
+    pred_offline_3, _, _ = model.forward_all_levels(batch, warmup_steps=n_wu, model_steps=n_stp,
+                                                    sample_output=False, sample_state=False)
     s_diff_1 = torch.stack(pred_offline_2[0]['s_embedding']) - torch.stack(pred_offline_3[0]['s_embedding'])
     s_diff_1 = torch.mean(torch.abs(s_diff_1), dim=(1, 2)).detach().cpu().numpy()
 
     # predict using the regular batch and the regular batch with a modified action
     batch_noise = {k: v.clone() for k, v in batch.items()}
     batch_noise['a'] = torch.clamp(batch_noise['a'] + 0.1 * torch.rand_like(batch_noise['a']), -1.0, 1.0)
-    pred_offline_4, _, _, _ = model.forward_all_levels(batch, warmup_steps=n_wu, model_steps=n_stp,
-                                                       sample_output=False, sample_state=False)
-    pred_offline_5, _, _, _ = model.forward_all_levels(batch_noise, warmup_steps=n_wu, model_steps=n_stp,
-                                                       sample_output=False, sample_state=False)
+    pred_offline_4, _, _ = model.forward_all_levels(batch, warmup_steps=n_wu, model_steps=n_stp,
+                                                    sample_output=False, sample_state=False)
+    pred_offline_5, _, _ = model.forward_all_levels(batch_noise, warmup_steps=n_wu, model_steps=n_stp,
+                                                    sample_output=False, sample_state=False)
     s_diff_2 = torch.stack(pred_offline_4[0]['s_embedding']) - torch.stack(pred_offline_5[0]['s_embedding'])
     s_diff_2 = torch.mean(torch.abs(s_diff_2), dim=(1, 2)).detach().cpu().numpy()
 
@@ -591,7 +591,7 @@ def abstract_model_training_static(abstract_train_driver, model, optimizer):
     pred_upper, _, _ = model.forward_static(batch, start_state=None, level=1, n_steps=-1, n_warmup=-1)
     # compute loss
     mask_abstract = compute_mask(batch['terminal'])
-    loss_abstract = model.rssm_loss(pred_upper, pred_upper, batch, mask_abstract, 1.0, level=1)
+    loss_abstract = model.rssm_loss(pred_upper, batch, mask_abstract, 1.0, level=1)
     # update model
     optimizer.zero_grad(set_to_none=True)
     loss_abstract['total'].backward()
@@ -619,7 +619,7 @@ def abstract_model_training(abstract_train_driver, model, optimizer, cfg):
     pred_upper, _, _ = model.forward_static(batch_upper, start_state=None, level=1, n_steps=-1, n_warmup=-1)
     # compute loss
     mask_abstract = compute_mask(batch_upper['terminal'])
-    loss_abstract = model.rssm_loss(pred_upper, pred_upper, batch_upper, mask_abstract, 1.0, level=1)
+    loss_abstract = model.rssm_loss(pred_upper, batch_upper, mask_abstract, 1.0, level=1)
     # update model
     optimizer.zero_grad(set_to_none=True)
     loss_abstract['total'].backward()
@@ -1288,7 +1288,7 @@ def record_episode(cfg, i_step, logger, model, video_env):
     # record an episode
     video_env.reset()
     video_env.get_wrapper_attr('start_video_recorder')()
-    #policy = HierarchicalLatentAgentPolicy(model, stochastic=True, exploration_noise=0.0)
+    # policy = HierarchicalLatentAgentPolicy(model, stochastic=True, exploration_noise=0.0)
     policy = LatentAgentPolicy(model.r_max_agents[0][0], model, exploration_noise=0.0, stochastic=True)
     traj = collect_data(video_env, cfg['eval']['eval_steps'], policy)
     traj = traj[0]  # we collect only a single trajectory, remove list wrapper

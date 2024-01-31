@@ -157,7 +157,7 @@ agents:
          act_entropy_exploration_coeff: 0.0003
          learn_act_entropy_exploration_coeff: False
          target_act_entropy: "auto"
-         novelty_exploration_coeff: 0.00
+         novelty_exploration_coeff: 0.1
          tr_policy_kl_coeff: 0.1
          tr_policy_ema_update_coeff: 0.95
          lr_actor: 0.00008
@@ -177,12 +177,12 @@ agents:
          eps_exploration_init: 0.8
          eps_exploration_coeff: 0.9992
          eps_exploration_min: 0.05
-         discrete_actions: False
+         discrete_actions: True
          min_scale: 0.1
          act_entropy_exploration_coeff: 0.0003
          learn_act_entropy_exploration_coeff: False
          target_act_entropy: "auto"
-         novelty_exploration_coeff: 0.00
+         novelty_exploration_coeff: 0.1
          tr_policy_kl_coeff: 0.1
          tr_policy_ema_update_coeff: 0.95
          lr_actor: 0.00008
@@ -194,7 +194,7 @@ agents:
          critic_act_fn: "relu"
          actor_layer_norm: True
          critic_layer_norm: True
-         dynamics_loss: True
+         dynamics_loss: False
          use_slow_value_target: True
          use_slow_world_model: False
    goal_seeking:
@@ -207,7 +207,7 @@ agents:
          act_entropy_exploration_coeff: 0.0003
          learn_act_entropy_exploration_coeff: False
          target_act_entropy: "auto"
-         novelty_exploration_coeff: 0.0
+         novelty_exploration_coeff: 0.1
          tr_policy_kl_coeff: 0.1
          tr_policy_ema_update_coeff: 0.95
          lr_actor: 0.00008

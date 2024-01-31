@@ -79,12 +79,12 @@ class LatentAgentPolicy(Policy):
                 raise RuntimeError(f'Invalid inf input for key {k} in step {env.current_step}: {v}')
 
         # digest new groundtruth data in level 0 model
-        _, _, self._current_env_state = self.model.forward_static(trajectory=env_data,
-                                                                  start_state=self._current_env_state,
-                                                                  level=self.agent.level, n_steps=1, n_warmup=1,
-                                                                  sample_state=self.sample_world_model,
-                                                                  sample_output=False, reconstruct=False,
-                                                                  use_ema_modules=self.agent.use_slow_world_model)
+        _, self._current_env_state = self.model.forward_static(trajectory=env_data,
+                                                               start_state=self._current_env_state,
+                                                               level=self.agent.level, n_steps=1, n_warmup=1,
+                                                               sample_state=self.sample_world_model,
+                                                               sample_output=False, reconstruct=False,
+                                                               use_ema_modules=self.agent.use_slow_world_model)
 
         if torch.isnan(self._current_env_state[0]).any():
             raise RuntimeError(f'Invalid NAN state in step {env.current_step}: {self._current_env_state[0]}')
@@ -239,10 +239,10 @@ class HierarchicalLatentAgentPolicy(Policy):
 
             # memorize the latest inputs the model has seen as they are needed for the agent during planning
             state = self.grounded_env_states[i_lvl]
-            mem, _, new_state = self.model.forward_static(data_filtered, start_state=state, level=i_lvl, n_steps=1,
-                                                          n_warmup=1, sample_state=self.sample_world_model,
-                                                          reconstruct=True, sample_output=False,
-                                                          use_ema_modules=self._use_ema_modules)
+            mem, new_state = self.model.forward_static(data_filtered, start_state=state, level=i_lvl, n_steps=1,
+                                                       n_warmup=1, sample_state=self.sample_world_model,
+                                                       reconstruct=True, sample_output=False,
+                                                       use_ema_modules=self._use_ema_modules)
             self.grounded_env_states[i_lvl] = new_state
             self.level_active[i_lvl] = True
 
@@ -296,7 +296,7 @@ class HierarchicalLatentAgentPolicy(Policy):
         agent = self.model.r_max_agents[i_highest][0]
         simulation = agent.act_in_sim(env_start_state=state, sim_env=self.model, n_steps=1,
                                       sample_actions=self.stochastic, sample_states=self.sample_world_model,
-                                      expl_noise=self.exploration_noise, reconstruct=i_highest > 0)
+                                      expl_noise=self.exploration_noise, reconstruct=True)
         a_agent = simulation['agent']['a'][1:]  # remove frst action from record as it's padding
         model_sim = {k: v[1:] for k, v in simulation['model'].items()}  # remove first time step as it's the input
         extend_memory(self.planning_record[i_highest], model_sim)
@@ -318,7 +318,7 @@ class HierarchicalLatentAgentPolicy(Policy):
                 for goal in goals_from_above:
                     simulation = agent.act_in_sim(env_start_state=state, sim_env=self.model, n_steps=n_steps, goal=goal,
                                                   sample_actions=self.stochastic, expl_noise=0.0,
-                                                  sample_states=self.sample_world_model, reconstruct=i_lvl > 0)
+                                                  sample_states=self.sample_world_model, reconstruct=True)
                     # simulation['agent']['a'] = [torch.zeros_like(x) for x in simulation['agent']['a']]
                     state = simulation['model_state']
                     a_agent = simulation['agent']['a'][1:]  # remove frst action from record as it's padding

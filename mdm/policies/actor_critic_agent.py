@@ -23,7 +23,7 @@ from torchviz import make_dot
 from colorama import Fore, Back, Style
 
 from mdm.models.rssm_cell import RSSMStateType, rssm_detach_state, rssm_add_labels
-from mdm.utils.torch_tools import layers_with_activation as lwa, SquashedNormal, RunningMeanStd
+from mdm.utils.torch_tools import layers_with_activation as lwa, SquashedNormal, RunningMeanStd, dim_to_list
 from mdm.utils.torch_tools import (FuzzyDeviceMixin, compute_mask, detach_dist, stack_dists,
                                    concat_dists, TanhBijector, clip_but_pass_gradient, FreezeParameters,
                                    plot_grad_flow, masked_mean, masked_var, check_tensor)
@@ -135,7 +135,7 @@ class ActorCriticAgent(torch.nn.Module):
         a_dist = self._a_dist(a_dist_params)
         a_smpl = self._a_smpl(a_dist, sample=sample)
 
-        #if expl_noise > 0.0:
+        # if expl_noise > 0.0:
         #    a_smpl = self._a_noise(a_dist, a_smpl, expl_noise)
 
         self._check_a(a_smpl)
@@ -189,37 +189,45 @@ class ActorCriticAgent(torch.nn.Module):
         env_memory = {} if env_memory is None else env_memory
         ema_env_mem = {}
 
-        env_states = [env_start_state]
         d_batch = env_start_state[-1].shape[0]
         device = env_start_state[-1].device
-        agent_obs = [self.fuse_o_with_goal(env_start_state, goal)]
-        agent_acts = [self.filler_a(d_batch, device)]
-        agent_act_dists = [self.filler_a_dist_params(d_batch, device)]
-        obs_autoenc = sim_env.goal_autoencoder
-        with FreezeParameters([world, obs_autoenc]):
+        s_mem_t0_to_T = [env_start_state]
+        agent_o_t0_to_T = [self.fuse_o_with_goal(env_start_state, goal)]
+        agent_a_t0_to_T = [self.filler_a(d_batch, device)]
+        agent_a_dist_t0_to_T = [self.filler_a_dist_params(d_batch, device)]
+        with FreezeParameters([world, other_world]):
             for t in range(n_steps):
-                a_dist, a = self(agent_obs[-1].detach(), sample=sample_actions, expl_noise=expl_noise)
-                # ema_a_dist, _, ema_v = self(agent_o, use_ema_modules=True, sample=sample_actions,
-                #                            disable_exploration=disable_exploration)
-                current_env_state = world(a=a, last_state=env_states[-1], use_posterior=False,
+                a_dist, a = self(agent_o_t0_to_T[-1].detach(), sample=sample_actions, expl_noise=expl_noise)
+                current_env_state = world(a=a, last_state=s_mem_t0_to_T[-1], use_posterior=False,
                                           sample_state=sample_states)
 
-                env_states.append(current_env_state)
-                agent_obs.append(self.fuse_o_with_goal(current_env_state, goal))
-                agent_acts.append(a)
-                agent_act_dists.append(a_dist)
+                s_mem_t0_to_T.append(current_env_state)
+                agent_o_t0_to_T.append(self.fuse_o_with_goal(current_env_state, goal))
+                agent_a_t0_to_T.append(a)
+                agent_a_dist_t0_to_T.append(a_dist)
 
-            # transform list of RSSM state tuples to a tuple of lists, each element of the tuple being a list that
-            # containing all time steps of the previous tuple's elements at that position
-            # [(a_0, b_0), (a_1, b_1), ...] -> ([a_0, a_1, ...], [b_0, b_1, ...])
-            env_states_tpl = list_of_tuples_to_tuple_of_lists(env_states)
-            s_embed_stacked = torch.stack(env_states_tpl[-1])  # use last RSSM state element for decoding
-            pred = world.decode(s_embed_stacked, sample=False, reconstruct_observation=True)
-            pred = {k: list(v.unbind(0)) for k, v in pred.items()}  # make first dimension to list again
-            pred.update(rssm_add_labels(env_states_tpl))  # add rssm states to the memory
-            extend_memory(env_memory, pred)  # write contents of this act_in_sim() call to env memory
+            s_final = s_mem_t0_to_T[-1]  # store away final state to return from this method
+            # prepare partial lists for model disagreement computation
+            s_mem_t0_to_Tm1 = s_mem_t0_to_T[:-1]
+            s_mem_t1_to_T = s_mem_t0_to_T[1:]
 
-            # repeat the goal over the time dimension to match the format in env_states
+            # make one big state tuple containing all time steps per element
+            s_mem_t0_to_T = list_of_tuples_to_tuple_of_lists(s_mem_t0_to_T)
+            s_mem_t0_to_Tm1 = list_of_tuples_to_tuple_of_lists(s_mem_t0_to_Tm1)
+            s_mem_t1_to_T = list_of_tuples_to_tuple_of_lists(s_mem_t1_to_T)
+
+            # decode predictions from states
+            s_embed_t0_to_T = torch.stack(s_mem_t0_to_T[-1])
+            pred = world.decode(s_embed_t0_to_T, sample=False, reconstruct_observation=reconstruct)
+            # adhere to convention and make first dimension a list
+            pred = {k: dim_to_list(v, 0) for k, v in pred.items()}
+            # add rssm state components to memory
+            pred.update(rssm_add_labels(s_mem_t0_to_T))
+            # add action to memory
+            pred['a'] = agent_a_t0_to_T
+            extend_memory(env_memory, pred)
+
+            # repeat the goal over the time dimension to match the format in s_mem_t0_to_T
             if self.goal_seeking:
                 # goal = goal.detach()  # goals come from upper level management and should not be changed by workers
                 # encode goal and observations for easier comparison
@@ -234,32 +242,58 @@ class ActorCriticAgent(torch.nn.Module):
                 # goal = goal.detach()  # goals come from upper level management and should not be changed by workers
                 # repeat the same goal for each time step
                 # goal_tiled = goal.unsqueeze(0).expand(n_steps + 1, -1, -1)
-                # agent_r = self.goal_similarity(s_embed_stacked, goal_tiled)
-                # agent_r = list(agent_r.unbind(0))
-                # agent_term = pred['terminal']
+                # agent_r_t0_to_T = self.goal_similarity(s_embed_stacked, goal_tiled)
+                # agent_r_t0_to_T = list(agent_r_t0_to_T.unbind(0))
+                # agent_term_t0_to_T = pred['terminal']
                 goal = world.decode(goal.detach(), sample=False, reconstruct_observation=True)['o']
                 goal_tiled = goal.unsqueeze(0).expand(n_steps + 1, -1, -1).clone()  # clone to be safe
                 state_obs = torch.stack(env_memory['o'])
-                agent_r = self.goal_similarity(state_obs, goal_tiled)
-                agent_term = self.goal_terminal(agent_r)
+                agent_r_t0_to_T = self.goal_similarity(state_obs, goal_tiled)
+                agent_term_t0_to_T = self.goal_terminal(agent_r_t0_to_T)
 
-                agent_r = list(agent_r.unbind(0))
-                agent_term = list(agent_term.unbind(0))
+                agent_r_t0_to_T = dim_to_list(agent_r_t0_to_T, 0)
+                agent_term_t0_to_T = dim_to_list(agent_term_t0_to_T, 0)
                 pred['r'] = None
             else:
-                agent_r = pred['r']
-                agent_term = pred['terminal']
+                agent_r_t0_to_T = pred['r']
+                agent_term_t0_to_T = pred['terminal']
+
+            # 1-step prediction with EMA model
+            # get valid agent actions (exclude time step zero filler actions)
+            agent_a_t1_to_T = torch.stack(agent_a_t0_to_T[1:])
+            # stack each element in state memory
+            s_mem_t0_to_Tm1 = [torch.stack(x) for x in s_mem_t0_to_Tm1]
+            # fold time dim into batch dim to form start states and actions
+            s_Tm1xB = [x.reshape(x.shape[0] * x.shape[1], *x.shape[2:]) for x in s_mem_t0_to_Tm1]
+            a_Tm1xB = agent_a_t1_to_T.reshape(agent_a_t1_to_T.shape[0] * agent_a_t1_to_T.shape[1],
+                                              *agent_a_t1_to_T.shape[2:])
+            # do one prediction step
+            s_mem_Tm1xB = other_world(a_Tm1xB, last_state=s_Tm1xB, use_posterior=False, sample_state=sample_states)
+            # get prior distribution parameters
+            z_prior_EMA_Tm1xB = s_mem_Tm1xB[2]
+            # reshape prior distribution parameters from (TxB, ...) back to (T, B, ...)
+            z_prior_EMA_t1_to_T = z_prior_EMA_Tm1xB.reshape(n_steps, -1, *z_prior_EMA_Tm1xB.shape[1:])
+            # get z prior distribution parameters from online model rollout above
+            z_prior_t1_to_T = torch.stack(s_mem_t1_to_T[2])
+
+            # compute disagreement as MSE between EMA and online model distribution parameters
+            disagreement = torch.nn.functional.mse_loss(z_prior_EMA_t1_to_T, z_prior_t1_to_T, reduction='none')
+            # flatten out distribution parameter dimensions and average MSE over them
+            disagreement = disagreement.reshape(*disagreement.shape[:2], -1)
+            disagreement = disagreement.mean(dim=-1, keepdim=True)
+            disagreement = dim_to_list(disagreement, 0)
 
             # if self.level > 0:
             #    _, _, _, s_embed_rec = obs_autoenc(s_embed_stacked, sample=False)
             #    novelty_loss = torch.mean((s_embed_stacked - s_embed_rec) ** 2, dim=-1, keepdim=True)
-            #    agent_r = [r_t + reconstr_loss_t for r_t, reconstr_loss_t in zip(agent_r, novelty_loss)]
+            #    agent_r_t0_to_T = [r_t + reconstr_loss_t for r_t, reconstr_loss_t in zip(agent_r_t0_to_T, novelty_loss)]
 
-            ema_a_dist_mock = [torch.zeros_like(x) for x in agent_act_dists]
-            extend_memory(agent_memory, {'o': agent_obs, 'a': agent_acts, 'r': agent_r, 'terminal': agent_term,
-                                         'a_dist': agent_act_dists, 'ema_a_dist': ema_a_dist_mock, 'model_novelty': []})
+            ema_a_dist_mock = [torch.zeros_like(x) for x in agent_a_dist_t0_to_T]
+            extend_memory(agent_memory, {'o': agent_o_t0_to_T, 'a': agent_a_t0_to_T, 'r': agent_r_t0_to_T,
+                                         'terminal': agent_term_t0_to_T, 'a_dist': agent_a_dist_t0_to_T,
+                                         'ema_a_dist': ema_a_dist_mock, 'model_novelty': disagreement})
 
-        return {'agent': agent_memory, 'model': env_memory, 'model_state': env_states[-1], 'ema_model': ema_env_mem}
+        return {'agent': agent_memory, 'model': env_memory, 'model_state': s_final, 'ema_model': ema_env_mem}
 
     @staticmethod
     def _check_inp(a, agent_o, last_env_state, pred):
@@ -287,7 +321,7 @@ class ActorCriticAgent(torch.nn.Module):
             params = torch.nn.functional.softmax(params, dim=-1)
             params = 0.99 * params + 0.01 * (1.0 / self.d_a)  # avoids numerical instability
             params = torch.log(params)
-            #params = torch.nn.functional.softmax(params, dim=-1)  # re-normalize
+            # params = torch.nn.functional.softmax(params, dim=-1)  # re-normalize
         else:
             mu, logvar = torch.tensor_split(params, 2, -1)
             mu = torch.tanh(mu)  # limit total range of mu but make it easy for the actor net to saturate it
@@ -311,9 +345,9 @@ class ActorCriticAgent(torch.nn.Module):
                 a_smpl_noise = torch.nn.functional.one_hot(a_smpl_noise, self.d_a)
             else:
                 a_smpl_noise = a_smpl
-            #params = torch.nn.functional.softmax(a_dist.probs + noise)
-            #a_dist = self._a_dist(params)
-            #a_smpl_noise = self._a_smpl(a_dist, sample=True)
+            # params = torch.nn.functional.softmax(a_dist.probs + noise)
+            # a_dist = self._a_dist(params)
+            # a_smpl_noise = self._a_smpl(a_dist, sample=True)
         else:
             noise_dist = torch.distributions.Normal(loc=torch.zeros_like(a_smpl), scale=torch.full_like(a_smpl, noise))
             a_smpl_noise = torch.clamp(a_smpl + noise_dist.sample(), -1.0 + 1e-5, 1.0 - 1e-5)
@@ -328,7 +362,7 @@ class ActorCriticAgent(torch.nn.Module):
                 a_smpl = a_smpl + a_dist.probs - a_dist.probs.detach()
             else:
                 a_smpl = torch.argmax(a_dist.probs, dim=-1)
-                a_smpl = torch.nn.functional.one_hot(a_smpl, self.d_a) #+ a_dist.probs - a_dist.probs.detach()
+                a_smpl = torch.nn.functional.one_hot(a_smpl, self.d_a)  # + a_dist.probs - a_dist.probs.detach()
             a_smpl = a_smpl.to(dtype=torch.float32)
         else:
             if sample:
@@ -424,6 +458,7 @@ class ActorCriticAgent(torch.nn.Module):
         a_dist = torch.stack(a_dist)
         ema_a_dist = torch.stack(ema_a_dist)
         a_log_prob = self._a_log_prob(a_dist, a.detach())
+        model_novelty = torch.stack(model_novelty)
 
         if self.goal_seeking:
             gamma = 0.95
@@ -517,7 +552,7 @@ class ActorCriticAgent(torch.nn.Module):
         # act_entropy = self._a_dist_entropy(a_dist[1:-1])
         # act_entropy = torch.sum(a_log_prob[1:-1], dim=-1, keepdim=True)  # sum over action dim
         if self.discrete_actions:
-            #act_entropy = a_log_prob[1:-1] #self._a_dist(a_dist_params=a_dist[1:-1]).entropy().unsqueeze(-1)
+            # act_entropy = a_log_prob[1:-1] #self._a_dist(a_dist_params=a_dist[1:-1]).entropy().unsqueeze(-1)
             act_entropy = self._a_dist(a_dist_params=a_dist[1:-1]).entropy().unsqueeze(-1)
         else:
             act_entropy = a_log_prob[1:-1]  # squashed Gaussian doesn't have closed form entropy
@@ -535,7 +570,7 @@ class ActorCriticAgent(torch.nn.Module):
 
         # CRITIC
         with torch.no_grad():
-            value_target = lambda_returns
+            value_target = lambda_returns + self.mu * model_novelty
             v_ema_critic = self.ema_critic_net(o.detach()[:-1])
             ema_value_loss = torch.nn.functional.smooth_l1_loss(v_ema_critic, value_target.detach(), reduction='none')
             ema_value_loss = masked_mean(ema_value_loss, mask_t1_to_H)

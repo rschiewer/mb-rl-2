@@ -59,11 +59,11 @@ def main():
     batch = train_driver.interact(n_trajs_to_vis)
     batch = to_tensors(batch, device='cuda')
     batch = prepare_data(batch)
-    pred, _, targets, model_state = model.forward_all_levels(batch,
-                                                             warmup_steps=[-1 for _ in model.rssm_modules],
-                                                             model_steps=[init_steps for _ in model.rssm_modules],
-                                                             sample_state=sample_state, sample_output=False,
-                                                             reconstruct=True)
+    pred, targets, model_state = model.forward_all_levels(batch,
+                                                          warmup_steps=[-1 for _ in model.rssm_modules],
+                                                          model_steps=[init_steps for _ in model.rssm_modules],
+                                                          sample_state=sample_state, sample_output=False,
+                                                          reconstruct=True)
     last_obs = numpyfy(targets[0]['o'][-1])
 
     cmap = plt.get_cmap("tab10")
@@ -101,11 +101,11 @@ def main():
                           'terminal': torch.zeros_like(batch['terminal'][0:1]),
                           'mask': torch.zeros_like(batch['mask'][0:1])}
 
-            pred, _, targets, model_state = model.forward_all_levels(step_batch,
-                                                                     warmup_steps=[0 for _ in model.rssm_modules],
-                                                                     model_steps=[1 for _ in model.rssm_modules],
-                                                                     model_state=model_state, sample_state=sample_state,
-                                                                     sample_output=False, reconstruct=True)
+            pred, targets, model_state = model.forward_all_levels(step_batch,
+                                                                  warmup_steps=[0 for _ in model.rssm_modules],
+                                                                  model_steps=[1 for _ in model.rssm_modules],
+                                                                  model_state=model_state, sample_state=sample_state,
+                                                                  sample_output=False, reconstruct=True)
             obs = numpyfy(pred[0]['o'][-1])
             # start updating the plot
             plt.clf()
@@ -138,12 +138,12 @@ def main():
             batch = train_driver.interact(n_trajs_to_vis)
             batch = to_tensors(batch, device='cuda')
             batch = prepare_data(batch)
-            pred, _, targets, model_state = model.forward_all_levels(batch,
-                                                                     warmup_steps=[-1 for _ in model.rssm_modules],
-                                                                     model_steps=[init_steps for _ in
-                                                                                  model.rssm_modules],
-                                                                     sample_state=sample_state, sample_output=False,
-                                                                     reconstruct=True)
+            pred, targets, model_state = model.forward_all_levels(batch,
+                                                                  warmup_steps=[-1 for _ in model.rssm_modules],
+                                                                  model_steps=[init_steps for _ in
+                                                                               model.rssm_modules],
+                                                                  sample_state=sample_state, sample_output=False,
+                                                                  reconstruct=True)
             last_obs = numpyfy(pred[0]['o'][-1])
 
             # start updating the plot
@@ -175,13 +175,13 @@ def main():
             batch = train_driver.interact(n_trajs_to_vis)
             batch = to_tensors(batch, device='cuda')
             batch = prepare_data(batch)
-            pred_goal, _, _, _ = model.forward_all_levels(batch,
-                                                          warmup_steps=[-1 for _ in model.rssm_modules],
-                                                          model_steps=[init_steps for _ in
-                                                                       model.rssm_modules],
-                                                          sample_state=sample_state,
-                                                          sample_output=False,
-                                                          reconstruct=True)
+            pred_goal, _, _ = model.forward_all_levels(batch,
+                                                       warmup_steps=[-1 for _ in model.rssm_modules],
+                                                       model_steps=[init_steps for _ in
+                                                                    model.rssm_modules],
+                                                       sample_state=sample_state,
+                                                       sample_output=False,
+                                                       reconstruct=True)
             goal = pred_goal[0]['s_embedding'][0]
             goal_obs = numpyfy(pred_goal[0]['o'][0])
 
