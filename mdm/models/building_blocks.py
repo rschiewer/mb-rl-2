@@ -1176,7 +1176,8 @@ class EMAClustering(UpwardsFilter):
                  window_size: int,
                  s_x_orig: int | Tuple[int],
                  n_centroids: int,
-                 alpha: float):
+                 alpha: float,
+                 dead_zone: str | float):
         super().__init__(window_size)
 
         d_x = np.prod(s_x_orig) * window_size
@@ -1188,6 +1189,7 @@ class EMAClustering(UpwardsFilter):
         self.centroids = torch.nn.Parameter(torch.empty((n_centroids, d_x), dtype=None, device=None),
                                             requires_grad=False)
         torch.nn.init.kaiming_uniform_(self.centroids, a=math.sqrt(5))
+
 
     def calc_distances(self,
                        x_preproc: torch.Tensor,
