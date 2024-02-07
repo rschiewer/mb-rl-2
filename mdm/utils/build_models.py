@@ -143,7 +143,7 @@ def cfg_infer_missing_values(cfg: dict,
         if agent_lvl == 0:
             _, cfg_r_max['discrete_actions'] = infer_action_info(env)
             assert not cfg_r_max['discrete_actions'] or not cfg_r_max['dynamics_loss'],\
-                'Discrete action agent must use reinforce agent loss'
+                'Discrete action r_max agent must use reinforce agent loss'
         # always infer action dimension from world model
         cfg_r_max['d_a'] = cfg['mdm']['rssm_modules'][agent_lvl]['d_a']
         if cfg_r_max['observation_type'] == 'z':
@@ -159,7 +159,7 @@ def cfg_infer_missing_values(cfg: dict,
             if agent_lvl == 0:
                 _, cfg_goal_seeking['discrete_actions'] = infer_action_info(env)
                 assert not cfg_goal_seeking['discrete_actions'] or not cfg_goal_seeking['dynamics_loss'], \
-                    'Discrete action agent must use reinforce agent loss'
+                    'Discrete action goal seeking agent must use reinforce agent loss'
             # always infer action dimension from world model
             cfg_goal_seeking['d_a'] = cfg['mdm']['rssm_modules'][agent_lvl]['d_a']
 
