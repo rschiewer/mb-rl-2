@@ -135,8 +135,8 @@ class ActorCriticAgent(torch.nn.Module):
         a_dist = self._a_dist(a_dist_params)
         a_smpl = self._a_smpl(a_dist, sample=sample)
 
-        # if expl_noise > 0.0:
-        #    a_smpl = self._a_noise(a_dist, a_smpl, expl_noise)
+        if expl_noise > 0.0:
+            a_smpl = self._a_noise(a_dist, a_smpl, expl_noise)
 
         self._check_a(a_smpl)
 
@@ -340,9 +340,8 @@ class ActorCriticAgent(torch.nn.Module):
                  noise: float):
         if self.discrete_actions:
             if noise > random.random():
-                d_batch = a_smpl.shape[0]
-                a_smpl_noise = torch.randint(self.d_a, d_batch)
-                a_smpl_noise = torch.nn.functional.one_hot(a_smpl_noise, self.d_a)
+                index = torch.randint(0, self.d_a, a_smpl.shape[:-1], device=a_smpl.device)
+                a_smpl_noise = torch.nn.functional.one_hot(index, self.d_a)
             else:
                 a_smpl_noise = a_smpl
             # params = torch.nn.functional.softmax(a_dist.probs + noise)
@@ -726,7 +725,7 @@ class ActorCriticAgent(torch.nn.Module):
         # plt.hist(actor_grads, bins=100)
         # plt.show()
         # torch.nn.utils.clip_grad_value_(self.parameters(), 1.0)
-        torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(self.parameters(), 100.0)
 
         # if logger:
         #    message = {}
