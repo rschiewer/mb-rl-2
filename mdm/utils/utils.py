@@ -1115,12 +1115,15 @@ def prepare_env(env: gym.Env):
     if isinstance(env.action_space, gym.spaces.Box):
         env = gym.wrappers.RescaleAction(env, min_action=-1.0, max_action=1.0)
 
-    # Flatten observation dicts
+    # minigrid special treatment
     if isinstance(env.unwrapped, minigrid.minigrid_env.MiniGridEnv):
-        #env = minigrid.wrappers.FullyObsWrapper(env)
+        env = minigrid.wrappers.OneHotPartialObsWrapper(env)
         env = minigrid.wrappers.ImgObsWrapper(env)
+        #env = gym.wrappers.FlattenObservation(env)  # flatten observation tensor to vector
+        #env = minigrid.wrappers.FullyObsWrapper(env)
+        #env = minigrid.wrappers.ImgObsWrapper(env)  # remove 'mission' and other fields in observation dice
         #env = minigrid.wrappers.FlatObsWrapper(env)
-        env = gym.wrappers.FlattenObservation(env)
+        #env = minigrid.wrappers.ReseedWrapper(env)
     elif isinstance(env.observation_space, gym.spaces.dict.Dict):
         env = gym.wrappers.FlattenObservation(env)
     return env
@@ -1137,6 +1140,18 @@ def infer_action_info(env: gym.Env):
     else:
         raise RuntimeError(f'Unsupported action space {env.action_space} of environment {env}.')
     return d_a, is_discrete
+
+
+def infer_observation_info(env: gym.Env):
+    if isinstance(env.observation_space, gym.spaces.Box):
+        s_o = env.observation_space.shape
+        is_discrete = False
+    elif isinstance(env.observation_space, gym.spaces.Discrete):
+        s_o = env.observation_space.n
+        is_discrete = True
+    else:
+        raise RuntimeError(f'Unsupported observation space: {env.observation_space}')
+    return s_o, is_discrete
 
 
 def list_of_tuples_to_tuple_of_lists(list_of_tpls: List[Any]):

@@ -455,7 +455,7 @@ class GaussianDecoder(OutputDecoder):
              parameters: torch.Tensor) -> torch.distributions.Distribution:
         mu, sigma = parameters.unbind(-1)
         d = torch.distributions.Normal(loc=mu, scale=sigma)
-        d = torch.distributions.Independent(d, 1)
+        d = torch.distributions.Independent(d, len(self.s_x_orig))
         return d
 
     @torch.jit.ignore
@@ -463,7 +463,7 @@ class GaussianDecoder(OutputDecoder):
                parameters):
         mu, sigma = parameters.unbind(-1)
         d = torch.distributions.Normal(loc=mu, scale=sigma)
-        d = torch.distributions.Independent(d, 1)
+        d = torch.distributions.Independent(d, len(self.s_x_orig))
         s = d.rsample()
         return s
 

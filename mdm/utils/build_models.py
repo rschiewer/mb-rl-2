@@ -3,7 +3,7 @@ import gymnasium as gym
 from mdm.models.rssm_cell import RSSMCell
 from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.models.building_blocks import *
-from mdm.utils.utils import infer_action_info
+from mdm.utils.utils import infer_action_info, infer_observation_info
 
 
 def build_model_opt(model: torch.nn.Module, cfg: dict):
@@ -96,7 +96,7 @@ def cfg_infer_missing_values(cfg: dict,
         # calculate observation dimension for RSSM encoders/decoders
         if i_module == 0:
             module_args['d_a'], is_discrete = infer_action_info(env)
-            s_o = env.observation_space.shape
+            s_o, _ = infer_observation_info(env)
         else:
             if cfg['mdm']['links'][i_module - 1] == 'z':
                 s_o = cfg['mdm']['rssm_modules'][i_module - 1]['d_z']
