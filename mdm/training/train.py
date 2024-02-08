@@ -75,6 +75,8 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                                                                         range(model.levels)])
             print('freezing model')
 
+        logger.log(to_np(train_losses), Scope.TRAIN(), i_step)
+
         # model_dispersion(model, model_batch, logger)
 
         # all_losses = torch.stack([v for v in train_losses.values()]).mean()
@@ -82,74 +84,18 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
         # quit()
         # make_dot(train_losses['term_0'], dict(model.named_parameters())).view()
 
-        if i_step % cfg['trainer']['plot_interval'] == 0:
-            # take all trajectories in memory to produce clustering of action sequences
-            trajectory_sample = train_driver.memory
-            if len(trajectory_sample) > 5000:  # in case there are too many trajectories, take a large random subset
-                random.shuffle(trajectory_sample)
-                trajectory_sample = trajectory_sample[:5000]
-
-            trajectory_sample = to_tensors(trajectory_sample, device='cpu')  # we don't do computations, using cpu is ok
-            trajectory_sample = prepare_data(trajectory_sample, n_categories=n_categories,
-                                             remove_keys=['o', 'r', 'terminal', 'truncated'])
-
-            # extract subsequences
-            flt = UpwardsFilter(window_size=8)
-            a_subsequences = flt(trajectory_sample['a'], mask=trajectory_sample['mask'])
-            # move intra-chunk time dimension behind batch dimension, so
-            # [i_chunk, t_in_chunk, B, D] -> [i_chunk, B, t_in_chunk, D]
-            a_subsequences = a_subsequences.swapaxes(1, 2)
-            # merge chunk index dimension and batch dimension, as we only care about the action subsequences and not
-            # from which trajectory and what time steps they came from
-            a_subsequences = a_subsequences.reshape(-1, 8, a_subsequences.shape[-1])
-            # merge intra-chunk time dimension with action dimension, as each action subsequence is considered one data
-            # point as a whole
-            a_subsequences = a_subsequences.reshape(a_subsequences.shape[0], -1)
-            # bring tensors back to numpy
-            a_subsequences = numpyfy(a_subsequences)
-
-            # cluster
-            n_clusters = 5
-            n_dims = 2
-            kmeans = KMeans(n_clusters=n_clusters)
-            kmeans.fit(a_subsequences)
-            clusters = kmeans.predict(a_subsequences)
-
-            # reduce data dimensionality for plotting
-            # dim_reducer = PCA(n_components=n_dims)
-            dim_reducer = umap.UMAP(n_components=n_dims)
-            # dim_reducer = TSNE(n_components=n_dims, perplexity=50)
-            low_dim_subsequences = dim_reducer.fit_transform(a_subsequences)
-
-            # plotting
-            prop_cycle = plt.rcParams['axes.prop_cycle']
-            color_list = list(prop_cycle.by_key()['color'])
-            colors = [color_list[i % len(color_list)] for i in clusters]
-            with TempFigure(figsize=(8, 8)) as fig:
-                if n_dims == 2:
-                    ax = fig.add_subplot(1, 1, 1)
-                    ax.scatter(low_dim_subsequences[:, 0], low_dim_subsequences[:, 1], c=colors)
-                else:
-                    ax = fig.add_subplot(1, 1, 1, projection='3d')
-                    ax.scatter(low_dim_subsequences[:, 0], low_dim_subsequences[:, 1],
-                               low_dim_subsequences[:, 2], c=colors)
-                # add some info about the reliability of the clustering
-                if isinstance(dim_reducer, PCA):
-                    informativeness = ' | '.join([str(x) for x in dim_reducer.explained_variance_ratio_])
-                elif isinstance(dim_reducer, TSNE):
-                    informativeness = str(dim_reducer.kl_divergence_)
-                else:
-                    informativeness = ''
-                ax.set_title(informativeness)
-                # plt.show()
-                logger.log_plot(fig, Scope.TRAIN() / f'action_sequence_clustering', i_step)
-
-        logger.log(to_np(train_losses), Scope.TRAIN(), i_step)
+        if i_step % cfg['trainer']['plot_interval'] == 0 and model.levels > 1:
+            action_sequence_clustering_plot(i_step, logger, model, n_categories, train_driver)
 
         # log latent state and observation distances
         if i_step % cfg['trainer']['plot_interval'] == 0:
             for level, pred_level in enumerate(pred):
                 plot_latent_state_differences(pred_level, logger, i_step, major_scope=f'model/{level}')
+
+        if i_step % cfg['trainer']['plot_interval'] == 0:
+            for level, filters in enumerate(model.upwards_filters):
+                if isinstance(filters['a'], EMAClustering):
+                    centroids = filters['a'].centroids.detach().cpu().numpy()
 
         # train model in observation mode
         # train_losses = model.train_step(model_batch, opt_model, model_steps=model_train_steps, learn_states=True)
@@ -305,6 +251,76 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
             store_model_params(model, opt_model, cfg['model_save_path'], logger, store_locally=True, upload=True)
 
 
+def action_sequence_clustering_plot(i_step, logger, model, n_categories, train_driver):
+    # take all trajectories in memory to produce clustering of action sequences
+    trajectory_sample = train_driver.memory
+    if len(trajectory_sample) > 5000:  # in case there are too many trajectories, take a large random subset
+        random.shuffle(trajectory_sample)
+        trajectory_sample = trajectory_sample[:5000]
+    trajectory_sample = to_tensors(trajectory_sample, device='cpu')  # we don't do computations, using cpu is ok
+    trajectory_sample = prepare_data(trajectory_sample, n_categories=n_categories,
+                                     remove_keys=['o', 'r', 'terminal', 'truncated'])
+    # extract subsequences
+    flt = UpwardsFilter(window_size=model.strides[1])
+    a_subsequences = flt(trajectory_sample['a'], mask=trajectory_sample['mask'])
+    # move intra-chunk time dimension behind batch dimension, so
+    # [i_chunk, t_in_chunk, B, D] -> [i_chunk, B, t_in_chunk, D]
+    a_subsequences = a_subsequences.swapaxes(1, 2)
+    # merge chunk index dimension and batch dimension, as we only care about the action subsequences and not
+    # from which trajectory and what time steps they came from
+    a_subsequences = a_subsequences.reshape(-1, 8, a_subsequences.shape[-1])
+    # merge intra-chunk time dimension with action dimension, as each action subsequence is considered one data
+    # point as a whole
+    a_subsequences = a_subsequences.reshape(a_subsequences.shape[0], -1)
+    # bring tensors back to numpy
+    a_subsequences = numpyfy(a_subsequences)
+    # cluster
+    n_clusters = 5
+    n_dims = 2
+    kmeans = KMeans(n_clusters=n_clusters)
+    kmeans.fit(a_subsequences)
+    clusters = kmeans.predict(a_subsequences)
+    # reduce data dimensionality for plotting
+    # dim_reducer = PCA(n_components=n_dims)
+    dim_reducer = umap.UMAP(n_components=n_dims)
+    # dim_reducer = TSNE(n_components=n_dims, perplexity=50)
+    low_dim_subsequences = dim_reducer.fit_transform(a_subsequences)
+    # project cluster centers if we use EMA clustering for action sequences
+    if isinstance(model.upwards_filters[1]['a'], EMAClustering):
+        centroids = model.upwards_filters[1]['a'].centroids.detach().cpu().numpy()
+        low_dim_centroids = dim_reducer.fit_transform(centroids)
+    else:
+        low_dim_centroids = None
+    # plotting
+    prop_cycle = plt.rcParams['axes.prop_cycle']
+    color_list = list(prop_cycle.by_key()['color'])
+    colors = [color_list[i % len(color_list)] for i in clusters]
+    with TempFigure(figsize=(8, 8)) as fig:
+        if n_dims == 2:
+            ax = fig.add_subplot(1, 1, 1)
+            ax.scatter(low_dim_subsequences[:, 0], low_dim_subsequences[:, 1], c=colors)
+            if low_dim_centroids is not None:
+                ax.scatter(low_dim_centroids[:, 0], low_dim_centroids[:, 1], c='black', marker='*')
+        else:
+            ax = fig.add_subplot(1, 1, 1, projection='3d')
+            ax.scatter(low_dim_subsequences[:, 0], low_dim_subsequences[:, 1],
+                       low_dim_subsequences[:, 2], c=colors)
+            if low_dim_centroids is not None:
+                ax.scatter(low_dim_centroids[:, 0], low_dim_centroids[:, 1], low_dim_centroids[:, 2], c='black',
+                           marker='*')
+
+        # add some info about the reliability of the clustering
+        if isinstance(dim_reducer, PCA):
+            informativeness = ' | '.join([str(x) for x in dim_reducer.explained_variance_ratio_])
+        elif isinstance(dim_reducer, TSNE):
+            informativeness = str(dim_reducer.kl_divergence_)
+        else:
+            informativeness = ''
+        ax.set_title(informativeness)
+        # plt.show()
+        logger.log_plot(fig, Scope.TRAIN() / f'action_sequence_clustering', i_step)
+
+
 def model_dispersion(model, batch, logger):
     n_wu = [1 for _ in range(model.levels)]
     n_stp = [-1 for _ in range(model.levels)]
@@ -366,7 +382,8 @@ def plot_latent_state_differences(pred, logger, i_step, major_scope):
             for t in range(len(obs)):
                 diff_o.append(sim_fn(obs[t], obs[-1]))
                 diff_latent.append(sim_fn(latents[t], latents[-1]))
-            diff_o = torch.stack(diff_o).detach().cpu().numpy().mean(axis=(1, 2))
+            diff_o = torch.stack(diff_o).detach().cpu().numpy()
+            diff_o = diff_o.mean(axis=tuple(range(1, diff_o.ndim)))  # average over all dims except time
             diff_latent = torch.stack(diff_latent).detach().cpu().numpy().mean(axis=(1, 2))
 
             ax.plot(diff_o, label='obs difference')
@@ -1664,7 +1681,6 @@ def plot_goal_seeking_performance(goal_agent, model_mem, agent_mem, gsa_goals, g
     del fig
     # plt.show()
 
-
 def update_model_chunk_distance(i_step, l, logger, model, r_max_simulation):
     # update model's stats about how distant goals are on average
     with torch.no_grad():
@@ -1725,7 +1741,7 @@ def log_prediction_error_plot(batch, cfg, i_step, logger, model):
 
             # shape of predictions: [T, B, D]
             o_diff = torch.abs(torch.stack(pred[l]['o']) - targets[l]['o'])
-            o_diff = masked_mean(o_diff, mask, dim=[1, 2])
+            o_diff = masked_mean(o_diff, mask, dim=tuple(range(1, o_diff.ndim)))
             r_diff = torch.abs(torch.stack(pred[l]['r']) - targets[l]['r'])
             r_diff = masked_mean(r_diff, mask, dim=[1, 2])
             term_diff = torch.abs(torch.stack(pred[l]['terminal']) - targets[l]['terminal'])
