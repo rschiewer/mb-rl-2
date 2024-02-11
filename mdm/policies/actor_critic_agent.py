@@ -554,7 +554,7 @@ class ActorCriticAgent(torch.nn.Module):
             # act_entropy = a_log_prob[1:-1] #self._a_dist(a_dist_params=a_dist[1:-1]).entropy().unsqueeze(-1)
             act_entropy = self._a_dist(a_dist_params=a_dist[1:-1]).entropy().unsqueeze(-1)
         else:
-            act_entropy = a_log_prob[1:-1]  # squashed Gaussian doesn't have closed form entropy
+            act_entropy = -a_log_prob[1:-1]  # squashed Gaussian doesn't have closed form entropy
         # act_entropy_loss = torch.sum(act_entropy_loss * valid)  # sum over T and B
         act_entropy_loss = - self.alpha.detach() * masked_mean(act_entropy, mask_t1_to_Hm1)
         # act_entropy_loss = - torch.maximum(self.alpha.detach(), torch.zeros_like(self.alpha)) * act_entropy_loss
