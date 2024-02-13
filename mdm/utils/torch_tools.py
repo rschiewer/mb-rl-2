@@ -885,36 +885,10 @@ class SquashedNormal(torch.distributions.transformed_distribution.TransformedDis
 
     def entropy(self):
         raise NotImplementedError('There\'s no analytic expression for SquashedGaussian entropy')
-        # return self.base_dist.entropy()
 
-    # def log_prob(self, value, pre_tanh_value=None, epsilon=1e-6):
-    #    if pre_tanh_value is None:
-    #        pre_tanh_value = torch.log((1 + value) / (1 - value)) / 2
-    #    norm_lp = self.base_dist.log_prob(pre_tanh_value).sum(dim=-1)
-    #    ret = norm_lp - torch.log((1.0 - torch.tanh(value) ** 2) + epsilon).sum(dim=-1)
-    #    return ret
     def log_prob(self, value):
         value = torch.clamp(value, min=-1.0 + 1e-6, max=1.0 - 1e-6)
         return super().log_prob(value)
-
-    @staticmethod
-    def _clip_but_pass_gradient(x: torch.Tensor, lower: float = 0., upper: float = 1.):
-        """Clipping function that allows for gradients to flow through.
-
-        Args:
-            x (torch.Tensor): value to be clipped
-            lower (float): lower bound of clipping
-            upper (float): upper bound of clipping
-
-        Returns:
-            torch.Tensor: x clipped between lower and upper.
-
-        """
-        clip_up = (x > upper).float()
-        clip_low = (x < lower).float()
-        with torch.no_grad():
-            clip = ((upper - x) * clip_up + (lower - x) * clip_low)
-        return x + clip
 
 
 # from https://github.com/ray-project/ray/blob/master/rllib/algorithms/dreamer/utils.py#L48
@@ -1043,28 +1017,6 @@ def concat_tensor_dicts(x: List[Dict[str, torch.Tensor]],
 def dim_to_list(x: torch.Tensor,
                 dim: int):
     return list(x.unbind(dim))
-
-
-# from https://github.com/rlworkgroup/garage/blob/master/src/garage/torch/distributions/tanh_normal.py
-def clip_but_pass_gradient(x: torch.Tensor,
-                           lower: float = 0.0,
-                           upper: float = 1.0):
-    """Clipping function that allows for gradients to flow through.
-
-    Args:
-        x (torch.Tensor): value to be clipped
-        lower (float): lower bound of clipping
-        upper (float): upper bound of clipping
-
-    Returns:
-        torch.Tensor: x clipped between lower and upper.
-
-    """
-    clip_up = (x > upper).float()
-    clip_low = (x < lower).float()
-    with torch.no_grad():
-        clip = ((upper - x) * clip_up + (lower - x) * clip_low)
-    return x + clip
 
 
 # from https://github.com/RajGhugare19/dreamerv2/blob/main/dreamerv2/utils/module.py#L1

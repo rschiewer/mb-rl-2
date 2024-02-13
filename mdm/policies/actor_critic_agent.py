@@ -25,7 +25,7 @@ from colorama import Fore, Back, Style
 from mdm.models.rssm_cell import RSSMStateType, rssm_detach_state, rssm_add_labels
 from mdm.utils.torch_tools import layers_with_activation as lwa, SquashedNormal, RunningMeanStd, dim_to_list
 from mdm.utils.torch_tools import (FuzzyDeviceMixin, compute_mask, detach_dist, stack_dists,
-                                   concat_dists, TanhBijector, clip_but_pass_gradient, FreezeParameters,
+                                   concat_dists, TanhBijector, FreezeParameters,
                                    plot_grad_flow, masked_mean, masked_var, check_tensor)
 from mdm.utils.utils import fig_to_img, append_memory, numpyfy, extend_memory, list_of_tuples_to_tuple_of_lists
 from mdm.logging.logger import GlobalLogger, Scope, Logger

@@ -5,7 +5,7 @@ from typing import Tuple, Sequence, Optional, List, Any, Dict
 import torch
 from torch.nn import ModuleList
 
-from mdm.utils.torch_tools import layers_with_activation as lwa
+from mdm.utils.torch_tools import layers_with_activation as lwa, check_tensor
 
 RSSMStateType = Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
 
@@ -298,10 +298,6 @@ class RSSMCell(torch.nn.Module):
                 sample_state: bool = True) -> RSSMStateType:
         d_batch = a.shape[0]
 
-        # checks
-        if torch.any(a > 1.0) or torch.any(a < -1.0) or torch.isnan(a).any():
-            raise RuntimeError(f'Invalid action in imagine: {a}')
-
         if o_enc is None and last_state is None:
             raise ValueError('Need at least "o" or "last_state"')
 
@@ -312,8 +308,10 @@ class RSSMCell(torch.nn.Module):
                 raise ValueError('Can\'t use posterior if no observation is provided')
             o_enc = torch.zeros(d_batch, self.o_encoder.d_x_encoded, device=a.device)
 
-        if torch.isnan(last_state[1]).any() or torch.isinf(last_state[1]).any():
-            raise RuntimeError(f'Invalid last state in imagine: {last_state[1]}')
+        # checks
+        check_tensor(a, -1.0, 1.0)
+        check_tensor(last_state[1])
+        check_tensor(last_state[4])
 
         # last_state = rssm_detach_state(*last_state)
 
