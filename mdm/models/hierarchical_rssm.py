@@ -291,10 +291,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                     GlobalLogger.logger.log(msg,
                                             Scope.TRAIN() / f'model/{level}/reachability_penalty',
                                             time_step=self._current_train_step)
-                # flt_a = UpwardsFilter(window_size=self.strides[level])
-                # act_var = flt_a(stack_if_list(a[:n_steps]), mask=mask, window_size=window_size)
-                # act_var = act_var.std(dim=1).mean(dim=-1, keepdim=True)
-                # simulated_ground_truth['r'] -= act_var  # action variance penalty
 
         if terminal is not None:
             simulated_ground_truth['terminal'] = flt['terminal'](stack_if_list(terminal[:n_steps]), mask=mask,
@@ -386,7 +382,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                                                         sample_state=sample_state,
                                                         sample_output=sample_output,
                                                         reconstruct=reconstruct)
-        # all other levels are only grounded with the first k steps from below and can then do what they want
         for l in range(1, self.levels):
             filtered_trajectory = self.filter_up(o=memory[l - 1]['s_embedding'], a=targets[l - 1]['a'],
                                                  r=targets[l - 1]['r'], terminal=targets[l - 1]['terminal'],

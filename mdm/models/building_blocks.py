@@ -971,9 +971,7 @@ class AutoencodingUpwardsFilter(UpwardsFilter):
         else:
             raise ValueError(f'Unknown decoder type: {decoder_type}')
 
-        # self.decoder = MLPDecoder(s_x_orig=s_x_orig, d_x_encoded=d_x_enc, lws=decoder_lws, activation=activation,
-        #                          layer_norm=layer_norm, final_activation='tanh')
-        self.mask_filter = MaxUpwardsFilter(window_size=window_size)
+        self.mask_filter = MinUpwardsFilter(window_size=window_size)
         self.beta = beta
         self.reg_sigma = reg_sigma
 
