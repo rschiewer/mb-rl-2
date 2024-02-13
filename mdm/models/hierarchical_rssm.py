@@ -40,6 +40,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                  ema_update_interval: int = sys.maxsize,
                  temporal_activation_regularization: int = 0,
                  pessimism_coeff: float = 0.0,
+                 reachability_penalty: bool = False,
                  kl_balance: int | bool = False):
         super(HierarchicalRSSM, self).__init__()
 
@@ -108,6 +109,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         self.temporal_activation_regularization = temporal_activation_regularization
         self.kl_balance = kl_balance
         self.pessimism_coeff = pessimism_coeff
+        self.reachability_penalty = reachability_penalty
         self.dbg_timestep = 0
         self.avg_chunk_dist_early = ModuleList([RunningMeanStd(shape=(mod.d_z,)) for mod in self.rssm_modules[:-1]])
         self.avg_chunk_dist_mid = ModuleList([RunningMeanStd(shape=(mod.d_z,)) for mod in self.rssm_modules[:-1]])
@@ -263,7 +265,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         if r is not None:
             simulated_ground_truth['r'] = flt['r'](stack_if_list(r[:n_steps]), mask=mask,
                                                    window_size=window_size).detach()
-            if level > 0:
+            if level > 0 and self.reachability_penalty:
                 #obs_diff = torch.mean((simulated_ground_truth['o'][:-1] - simulated_ground_truth['o'][1:]) ** 2,
                 #                      dim=-1, keepdim=True)
                 #simulated_ground_truth['r'][1:] += obs_diff
@@ -275,20 +277,17 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 s_embedding = state_flt(stack_if_list(s_embedding[:n_steps]), mask=mask,
                                         window_size=window_size).detach()
                 # compute reachability with the resulting states
-                reach_penalty = self.reachability(rnn_states, z, s_embedding, level)
                 # max reachability is 1, which means the starting state and the goal are directly adjacent
                 # min reachabilitiy is 0, which means the agent needed all steps or even more
-                # thus, use reachability as subtractive penalty
-                #simulated_ground_truth['r'] -= 0.1 * reach_penalty.detach()
+                reach_penalty = self.reachability(rnn_states, z, s_embedding, level)
                 # avoid that rewards becones zero at full penalty, this could accidentally drown out negative rewards
                 reach_penalty = torch.clamp(reach_penalty, 0.0, 0.5)
-                reach_penalty = torch.zeros_like(reach_penalty)
                 simulated_ground_truth['r'] = torch.where(simulated_ground_truth['r'] > 0,
                                                           simulated_ground_truth['r'] * (1 - reach_penalty),
                                                           simulated_ground_truth['r'] * (1 + reach_penalty))
 
                 if GlobalLogger.can_log('reachability_penalty', self._current_train_step):
-                    msg = {'reachability_penalty': (-reach_penalty).mean().unsqueeze(0).detach().cpu().numpy()}
+                    msg = {'reachability_penalty': reach_penalty.mean().unsqueeze(0).detach().cpu().numpy()}
                     GlobalLogger.logger.log(msg,
                                             Scope.TRAIN() / f'model/{level}/reachability_penalty',
                                             time_step=self._current_train_step)
