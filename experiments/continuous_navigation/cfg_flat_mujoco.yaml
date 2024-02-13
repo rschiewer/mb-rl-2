@@ -1,0 +1,121 @@
+---
+neptune_cfg: "../neptune_settings.yaml"
+env_name: "HalfCheetah-v4"#"MiniGrid-FixedLayoutFourRooms-v0" #"gym_nav2d:nav2dHard-v0" # "PointMaze_UMaze-v3"#"InvertedPendulum-v4" #"Ant-v4" #"PointMaze_UMaze_static-v3" #"InvertedPendulum-v4" #"dm_control/cheetah-run-v0"# "gym_nav2d:nav2dEasySparse-v0" #"HalfCheetah-v4"#"InvertedPendulum-v4" #"gym_nav2d:nav2dEasySparse-v0" #"gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-v0"
+prefill_memory: "random" #"offline-dataset" # "random", False
+prefill_episodes: 10
+train_samples: null #"nav2d_Easy_train.samples" #"nav2d_Easy_train.samples"
+test_samples: null #"nav2d_EasySparse_expert.samples" #"nav2d_Easy_expert.samples"
+checkpoint_path: "checkpoints"
+model_save_path: "trained_models"
+pretrained_model: null #"MBRL-5505" #null #"MBRL-2908"
+repeat_terminal_state: False
+
+mdm:
+   rssm_modules:
+      # RSSM no. 1
+      -  d_z: 30
+         d_h: 300
+         d_a: <infer>
+         d_s_embedding: null
+         s_embedding_lws: []
+         n_hidden_layers: 1
+         hidden_dropout: 0.1
+         epsilon: 0.1
+         z_prior_lws: [ 200 ]
+         z_post_lws: [ 200 ]
+         layer_norm: True
+         activation: "relu"
+         rnn_type: "gru"
+         latent_dist: "normal"  #"normal" "categorical" "bernoulli"
+         n_latent_categories: 32
+         o_encoder:
+            class: "MLPEncoder"
+            d_x_encoded: 100
+            lws: [ 250, 250, 250 ]
+            layer_norm: True
+            activation: "relu"
+         o_decoder:
+            class: "GaussianDecoder"
+            lws: [ 250, 250, 250 ]
+            layer_norm: True
+            activation: "relu"
+            epsilon: 0.1
+         r_decoder:
+            class: "GaussianDecoder"
+            lws: [ 250, 250, 250 ]
+            layer_norm: True
+            activation: "relu"
+            epsilon: 0.1
+         term_decoder:
+            class: "BinomialDecoder"
+            lws: [ 250, 250, 250 ]
+            layer_norm: True
+            activation: "relu"
+   links: [ ]  # Links for observation filters between RSSM levels
+   upwards_filters: [ ]
+   warmup_steps: [ 'rand' ]
+   kl_betas: [ 0.1 ] #[ 0.1 ]
+   kl_reg_betas: [ 0.0 ]
+   ema_regularization: 0.0
+   ema_coeff: 0.99
+   ema_update_interval: 10
+   latent_overshooting: [ ]
+   temporal_activation_regularization: 0.0
+   kl_balance: 0.8
+
+optim:
+   type: 'adam'  # 'adamW' 'adam'
+   lr: 0.0002 #0.0002
+
+trainer:
+   n_train_steps: 50000
+   freeze_model: False
+   stop_collect: False
+   eval_interval: 500
+   plot_interval: 500
+   d_batch: 256
+   subtrajectory_len: 50
+   collect_envs: 10
+   collect_interval: 50
+   n_collect_trajectories: 10
+   agent_train_interval: 1
+   model_train_steps: [ -1 ]
+   agent_model_steps: [ 15 ]
+   checkpoint_interval: 150
+   sample_model_during_agent_training: True
+   sample_agent_during_agent_training: True
+   fixed_agent_train_noise: 0.05
+   fixed_agent_expl_noise: 0.3
+
+agents:
+   r_max:
+      # level 0
+      -  observation_type: 's_embedding'
+         eps_exploration_init: 0.9
+         eps_exploration_coeff: 0.999
+         eps_exploration_min: 0.05
+         discrete_actions: <infer>
+         act_entropy_exploration_coeff: 0.0001
+         learn_act_entropy_exploration_coeff: False
+         target_act_entropy: "auto"
+         novelty_exploration_coeff: 0.1
+         tr_policy_kl_coeff: 0.1
+         ema_update_coeff: 0.99
+         lr_actor: 0.00008
+         lr_critic: 0.0002
+         lr_other: 0.0001
+         min_scale: 0.1
+         actor_lws: [400, 400, 400]
+         critic_lws: [400, 400, 400]
+         actor_act_fn: "relu"
+         critic_act_fn: "relu"
+         actor_layer_norm: True
+         critic_layer_norm: True
+         dynamics_loss: True
+         use_slow_value_target: True
+         use_slow_world_model: False
+
+eval:
+   eval_envs: 10
+   eval_steps: 1000
+   warmup_steps: [ 3, 3 ]
