@@ -1015,11 +1015,15 @@ class AutoencodingUpwardsFilter(UpwardsFilter):
 
     def eval_step(self,
                   x: torch.Tensor,
+                  x_target: Optional[torch.Tensor] = None,
                   mask: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
         if mask is None:
             mask_x_enc = self.mask_filter(torch.zeros(x.shape[0], x.shape[1], 1).to(x))
         else:
             mask_x_enc = self.mask_filter(mask).detach()
+
+        if x_target is None:
+            x_target = x
 
         x_perm = self._preproc_enc(x, mask)
         # encoder expects 2D x of shape (T_chunk, D) i.e. T_chunk became new data dimension
@@ -1047,7 +1051,7 @@ class AutoencodingUpwardsFilter(UpwardsFilter):
         # MSE RECONSTRUCTION LOSS
         x_rec_perm_rs = self._postproc_dec(x_rec)
         x_rec_final = x_rec_perm_rs[:len(x)]
-        recon_loss = (x_rec_final - x) ** 2
+        recon_loss = (x_rec_final - x_target) ** 2
         recon_loss = masked_mean(recon_loss, mask)
 
         # BOTTLENECK KL DIVERGENCE
@@ -1069,7 +1073,7 @@ class AutoencodingUpwardsFilter(UpwardsFilter):
             x_rec_det_rs = self._postproc_dec(x_rec_det)
             # cut the padding of the reconstructed sequence if necessary
             x_rec_det_final = x_rec_det_rs[:len(x)]
-            recon_mae = torch.abs(x - x_rec_det_final)
+            recon_mae = torch.abs(x_target - x_rec_det_final)
             recon_mae = masked_mean(recon_mae, mask)
 
         return {'total': total, 'recon': recon_loss, 'kl': kl_loss, 'monitoring_recon_mae': recon_mae}
