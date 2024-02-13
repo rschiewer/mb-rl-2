@@ -85,6 +85,8 @@ def cfg_infer_missing_values(cfg: dict,
                 d_state = module_args['d_z'] + module_args['d_h']
             elif module_args['latent_dist'] == 'categorical':
                 d_state = module_args['d_z'] * module_args['n_latent_categories'] + module_args['d_h']
+            elif module_args['latent_dist'] == 'bernoulli':
+                d_state = module_args['d_z'] + module_args['d_h']
             else:
                 raise ValueError(f'Unknown latent distribution')
             module_args['d_s_embedding'] = d_state

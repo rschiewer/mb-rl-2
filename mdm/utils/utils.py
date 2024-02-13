@@ -1117,13 +1117,15 @@ def prepare_env(env: gym.Env):
 
     # minigrid special treatment
     if isinstance(env.unwrapped, minigrid.minigrid_env.MiniGridEnv):
-        env = minigrid.wrappers.OneHotPartialObsWrapper(env)
+        # CAUTION: The OneHot wrappers of minigrid produce observation vectors that may have more than one 1 in them,
+        # so they're technically not one-hot vectors.
+        env = minigrid.wrappers.FullyObsWrapper(env)
+        #env = minigrid.wrappers.OneHotPartialObsWrapper(env)
         env = minigrid.wrappers.ImgObsWrapper(env)
         #env = gym.wrappers.FlattenObservation(env)  # flatten observation tensor to vector
-        #env = minigrid.wrappers.FullyObsWrapper(env)
         #env = minigrid.wrappers.ImgObsWrapper(env)  # remove 'mission' and other fields in observation dice
         #env = minigrid.wrappers.FlatObsWrapper(env)
-        #env = minigrid.wrappers.ReseedWrapper(env)
+        env = minigrid.wrappers.ReseedWrapper(env)
     elif isinstance(env.observation_space, gym.spaces.dict.Dict):
         env = gym.wrappers.FlattenObservation(env)
     return env

@@ -6,6 +6,8 @@ from abc import ABC, abstractmethod
 
 import torch
 import numpy as np
+
+import mdm.utils.utils
 from mdm.utils.torch_tools import (layers_with_activation as lwa, get_dist_params,
                                    sample_from_categorical, ManagedStatefulTrainingModule, unsqueeze_right, masked_mean,
                                    TanhBijector, RunningMeanStd)
@@ -411,11 +413,36 @@ class OutputDecoder(torch.nn.Module, ABC):
         self.s_x_orig = tuple(s_x_orig)
         self.d_x_encoded = d_x_encoded
 
+    def gen_params(self,
+                   x_enc: torch.Tensor):
+        return x_enc
+
     @abstractmethod
+    def dist(self,
+             params: torch.Tensor) -> torch.distributions.Distribution:
+        pass
+
+    @abstractmethod
+    def sample(self,
+               dist: torch.distributions.Distribution) -> torch.Tensor:
+        pass
+
+    @abstractmethod
+    def mode(self,
+             dist: torch.distributions.Distribution) -> torch.Tensor:
+        pass
+
     def forward(self,
                 x_enc: torch.Tensor,
                 sample: bool = True):
-        pass
+        params = self.gen_params(x_enc)
+        assert params.ndim <= 3, 'Parameters can only have following dimensions: [Time, Batch, Distribution]'
+        d = self.dist(params)
+        if sample:
+            s = self.sample(d)
+        else:
+            s = self.mode(d)
+        return params, s
 
 
 class GaussianDecoder(OutputDecoder):
@@ -433,45 +460,37 @@ class GaussianDecoder(OutputDecoder):
         self._mdl = torch.nn.Sequential(lwa(lws, activation, layer_norm=layer_norm, name='gaussian_decoder'))
         self.epsilon = epsilon
 
-    def forward(self, x_enc: torch.Tensor, sample: bool = True):
+    def gen_params(self,
+                   x_enc: torch.Tensor):
         params = self._mdl(x_enc)
         mu, logvar = torch.tensor_split(params, 2, dim=-1)
         logvar = logvar - 3.0  # makes initial variance after softplus close to zero
         sigma = torch.nn.functional.softplus(logvar) + self.epsilon
 
-        # reshape dist params to desired output shape
-        mu = mu.reshape(*x_enc.shape[:-1], *self.s_x_orig)
-        sigma = sigma.reshape(*x_enc.shape[:-1], *self.s_x_orig)
-
-        d = torch.stack([mu, sigma], dim=-1)
-        if sample:
-            s = self.sample(d)
-        else:
-            s = self.mode(d)
-        return d, s
+        params = torch.concat([mu, sigma], dim=-1)
+        return params
 
     @torch.jit.ignore
     def dist(self,
              parameters: torch.Tensor) -> torch.distributions.Distribution:
-        mu, sigma = parameters.unbind(-1)
+        mu, sigma = torch.tensor_split(parameters, 2, dim=-1)
+        # reshape dist params to desired output shape
+        mu = mu.reshape(*parameters.shape[:-1], *self.s_x_orig)
+        sigma = sigma.reshape(*parameters.shape[:-1], *self.s_x_orig)
+
         d = torch.distributions.Normal(loc=mu, scale=sigma)
         d = torch.distributions.Independent(d, len(self.s_x_orig))
         return d
 
     @torch.jit.ignore
     def sample(self,
-               parameters):
-        mu, sigma = parameters.unbind(-1)
-        d = torch.distributions.Normal(loc=mu, scale=sigma)
-        d = torch.distributions.Independent(d, len(self.s_x_orig))
-        s = d.rsample()
-        return s
+               dist: torch.distributions.Distribution) -> torch.Tensor:
+        return dist.rsample()
 
     @torch.jit.ignore
     def mode(self,
-             parameters: torch.Tensor) -> torch.Tensor:
-        mu, _ = parameters.unbind(-1)
-        return mu
+             dist: torch.distributions.Distribution) -> torch.Tensor:
+        return dist.mode
 
 
 class SquashedGaussianDecoder(GaussianDecoder):
@@ -479,26 +498,20 @@ class SquashedGaussianDecoder(GaussianDecoder):
     @torch.jit.ignore
     def dist(self,
              parameters: torch.Tensor) -> torch.distributions.Distribution:
-        mu, sigma = parameters.unbind(-1)
+        mu, sigma = torch.tensor_split(parameters, 2, dim=-1)
+        # reshape dist params to desired output shape
+        mu = mu.reshape(*parameters.shape[:-1], *self.s_x_orig)
+        sigma = sigma.reshape(*parameters.shape[:-1], *self.s_x_orig)
+
         d = torch.distributions.Normal(loc=mu, scale=sigma)
         d = torch.distributions.TransformedDistribution(d, [TanhBijector()])
-        d = torch.distributions.Independent(d, 1)
+        d = torch.distributions.Independent(d, len(self.s_x_orig))
         return d
 
     @torch.jit.ignore
-    def sample(self,
-               parameters):
-        mu, sigma = parameters.unbind(-1)
-        d = torch.distributions.Normal(loc=mu, scale=sigma)
-        d = torch.distributions.TransformedDistribution(d, [TanhBijector()])
-        d = torch.distributions.Independent(d, 1)
-        s = d.rsample()
-        return s
-
-    @torch.jit.ignore
     def mode(self,
-             parameters):
-        mu, sigma = parameters.unbind(-1)
+             dist: torch.distributions.Distribution) -> torch.Tensor:
+        mu = dist.base_dist.base_dist.loc
         return torch.nn.functional.tanh(mu)
 
 
@@ -534,26 +547,28 @@ class OneHotDecoder(OutputDecoder, ManagedStatefulTrainingModule):
         else:
             return self._temp_min
 
-    def forward(self,
-                x_enc: torch.Tensor,
-                sample: bool = True):
+    def gen_params(self,
+                   x_enc: torch.Tensor):
         params = self._mdl(x_enc)
-        params = params.reshape(*params.shape[:-1], *self.s_x_orig)
-        d = torch.distributions.RelaxedOneHotCategorical(torch.tensor(self.temperature), logits=params)
-        if sample:
-            s = d.rsample()
-        else:
-            s = (d.probs == d.probs.max(dim=-1, keepdim=True).values).to(torch.float32) + d.probs - d.probs.detach()
+        return params
 
-        return d, s
+    def dist(self,
+             parameters: torch.Tensor) -> torch.distributions.Distribution:
+        # reshape params to fit the original observation, treat last dimension as one-hot encoded
+        params_rs = parameters.reshape(*parameters.shape[:-1], *self.s_x_orig)
+        d = torch.distributions.RelaxedOneHotCategorical(torch.tensor(self.temperature), logits=params_rs)
+        d = torch.distributions.Independent(d, len(self.s_x_orig) - 1)
+        return d
 
-        # d = torch.distributions.OneHotCategorical(logits=params)
-        # probs = torch.softmax(params, dim=-1)
-        # if sample:
-        #    s = d.sample() + probs - probs.detach()
-        # else:
-        #    s = torch.argmax(probs) + probs - probs.detach()
-        # return d, s
+    def sample(self,
+               dist: torch.distributions.Distribution) -> torch.Tensor:
+        return dist.rsample()
+
+    def mode(self,
+             dist: torch.distributions.Distribution) -> torch.Tensor:
+        d = dist.base_dist
+        s = (d.probs == d.probs.max(dim=-1, keepdim=True).values).to(torch.float32) + d.probs - d.probs.detach()
+        return s
 
 
 class BinomialDecoder(OutputDecoder):
@@ -569,52 +584,106 @@ class BinomialDecoder(OutputDecoder):
         lws = (d_x_encoded, *lws, np.prod(s_x_orig).item())
         self._mdl = torch.nn.Sequential(lwa(lws, activation, layer_norm=layer_norm, name='binomial_decoder'))
 
-    def forward(self,
-                x_enc: torch.Tensor,
-                sample: bool = True):
+    def gen_params(self,
+                   x_enc: torch.Tensor):
         params = self._mdl(x_enc)
-        s_new = params.shape[:-1] + self.s_x_orig
-        params = params.reshape(s_new)
-        # params = torch.nn.functional.sigmoid(params)
-        d = params
-        if sample:
-            s = self.sample(params)
-        else:
-            s = self.mode(params)
-        return d, s
+        return params
 
-    @torch.jit.ignore
     def dist(self,
              parameters: torch.Tensor) -> torch.distributions.Distribution:
         # d = torch.distributions.ContinuousBernoulli(logits=parameters)
-        d = torch.distributions.Bernoulli(logits=parameters)
-        d = torch.distributions.Independent(d, 1)
+        params_rs = parameters.reshape(*parameters.shape[:-1], *self.s_x_orig)
+        d = torch.distributions.Bernoulli(logits=params_rs)
+        d = torch.distributions.Independent(d, len(self.s_x_orig))
         return d
 
-    @torch.jit.ignore
     def sample(self,
-               parameters):
-        # d = torch.distributions.ContinuousBernoulli(logits=parameters)
-        d = torch.distributions.Bernoulli(logits=parameters)
-        d = torch.distributions.Independent(d, 1)
+               dist: torch.distributions.Distribution) -> torch.Tensor:
         # s = d.rsample()
-        probs = torch.nn.functional.sigmoid(parameters)
-        s = d.sample() + probs - probs.detach()
+        d = dist.base_dist
+        s = d.sample() + d.probs - d.probs.detach()
         return s
 
     @torch.jit.ignore
     def mode(self,
-             parameters):
-        # mode member of torch Bernoulli class intentionally returns nan for 0.5 probabilities, so we avoid using it
-        probs = torch.nn.functional.sigmoid(parameters)
+             dist: torch.distributions.Distribution) -> torch.Tensor:
+        # mode property of torch Bernoulli class intentionally returns nan for 0.5 probabilities, so we avoid using it
+        probs = dist.base_dist.probs
         mode = (probs >= 0.5).to(probs) + probs - probs.detach()
-        # d = torch.distributions.ContinuousBernoulli(logits=parameters)
-        # d = torch.distributions.Bernoulli(logits=parameters)
-        # s = d.mode + parameters - parameters.detach()
-        # s = d.mode
-        # mode = probs
-        # s = d.sample() + parameters - parameters.detach()
         return mode
+
+
+class MultiDecoder(OutputDecoder):
+
+    def __init__(self,
+                 *decoders: OutputDecoder,
+                 logprob_corrections: Sequence[callable] = None):
+        s_x_origs = [d.s_x_orig for d in decoders]
+        d_x_encoded = set([d.d_x_encoded for d in decoders])
+
+        for s in s_x_origs:
+            assert len(s) == 1, 'Only decoders with vectorized outputs are supported'
+        assert len(d_x_encoded) == 1, 'All decoders must have the same input dimension'
+        d_x_encoded = d_x_encoded.pop()
+
+        s_x_orig = sum([x[0] for x in s_x_origs])
+
+        super().__init__(s_x_orig=s_x_orig, d_x_encoded=d_x_encoded)
+        self.decoders = torch.nn.ModuleList(decoders)
+        self.logprob_corrections = logprob_corrections
+
+        mock = torch.zeros(1, d_x_encoded)
+        self.d_dist_params = [d(mock)[0].shape[-1] for d in decoders]
+
+    def gen_params(self,
+                   x_enc: torch.Tensor):
+        d_params = [dec.gen_params(x_enc) for dec in self.decoders]
+        d_params = torch.concat(d_params, dim=-1)
+        return d_params
+
+    def dist(self,
+             params: torch.Tensor) -> torch.distributions.Distribution:
+        dists = []
+        i_start = 0
+        for dec, d_params in zip(self.decoders, self.d_dist_params):
+            i_end = i_start + d_params
+            dec_dist_params = params[..., i_start:i_end]
+            dist = dec.dist(dec_dist_params)
+            dists.append(dist.base_dist)
+        d = mdm.utils.torch_tools.ConcatDistribution(*dists, corrections=self.logprob_corrections)
+        d = torch.distributions.Independent(d, 1)
+        return d
+
+    def sample(self,
+               dist: torch.distributions.Distribution) -> torch.Tensor:
+        return dist.rsample()
+
+
+class GaussBinomialDecoder(MultiDecoder):
+
+    def __init__(self,
+                 s_x_orig: int | Tuple[int],
+                 d_x_gauss: int,
+                 d_x_bin: int,
+                 d_x_encoded: int,
+                 lws: Sequence[int],
+                 activation: str,
+                 layer_norm: bool):
+        assert type(s_x_orig) is int and s_x_orig == d_x_gauss + d_x_bin
+        gauss_dec = GaussianDecoder(s_x_orig=d_x_gauss, d_x_encoded=d_x_encoded, lws=lws, activation=activation,
+                                    layer_norm=layer_norm, epsilon=0.1)
+        bin_dec = BinomialDecoder(s_x_orig=d_x_bin, d_x_encoded=d_x_encoded, lws=lws, activation=activation,
+                                  layer_norm=layer_norm)
+        # avoid out of support values for binomial distribution
+        corrections = [None, lambda x: torch.clamp(x.round(), 0.0, 1.0)]
+        super().__init__(gauss_dec, bin_dec, logprob_corrections=corrections)
+
+    def mode(self,
+             dist: torch.distributions.Distribution) -> torch.Tensor:
+        mode_gauss = dist.base_dist.distributions[0].mode
+        probs = dist.base_dist.distributions[1].probs
+        mode_bernoulli = (probs >= 0.5).to(probs) + probs - probs.detach()
+        return torch.concat([mode_gauss, mode_bernoulli], dim=-1)
 
 
 class MLPDecoder(OutputDecoder):

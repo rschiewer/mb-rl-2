@@ -7,6 +7,7 @@ from gymnasium_robotics.envs.maze.maze_v4 import MazeEnv
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, Ellipse
 from matplotlib.colors import to_rgb
+from minigrid.minigrid_env import MiniGridEnv
 
 from mdm.utils.utils import env_class_is, get_env_instance
 
@@ -21,6 +22,8 @@ def visualize_env(env: gym.Env, canvas: plt.Figure | plt.Axes, **kwargs):
         plot_maze_env(env=env, canvas=canvas, **kwargs)
     elif env_class_is(env, Nav2dEnv):
         plot_nav2d_env(env=env, canvas=canvas, **kwargs)
+    #elif env_class_is(env, MiniGridEnv):
+    #    plot_minigrid_env(env=env, canvas=canvas, **kwargs)
 
 
 # def draw_timestep(canvas: plt.Axes, x: float, y:float, i_t: int, size: float = 1, fontweight: int = 300):
@@ -162,6 +165,13 @@ def plot_nav2d_env(env: gym.Env,
                 canvas.scatter(x, y, marker='h', c=c, s=200, zorder=zo())
                 canvas.text(x, y, f'{t + 1}', c='white', horizontalalignment='center',
                             verticalalignment='center_baseline', fontweight=900, fontsize='medium', zorder=zo())
+
+
+def plot_minigrid_env(env: gym.Env,
+                      canvas: plt.Axes,
+                      observations: np.ndarray,
+                      n_trajs: int = 1):
+    pass
 
 
 def plot_halfcheetah(env: gym.Env,

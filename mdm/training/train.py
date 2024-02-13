@@ -155,7 +155,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
             collect_fn(explore=True, i_step=i_step)
 
         # eval =========================================================================================================
-        if i_step % cfg['trainer']['eval_interval'] == 0:
+        if i_step % cfg['trainer']['eval_interval'] == 0 and i_step > 0:
             with torch.no_grad():
                 agent_eval_mode(r_max_agents + goal_seeking_agents)
                 model.eval()
@@ -689,8 +689,10 @@ def train_goal_seeking_agent_one_step(model, level, pred, targets, eval_env, cfg
 
 
 def train_gsa(model, level, pred, targets, eval_env, cfg, i_step, logger, sample_agents, use_her):
-    gsa, gsa_optimizers = model.goal_seeking_agents[level]
+    # We start rollouts from every time step in the trajectory except the very last one and give the last step as goal
+    # for each rollout. That way, the GSA learns to go towards a goal that is a varied amount of steps away.
 
+    gsa, gsa_optimizers = model.goal_seeking_agents[level]
     # get start states from model rollout
     state = {k: v[:-1] for k, v in pred[level].items() if k in rssm_state_keys()}
     # fold time into batch dimension, i.e. concatenate the different time steps along batch dimension
@@ -721,9 +723,10 @@ def train_gsa(model, level, pred, targets, eval_env, cfg, i_step, logger, sample
 
     # perform gsa rollout
     state = rssm_detach_state(**state)  # prevent gradients from flowing back through start states
-    goal_simulation = gsa.act_in_sim(env_start_state=state, sim_env=model, n_steps=15,
-                                     goal=goal, sample_states=True,
-                                     sample_actions=sample_agents, expl_noise=gsa.eps, reconstruct=True)
+    n_agent_steps = cfg['trainer']['agent_model_steps'][level]
+    goal_simulation = gsa.act_in_sim(env_start_state=state, sim_env=model, n_steps=n_agent_steps, goal=goal,
+                                     sample_states=True, sample_actions=sample_agents, expl_noise=gsa.eps,
+                                     reconstruct=True)
     loss = gsa.update_step(goal_simulation['agent'], first_step_mask=state_mask, **gsa_optimizers)
     logger.log(to_np(loss), Scope.TRAIN() / f'goal_seeking_agent/{level}/', i_step)
 
@@ -1306,7 +1309,7 @@ def record_episode(cfg, i_step, logger, model, video_env):
     video_env.reset()
     video_env.get_wrapper_attr('start_video_recorder')()
     policy = HierarchicalLatentAgentPolicy(model, stochastic=True, exploration_noise=0.0)
-    #policy = LatentAgentPolicy(model.r_max_agents[0][0], model, exploration_noise=0.0, stochastic=True)
+    # policy = LatentAgentPolicy(model.r_max_agents[0][0], model, exploration_noise=0.0, stochastic=True)
     traj = collect_data(video_env, cfg['eval']['eval_steps'], policy)
     traj = traj[0]  # we collect only a single trajectory, remove list wrapper
     video_env.get_wrapper_attr('close_video_recorder')()
@@ -1680,6 +1683,7 @@ def plot_goal_seeking_performance(goal_agent, model_mem, agent_mem, gsa_goals, g
     plt.close(fig)
     del fig
     # plt.show()
+
 
 def update_model_chunk_distance(i_step, l, logger, model, r_max_simulation):
     # update model's stats about how distant goals are on average

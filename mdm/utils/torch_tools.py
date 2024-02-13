@@ -198,9 +198,9 @@ class RunningMeanStd(torch.jit.ScriptModule):
             shape = (shape,)
 
         """Tracks the mean, variance and count of values."""
-        self._mean = torch.nn.Parameter(torch.zeros(*shape, dtype=torch.float64), requires_grad=False)
-        self._var = torch.nn.Parameter(torch.ones(*shape, dtype=torch.float64), requires_grad=False)
-        self.count = torch.nn.Parameter(torch.tensor(epsilon, dtype=torch.float64), requires_grad=False)
+        self._mean = torch.nn.Parameter(torch.zeros(*shape, dtype=torch.float32), requires_grad=False)
+        self._var = torch.nn.Parameter(torch.ones(*shape, dtype=torch.float32), requires_grad=False)
+        self.count = torch.nn.Parameter(torch.tensor(epsilon, dtype=torch.float32), requires_grad=False)
 
     @property
     def mean(self):
@@ -941,6 +941,73 @@ class TanhBijector(torch.distributions.Transform):
 
     def log_abs_det_jacobian(self, x, y):
         return 2.0 * (np.log(2) - x - torch.nn.functional.softplus(-2.0 * x))
+
+
+class ConcatDistribution(torch.distributions.Distribution):
+
+    def __init__(self,
+                 *distributions: torch.distributions.Distribution,
+                 corrections: Sequence[callable] = None):
+
+        self.distributions = distributions
+        if corrections is None:
+            corrections = [None for _ in distributions]
+        else:
+            assert len(corrections) == len(distributions)
+        self.corrections = corrections
+        self._event_shapes = [d.event_shape for d in distributions]
+        self._batch_shapes = [d.batch_shape for d in distributions]
+        es = set(self._event_shapes)
+        bs_leading_dims = set([bs[:-1] for bs in self._batch_shapes])
+        bs_trailing_dim = [bs[-1] for bs in self._batch_shapes]
+
+        assert len(es) == 1, 'All dists must have same event shape'
+        assert len(bs_leading_dims) == 1, 'All dists must have same batch size except last dim'
+        event_shape = es.pop()
+        assert event_shape == (), 'Event shape of all distributions must be empty'
+
+        batch_shape = (*bs_leading_dims.pop(), sum(bs_trailing_dim))
+
+        super().__init__(batch_shape=batch_shape, event_shape=event_shape)
+
+    def rsample(self, sample_shape: torch.Size = torch.Size()) -> torch.Tensor:
+        sample = []
+        for d in self.distributions:
+            if d.has_rsample:
+                s = d.rsample(sample_shape=sample_shape)
+            elif hasattr(d, 'probs'):  # use straight-through gradients
+                # expand probs attribute to match sample_shape
+                new_dims = [1] * len(sample_shape)
+                probs = d.probs.reshape(*new_dims, *d.probs.shape)
+                s = d.sample(sample_shape=sample_shape) + probs - probs.detach()
+            else:
+                raise RuntimeError(f'Can\'t rsample from distribution {d}')
+            sample.append(s)
+        sample = torch.concat(sample, dim=-1)
+        return sample
+
+    def sample(self, sample_shape: torch.Size = torch.Size()) -> torch.Tensor:
+        sample = []
+        for d in self.distributions:
+            sample.append(d.sample(sample_shape=sample_shape))
+        sample = torch.concat(sample, dim=-1)
+        return sample
+
+    def log_prob(self, value: torch.Tensor) -> torch.Tensor:
+        logprob = []
+        i_start = 0
+        for d, corr in zip(self.distributions, self.corrections):
+            dx = d.batch_shape[-1]
+            i_end = i_start + dx
+            v_i = value[..., i_start:i_end]
+            # if v_i come from different distributions and are packed into the same vector, we sometimes need to apply
+            # casting or rounding to avoid out of support v_i due to numerical inaccuracy
+            if corr is not None:
+                v_i = corr(v_i)
+            i_start = i_end
+            logprob.append(d.log_prob(v_i))
+        logprob = torch.concat(logprob, dim=-1)
+        return logprob
 
 
 def unsqueeze_right(to_expand: Union[np.ndarray, torch.Tensor], target: Union[np.ndarray, torch.Tensor]):

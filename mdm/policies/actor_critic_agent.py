@@ -110,7 +110,6 @@ class ActorCriticAgent(torch.nn.Module):
 
         self.return_running_average = RunningMeanStd(shape=(1,))
 
-        self.goal_reached_eps = 0.05
         self.min_float = torch.finfo().eps
 
     def _check_a(self,
@@ -191,10 +190,12 @@ class ActorCriticAgent(torch.nn.Module):
 
         d_batch = env_start_state[-1].shape[0]
         device = env_start_state[-1].device
+        # prepare memories
         s_mem_t0_to_T = [env_start_state]
         agent_o_t0_to_T = [self.fuse_o_with_goal(env_start_state, goal)]
         agent_a_t0_to_T = [self.filler_a(d_batch, device)]
         agent_a_dist_t0_to_T = [self.filler_a_dist_params(d_batch, device)]
+        # do rollout
         with FreezeParameters([world, other_world]):
             for t in range(n_steps):
                 a_dist, a = self(agent_o_t0_to_T[-1].detach(), sample=sample_actions, expl_noise=expl_noise)
@@ -239,15 +240,16 @@ class ActorCriticAgent(torch.nn.Module):
                 # s_embed_stacked = torch.zeros_like(s_embed_stacked)
                 # s_embed_stacked[:, :, :obs_enc.shape[-1]] = obs_enc
 
-                # goal = goal.detach()  # goals come from upper level management and should not be changed by workers
+                #goal = goal.detach()  # goals come from upper level management and should not be changed by workers
                 # repeat the same goal for each time step
-                # goal_tiled = goal.unsqueeze(0).expand(n_steps + 1, -1, -1)
-                # agent_r_t0_to_T = self.goal_similarity(s_embed_stacked, goal_tiled)
-                # agent_r_t0_to_T = list(agent_r_t0_to_T.unbind(0))
-                # agent_term_t0_to_T = pred['terminal']
+                #goal_tiled = goal.unsqueeze(0).expand(n_steps + 1, -1, -1)
+                #agent_r_t0_to_T = self.goal_similarity(s_embed_t0_to_T, goal_tiled)
+                #agent_term_t0_to_T = self.goal_terminal(agent_r_t0_to_T)
                 goal = world.decode(goal.detach(), sample=False, reconstruct_observation=True)['o']
+                goal = torch.flatten(goal, start_dim=1)  # in case of observations that have more than 1 data dimension
                 goal_tiled = goal.unsqueeze(0).expand(n_steps + 1, -1, -1).clone()  # clone to be safe
                 state_obs = torch.stack(env_memory['o'])
+                state_obs = torch.flatten(state_obs, start_dim=2)
                 agent_r_t0_to_T = self.goal_similarity(state_obs, goal_tiled)
                 agent_term_t0_to_T = self.goal_terminal(agent_r_t0_to_T)
 
@@ -324,7 +326,7 @@ class ActorCriticAgent(torch.nn.Module):
             # params = torch.nn.functional.softmax(params, dim=-1)  # re-normalize
         else:
             mu, logvar = torch.tensor_split(params, 2, -1)
-            mu = torch.tanh(mu)  # limit total range of mu but make it easy for the actor net to saturate it
+            mu = torch.tanh(mu) * 1.2  # limit total range of mu but make it easy for the actor net to saturate it
 
             # logvar = logvar + 3.0  # make initial variance high
             # sigma = torch.nn.functional.softplus(logvar) + self.min_scale
@@ -361,7 +363,7 @@ class ActorCriticAgent(torch.nn.Module):
                 a_smpl = a_smpl + a_dist.probs - a_dist.probs.detach()
             else:
                 a_smpl = torch.argmax(a_dist.probs, dim=-1)
-                a_smpl = torch.nn.functional.one_hot(a_smpl, self.d_a)  # + a_dist.probs - a_dist.probs.detach()
+                a_smpl = torch.nn.functional.one_hot(a_smpl, self.d_a) + a_dist.probs - a_dist.probs.detach()
             a_smpl = a_smpl.to(dtype=torch.float32)
         else:
             if sample:
@@ -575,7 +577,8 @@ class ActorCriticAgent(torch.nn.Module):
             ema_value_loss = masked_mean(ema_value_loss, mask_t1_to_H)
 
         v_critic = self.critic_net(o.detach()[:-1])
-        value_loss = torch.nn.functional.smooth_l1_loss(v_critic, value_target.detach(), reduction='none')
+        #value_loss = torch.nn.functional.smooth_l1_loss(v_critic, value_target.detach(), reduction='none')
+        value_loss = torch.nn.functional.mse_loss(v_critic, value_target.detach(), reduction='none')
         value_loss = masked_mean(value_loss, mask_t1_to_H)
 
         # TODO: currently last action is not trained, we can change that and record last state in act_in_sim as well
@@ -791,8 +794,8 @@ class ActorCriticAgent(torch.nn.Module):
         # term_zone_core_radius = 0.001
         # term_zone_perimeter_radius = 0.003
 
-        term_zone_core_radius = 0.001
-        term_zone_perimeter_radius = 0.1
+        term_zone_core_radius = 0.0005
+        term_zone_perimeter_radius = 0.05
 
         # sigmoid is close to 1.0 at x=3.0 and close to 0.0 at x=-3.0
         sig_min = -5.0

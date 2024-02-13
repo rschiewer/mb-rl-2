@@ -28,9 +28,10 @@ def main():
     parser.add_argument('-log', default=False, action='store_true')
     parser.add_argument('-d_batch', type=int)
     parser.add_argument('-n_collect', type=int)
+    parser.add_argument('-seed', type=int, default=None)
     args = parser.parse_args()
 
-    cfg = load_yaml(here() / 'cfg_rssm_train.yaml')
+    cfg = load_yaml(here() / 'cfg_hierarchical_nav2d.yaml')
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
     if args.d_batch:
@@ -41,13 +42,18 @@ def main():
         logger = NeptuneLogger(**neptune_cfg)
     else:
         logger = NotLogger()
+    if args.seed:
+        cfg['trainer']['seed'] = args.seed
+    else:
+        cfg['trainer']['seed'] = random.randint(0, sys.maxsize)
 
     # for debugging
     GlobalLogger.bind(logger, {'_mask_model': 50,
                                '_mask_latent_overshooting': 50,
                                '_mask_agent': 50,
-                               'simulated_ground_truth_goal_distance': 50,
-                               '_sanity_check_goal_computation': 50})
+                               '_simulated_ground_truth_goal_distance': 50,
+                               '_sanity_check_goal_computation': 50,
+                               'reachability_penalty': 200})
 
     def make_env_fn():
         _env = gym.make(cfg['env_name'])
@@ -132,19 +138,11 @@ def main():
     def collect_fn(explore: bool, i_step: int):
         agent_eval_mode(r_max_agents + goal_seeking_agents)
         collect_env.reset()
-        # expl_noise = 0.3 if explore else 0.0
         det_policy = HierarchicalLatentAgentPolicy(model, stochastic=True, exploration_noise=0.01)
         expl_policy = HierarchicalLatentAgentPolicy(model, stochastic=False,
                                                     exploration_noise=cfg['trainer']['fixed_agent_expl_noise'])
-        # collected_data_trajectories = collect_data(collect_env, -1, policy)
-        # train_mem.extend(collected_data_trajectories)
-        # train_mem.extend(collected_data_trajectories)
         GymEpisodeDriver(collect_env, det_policy).interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
         GymEpisodeDriver(collect_env, expl_policy).interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
-        # GymEpisodeDriver(collect_env, None).interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
-        # GymEpisodeDriver(collect_env, expl_policy).interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
-        # d.interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
-        # d.interact(cfg['trainer']['n_collect_trajectories'] // 2, train_mem)
 
         plan = extract_plan(det_policy)
 
@@ -156,52 +154,6 @@ def main():
                 visualize_env(collect_env, axis, observations=plan_lvl['o'], rewards=plan_lvl['r'],
                               terminals=plan_lvl['terminal'])
             logger.log_plot(fig, Scope.TRAIN() / 'eval_policy_plan', i_step)
-
-        # collect_env.reset()
-        # agent_eval_mode(r_max_agents + goal_seeking_agents)
-        # policy = HierarchicalLatentAgentPolicy(model, explore=explore)
-        # collected_data_trajectories = collect_data(collect_env, -1, policy)
-        # train_mem.extend(collected_data_trajectories)
-        # visualize_trajectory(collected_data_trajectories[0])
-
-        """
-        n_plots = model.levels + 1
-        with TempFigure(figsize=(5 * n_plots, 6)) as fig:
-            for l, flight_record_l in enumerate(policy.flight_record):
-                states_lvl = torch.stack(flight_record_l['z_post'])[:, :, :, 0]
-                time_steps_lvl = torch.stack(flight_record_l['time_step'])
-                time_steps_lvl = 1 - (time_steps_lvl / time_steps_lvl.max())
-                d_time, d_batch = states_lvl.shape[:2]
-
-                states_lvl = states_lvl.reshape(d_time * d_batch, -1).detach().cpu().numpy()
-                # time_steps_lvl = time_steps_lvl.reshape(d_time * d_batch, -1).detach().cpu().numpy()
-                time_steps_lvl = time_steps_lvl.detach().cpu().numpy()
-
-                pca = PCA(n_components=3)
-                states_trans = pca.fit_transform(states_lv)
-                states_trans = states_trans.reshape((d_time, d_batch, -1))
-                colors = np.concatenate([time_steps_lvl, np.zeros((d_time, d_batch, 2))], axis=-1)
-
-                ax = fig.add_subplot(100 + n_plots * 10 + (l + 1), projection='3d')
-                ax.set_title(f'Total explained variance level {l}: {np.sum(pca.explained_variance_ratio_):.3f}')
-                ax.scatter(states_trans[:, 0, 0], states_trans[:, 0, 1], states_trans[:, 0, 2], c=colors[:, 0])
-                ax.set_xlabel(f'PCA 1 ({pca.explained_variance_ratio_[0]:.3f})')
-                ax.set_ylabel(f'PCA 2 ({pca.explained_variance_ratio_[1]:.3f})')
-                ax.set_zlabel(f'PCA 3 ({pca.explained_variance_ratio_[2]:.3f})')
-            obs = torch.stack(policy.flight_record[0]['o']).detach().cpu().numpy()
-            d_time, d_batch = obs.shape[:2]
-            time_steps_lvl = torch.stack(policy.flight_record[0]['time_step']).detach().cpu().numpy()
-            time_steps_lvl = 1 - (time_steps_lvl / time_steps_lvl.max())
-            colors = np.concatenate([time_steps_lvl, np.zeros((d_time, d_batch, 2))], axis=-1)
-            ax = fig.add_subplot(100 + n_plots * 10 + n_plots)
-            ax.scatter(obs[:, 0, 0], obs[:, 0, 1], label='agent position', c=colors[:, 0])
-            ax.scatter(obs[:, 0, 2], obs[:, 0, 3], label='goal position')
-            ax.set_xlim([-1, 1])
-            ax.set_ylim([-1, 1])
-            plt.tight_layout()
-            #plt.show()
-            logger.log_plot(fig_to_img(fig), Scope.TEST() / f'model/latent_state_pca')
-        """
 
     print('Starting Training')
     # with torch.autograd.detect_anomaly(check_nan=True):

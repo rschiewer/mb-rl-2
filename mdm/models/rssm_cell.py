@@ -5,9 +5,7 @@ from typing import Tuple, Sequence, Optional, List, Any, Dict
 import torch
 from torch.nn import ModuleList
 
-from mdm.models.building_blocks import InputEncoder, OutputDecoder
 from mdm.utils.torch_tools import layers_with_activation as lwa
-from mdm.models.fastrnns import STMCell
 
 RSSMStateType = Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
 
@@ -84,6 +82,9 @@ class RSSMCell(torch.nn.Module):
         z_post_lws = (d_h + self.d_o_encoded, *z_post_lws, d_z_out)
 
         d_det_core = d_z_smpl + d_a
+        #d_det_core = 100
+        #self._rnn_embed = torch.nn.Sequential(torch.nn.Linear(d_z_smpl + d_a, d_det_core), torch.nn.ReLU())
+
         # need both to satisfy torch script
         self._lstm = ModuleList([torch.nn.LSTMCell(d_det_core, hidden_size=d_h)]
                                 + [torch.nn.LSTMCell(d_h, hidden_size=d_h) for _ in range(n_hidden_layers - 1)])
@@ -228,8 +229,8 @@ class RSSMCell(torch.nn.Module):
         h_out = h_layer
         return h_out, next_rnn_state
 
-        #h_next = self._gru[0](inp, last_rnn_state[:, 0])
-        #return next_rnn_state, next_rnn_state.unsqueeze(1)
+        # h_next = self._gru[0](inp, last_rnn_state[:, 0])
+        # return next_rnn_state, next_rnn_state.unsqueeze(1)
 
     def imagine(self,
                 a: torch.Tensor,
@@ -246,6 +247,7 @@ class RSSMCell(torch.nn.Module):
             last_rnn_state = self._rnn_dropout(last_rnn_state)
 
         inp = torch.concat([z, a], dim=-1)
+        #inp = self._rnn_embed(inp)
         if self.rnn_type == 'lstm':
             h, next_rnn_state = self._lstm_forward(inp, last_rnn_state)
         else:
@@ -366,7 +368,7 @@ class RSSMCell(torch.nn.Module):
             probs = 0.99 * probs + 0.01 * (1.0 / self.n_latent_categories)
             logits = torch.log(probs)
             z_dist = logits.reshape(logits.shape[0], self.d_z * self.n_latent_categories)
-            #z_dist = net_output
+            # z_dist = net_output
         return z_dist
 
     def z_sample(self,
@@ -384,14 +386,14 @@ class RSSMCell(torch.nn.Module):
             # z_smpl = z_smpl + logits_rs - logits_rs.detach()  # straight-through gradient
             # z_smpl = z_smpl.reshape(dist_params.shape[0], self.d_z * self.n_latent_categories)
 
-            logits_rs = dist_params.reshape(dist_params.shape[0], self.d_z, self.n_latent_categories)
-            probs_rs = torch.nn.functional.softmax(logits_rs)
+            logits_rs = dist_params.reshape(dist_params.shape[0] * self.d_z, self.n_latent_categories)
+            probs_rs = torch.nn.functional.softmax(logits_rs, dim=-1)
             z_smpl = torch.distributions.OneHotCategorical(logits=logits_rs).sample()
             z_smpl = z_smpl.to(probs_rs) + probs_rs - probs_rs.detach()
             z_smpl = z_smpl.reshape(dist_params.shape[0], self.d_z * self.n_latent_categories)
-            #logits_rs = dist_params.reshape(dist_params.shape[0], self.d_z, self.n_latent_categories)
-            #z_smpl = torch.distributions.RelaxedOneHotCategorical(temperature=0.1, logits=logits_rs).rsample()
-            #z_smpl = z_smpl.reshape(dist_params.shape[0], self.d_z * self.n_latent_categories)
+            # logits_rs = dist_params.reshape(dist_params.shape[0], self.d_z, self.n_latent_categories)
+            # z_smpl = torch.distributions.RelaxedOneHotCategorical(temperature=0.1, logits=logits_rs).rsample()
+            # z_smpl = z_smpl.reshape(dist_params.shape[0], self.d_z * self.n_latent_categories)
         return z_smpl
 
     def z_mode(self,
@@ -408,11 +410,11 @@ class RSSMCell(torch.nn.Module):
             z_smpl = torch.nn.functional.one_hot(z_smpl, num_classes=self.n_latent_categories)
             z_smpl = z_smpl + probs_rs - probs_rs.detach()  # straight-through gradient
             z_smpl = z_smpl.reshape(dist_params.shape[0], self.d_z * self.n_latent_categories)
-            #logits_rs = dist_params.reshape(dist_params.shape[0], self.d_z, self.n_latent_categories)
-            #probs_rs = torch.nn.functional.softmax(logits_rs)
-            #z_smpl = torch.distributions.OneHotCategorical(logits=logits_rs).mode
-            #z_smpl = z_smpl.to(logits_rs) + probs_rs - probs_rs.detach()
-            #z_smpl = z_smpl.reshape(dist_params.shape[0], self.d_z * self.n_latent_categories)
+            # logits_rs = dist_params.reshape(dist_params.shape[0], self.d_z, self.n_latent_categories)
+            # probs_rs = torch.nn.functional.softmax(logits_rs)
+            # z_smpl = torch.distributions.OneHotCategorical(logits=logits_rs).mode
+            # z_smpl = z_smpl.to(logits_rs) + probs_rs - probs_rs.detach()
+            # z_smpl = z_smpl.reshape(dist_params.shape[0], self.d_z * self.n_latent_categories)
         return z_smpl
 
     @torch.jit.ignore
@@ -465,7 +467,6 @@ class RSSMCell(torch.nn.Module):
         state = (h, z_smpl, state[2], state[3], state[4], s_embedding)
 
         return state  # holds all information required to continue a rollout with the RSSM
-
 
 
 @torch.jit.script

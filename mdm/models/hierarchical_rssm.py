@@ -11,7 +11,8 @@ from torch.nn import ModuleList, ModuleDict
 
 from mdm.models.building_blocks import *
 from mdm.models.dynamics_model import DynamicsModel
-from mdm.models.rssm_cell import RSSMCell, rssm_stack_states, rssm_detach_state, rssm_state_keys, rssm_add_labels
+from mdm.models.rssm_cell import RSSMCell, rssm_stack_states, rssm_detach_state, rssm_state_keys, rssm_add_labels, \
+    RSSMStateType
 from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.utils.torch_tools import *
 from mdm.utils.utils import (filter_mem_state_seq_to_batch, fig_to_img, append_memory, extend_memory, TempFigure,
@@ -38,6 +39,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                  ema_coeff: float = 0.99,
                  ema_update_interval: int = sys.maxsize,
                  temporal_activation_regularization: int = 0,
+                 pessimism_coeff: float = 0.0,
                  kl_balance: int | bool = False):
         super(HierarchicalRSSM, self).__init__()
 
@@ -56,13 +58,16 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             d_a_above = rssm_modules[i_level + 1].d_a
             d_s_embedding = rssm_modules[i_level].d_s_embedding
             window_size = level['o'].window_size
-            #level['a'] = AutoencodingUpwardsFilter(s_x_orig=(window_size, d_a_below),
-            #                                       d_x_enc=d_a_above,
-            #                                       window_size=window_size, encoder_lws=[200, 100, 100],
-            #                                       encoder_type='squashed_normal', decoder_lws=[100, 100, 200],
-            #                                       decoder_type='squashed_normal', activation='relu', layer_norm=True,
-            #                                       epsilon=0.1, beta=0.01)
-            level['a'] = EMAClustering(window_size=window_size, s_x_orig=d_a_below, n_centroids=d_a_above, alpha=0.01)
+            level['a'] = AutoencodingUpwardsFilter(s_x_orig=(window_size, d_a_below),
+                                                   d_x_enc=d_a_above,
+                                                   window_size=window_size, encoder_lws=[200, 100, 100],
+                                                   encoder_type='squashed_normal', decoder_lws=[100, 100, 200],
+                                                   decoder_type='squashed_normal', activation='relu', layer_norm=True,
+                                                   epsilon=0.1, beta=0.1)
+            # level['a'] = EMAClustering(window_size=window_size, s_x_orig=d_a_below, n_centroids=d_a_above, alpha=0.01,
+            #                           dead_zone_mode='off', dead_zone_size=1.0)
+            # level['a'] = RandomProjectionUpwardsFilter(window_size=window_size, s_x_orig=(window_size, d_a_below),
+            #                                           d_x_filtered=d_a_above)
             # window_size = level['o'].window_size
             # mask_and_action_filters = {'mask': MinUpwardsFilter(window_size), 'a': ConstUpwardsFilter(window_size, 0)}
             # level.update(mask_and_action_filters)
@@ -102,7 +107,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         self.ema_update_interval = ema_update_interval
         self.temporal_activation_regularization = temporal_activation_regularization
         self.kl_balance = kl_balance
-        self.pessimism_coeff = 0.0000
+        self.pessimism_coeff = pessimism_coeff
         self.dbg_timestep = 0
         self.avg_chunk_dist_early = ModuleList([RunningMeanStd(shape=(mod.d_z,)) for mod in self.rssm_modules[:-1]])
         self.avg_chunk_dist_mid = ModuleList([RunningMeanStd(shape=(mod.d_z,)) for mod in self.rssm_modules[:-1]])
@@ -167,43 +172,43 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             start_state = mdl.init_state(a.shape[1], a.device)
 
         # perform simulation using a and o and start_state (last two depending on availability)
-        s_mem_t1_to_T = mdl.scan(a, o, start_state, posterior_steps=n_warmup, sample_state=sample_state)
-        s_final = s_mem_t1_to_T[-1]  # store away final state to return from this method
+        s_mem_t0_to_T = mdl.scan(a, o, start_state, posterior_steps=n_warmup, sample_state=sample_state)
+        s_final = s_mem_t0_to_T[-1]  # store away final state to return from this method
         # add start state and remove last state to build start states for 1-step prediction with EMA model
-        s_mem_t0_to_Tm1 = [start_state] + s_mem_t1_to_T[:-1]
+        s_mem_tm1_to_Tm1 = [start_state] + s_mem_t0_to_T[:-1]
 
         # make one big state tuple containing all time steps per element
-        s_mem_t1_to_T = list_of_tuples_to_tuple_of_lists(s_mem_t1_to_T)
-        s_mem_t0_to_Tm1 = list_of_tuples_to_tuple_of_lists(s_mem_t0_to_Tm1)
+        s_mem_t0_to_T = list_of_tuples_to_tuple_of_lists(s_mem_t0_to_T)
+        s_mem_tm1_to_Tm1 = list_of_tuples_to_tuple_of_lists(s_mem_tm1_to_Tm1)
 
         # decode predictions from states
-        s_embed_t1_to_T = torch.stack(s_mem_t1_to_T[-1])
-        pred = mdl.decode(s_embed_t1_to_T, sample=sample_output, reconstruct_observation=reconstruct)
+        s_embed_t0_to_T = torch.stack(s_mem_t0_to_T[-1])
+        pred_t0_to_T = mdl.decode(s_embed_t0_to_T, sample=sample_output, reconstruct_observation=reconstruct)
         # adhere to convention and make first dimension a list
-        pred = {k: dim_to_list(v, 0) for k, v in pred.items()}
+        pred_t0_to_T = {k: dim_to_list(v, 0) for k, v in pred_t0_to_T.items()}
         # add rssm state components to memory
-        pred.update(rssm_add_labels(s_mem_t1_to_T))
+        pred_t0_to_T.update(rssm_add_labels(s_mem_t0_to_T))
         # add action to memory
-        pred['a'] = dim_to_list(a, 0)
-        extend_memory(memory, pred)
+        pred_t0_to_T['a'] = dim_to_list(a, 0)
+        extend_memory(memory, pred_t0_to_T)
 
         # 1-step prediction with EMA model
         # stack each element in state memory
-        s_mem_t0_to_Tm1 = [torch.stack(x) for x in s_mem_t0_to_Tm1]
+        s_mem_tm1_to_Tm1 = [torch.stack(x) for x in s_mem_tm1_to_Tm1]
         # fold time dim into batch dim to form start states and actions
-        s_Tm1xB = [x.reshape(x.shape[0] * x.shape[1], *x.shape[2:]) for x in s_mem_t0_to_Tm1]
-        a_Tm1xB = a.reshape(a.shape[0] * a.shape[1], *a.shape[2:])
+        s_TxB = [x.reshape(x.shape[0] * x.shape[1], *x.shape[2:]) for x in s_mem_tm1_to_Tm1]
+        a_TxB = a.reshape(a.shape[0] * a.shape[1], *a.shape[2:])
         # do one prediction step
-        s_mem_Tm1xB = mdl_other(a_Tm1xB, last_state=s_Tm1xB, use_posterior=False, sample_state=sample_state)
+        s_mem_TxB = mdl_other(a_TxB, last_state=s_TxB, use_posterior=False, sample_state=sample_state)
         # get prior distribution parameters
-        z_prior_EMA_Tm1xB = s_mem_Tm1xB[2]
+        z_prior_EMA_TxB = s_mem_TxB[2]
         # reshape prior distribution parameters from (TxB, ...) back to (T, B, ...)
-        z_prior_EMA_t1_to_T = z_prior_EMA_Tm1xB.reshape(n_steps, -1, *z_prior_EMA_Tm1xB.shape[1:])
+        z_prior_EMA_t0_to_T = z_prior_EMA_TxB.reshape(n_steps, -1, *z_prior_EMA_TxB.shape[1:])
         # get z prior distribution parameters from online model rollout above
-        z_prior_t1_to_T = torch.stack(s_mem_t1_to_T[2])
+        z_prior_t0_to_T = torch.stack(s_mem_t0_to_T[2])
 
         # compute disagreement as MSE between EMA and online model distribution parameters
-        disagreement = torch.nn.functional.mse_loss(z_prior_EMA_t1_to_T, z_prior_t1_to_T, reduction='none')
+        disagreement = torch.nn.functional.mse_loss(z_prior_EMA_t0_to_T, z_prior_t0_to_T, reduction='none')
         # flatten out distribution parameter dimensions and average MSE over them
         disagreement = disagreement.reshape(*disagreement.shape[:2], -1)
         disagreement = disagreement.mean(dim=-1, keepdim=True)
@@ -219,6 +224,9 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                   r: List[torch.Tensor] | torch.Tensor | None = None,
                   terminal: List[torch.Tensor] | torch.Tensor | None = None,
                   mask: List[torch.Tensor] | torch.Tensor | None = None,
+                  rnn_states: List[torch.Tensor] | torch.Tensor | None = None,
+                  z: List[torch.Tensor] | torch.Tensor | None = None,
+                  s_embedding: List[torch.Tensor] | torch.Tensor | None = None,
                   level: int = None,
                   n_steps: int = -1,
                   respect_mask: bool = True,
@@ -255,9 +263,39 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         if r is not None:
             simulated_ground_truth['r'] = flt['r'](stack_if_list(r[:n_steps]), mask=mask,
                                                    window_size=window_size).detach()
-            obs_diff = torch.mean((simulated_ground_truth['o'][:-1] - simulated_ground_truth['o'][1:]) ** 2, dim=-1,
-                                  keepdim=True)
-            # simulated_ground_truth['r'][1:] += obs_diff
+            if level > 0:
+                #obs_diff = torch.mean((simulated_ground_truth['o'][:-1] - simulated_ground_truth['o'][1:]) ** 2,
+                #                      dim=-1, keepdim=True)
+                #simulated_ground_truth['r'][1:] += obs_diff
+
+                # filter out states and state embeddings from end of each chunk
+                state_flt = PickOneUpwardsFilter(window_size=self.strides[level], offset=-1)
+                rnn_states = state_flt(stack_if_list(rnn_states[:n_steps]), mask=mask, window_size=window_size).detach()
+                z = state_flt(stack_if_list(z[:n_steps]), mask=mask, window_size=window_size).detach()
+                s_embedding = state_flt(stack_if_list(s_embedding[:n_steps]), mask=mask,
+                                        window_size=window_size).detach()
+                # compute reachability with the resulting states
+                reach_penalty = self.reachability(rnn_states, z, s_embedding, level)
+                # max reachability is 1, which means the starting state and the goal are directly adjacent
+                # min reachabilitiy is 0, which means the agent needed all steps or even more
+                # thus, use reachability as subtractive penalty
+                #simulated_ground_truth['r'] -= 0.1 * reach_penalty.detach()
+                # avoid that rewards becones zero at full penalty, this could accidentally drown out negative rewards
+                reach_penalty = torch.clamp(reach_penalty, 0.0, 0.5)
+                reach_penalty = torch.zeros_like(reach_penalty)
+                simulated_ground_truth['r'] = torch.where(simulated_ground_truth['r'] > 0,
+                                                          simulated_ground_truth['r'] * (1 - reach_penalty),
+                                                          simulated_ground_truth['r'] * (1 + reach_penalty))
+
+                if GlobalLogger.can_log('reachability_penalty', self._current_train_step):
+                    msg = {'reachability_penalty': (-reach_penalty).mean().unsqueeze(0).detach().cpu().numpy()}
+                    GlobalLogger.logger.log(msg,
+                                            Scope.TRAIN() / f'model/{level}/reachability_penalty',
+                                            time_step=self._current_train_step)
+                # flt_a = UpwardsFilter(window_size=self.strides[level])
+                # act_var = flt_a(stack_if_list(a[:n_steps]), mask=mask, window_size=window_size)
+                # act_var = act_var.std(dim=1).mean(dim=-1, keepdim=True)
+                # simulated_ground_truth['r'] -= act_var  # action variance penalty
 
         if terminal is not None:
             simulated_ground_truth['terminal'] = flt['terminal'](stack_if_list(terminal[:n_steps]), mask=mask,
@@ -267,6 +305,64 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                                                          window_size=window_size).detach()
 
         return simulated_ground_truth
+
+    def reachability(self,
+                     rnn_states: torch.Tensor,
+                     z: torch.Tensor,
+                     s_embedding: torch.Tensor,
+                     level: int):
+        # Let GSA start in final state of one chunk and navigate to final state of next chunk to see how easy the chunk
+        # is traversable for the GSA.
+        # The first elements in rnn_states and z come from the end of the first chunk. Thus, we technically omit the
+        # first chunk when computing the penalty.
+
+        # create aliases for various subtrajectories
+        states_t0_to_Tm1 = rnn_states[:-1]
+        z_t0_to_Tm1 = z[:-1]
+        s_embed_t0_to_Tm1 = s_embedding[:-1]
+        s_embed_t1_to_T = s_embedding[1:]
+        # create aliases for time and batch dimension sizes
+        T, B = s_embedding.shape[:2]
+        Tm1 = T - 1
+
+        # fold time into batch dimension
+        states_t0_to_Tm1_rs = states_t0_to_Tm1.reshape(Tm1 * B, *states_t0_to_Tm1.shape[2:])
+        z_t0_to_Tm1_rs = z_t0_to_Tm1.reshape(Tm1 * B, *z_t0_to_Tm1.shape[2:])
+        s_embed_t0_to_Tm1_rs = s_embed_t0_to_Tm1.reshape(Tm1 * B, *s_embed_t0_to_Tm1.shape[2:])
+        s_embed_t1_to_T_rs = s_embed_t1_to_T.reshape(Tm1 * B, *s_embed_t1_to_T.shape[2:])
+
+        # we only need the rnn_state, z and s_embed fields in RSSM state to start simulation, rest can be zeros
+        start_state_t0_to_Tm1 = self.rssm_modules[level - 1].init_state(Tm1 * B, z.device)
+        start_state_t0_to_Tm1 = (start_state_t0_to_Tm1[0],
+                                 z_t0_to_Tm1_rs,
+                                 start_state_t0_to_Tm1[2],
+                                 start_state_t0_to_Tm1[3],
+                                 states_t0_to_Tm1_rs,
+                                 s_embed_t0_to_Tm1_rs)
+
+        # do simulation
+        gsa = self.goal_seeking_agents[level - 1][0]
+        with FreezeParameters([gsa]):
+            simulation = gsa.act_in_sim(env_start_state=start_state_t0_to_Tm1, sim_env=self,
+                                        n_steps=self.strides[level], goal=s_embed_t1_to_T_rs)
+
+        # penalize chunks that have goals reachable in fewer steps than chunk_size
+        goal_terminals = torch.stack(simulation['agent']['terminal'])
+        goal_terminals = goal_terminals[1:]  # remove first time step which is start state
+        # each steps after a terminal transition is masked, i.e. the mask tells us how many steps the gsa needed
+        # to get to the goal
+        is_beyond_terminal = compute_mask(goal_terminals)
+        # the needed steps are the max steps available (i.e. the chunk length) minus the masked steps
+        steps_needed = self.strides[level] - is_beyond_terminal.sum(dim=0)
+        # normalize the penalty
+        steps_needed_penalty = steps_needed / self.strides[level]
+        # unfold batch and time dimensions, remember that we omitted first time step
+        steps_needed_penalty_rs = steps_needed_penalty.reshape(Tm1, B, 1)
+        # add zero penalty for first chunk to match shapes
+        penalty_mock_first_step = torch.zeros_like(steps_needed_penalty_rs[0:1])
+        steps_needed_penalty_rs = torch.concat([penalty_mock_first_step, steps_needed_penalty_rs])
+
+        return steps_needed_penalty_rs
 
     def forward_all_levels(self,
                            ground_truth_trajectory: Dict[str, torch.Tensor],
@@ -295,8 +391,9 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         for l in range(1, self.levels):
             filtered_trajectory = self.filter_up(o=memory[l - 1]['s_embedding'], a=targets[l - 1]['a'],
                                                  r=targets[l - 1]['r'], terminal=targets[l - 1]['terminal'],
-                                                 mask=targets[l - 1]['mask'], level=l, respect_mask=False,
-                                                 sample_action_autoencoder=True)
+                                                 mask=targets[l - 1]['mask'], rnn_states=memory[l - 1]['rnn_state'],
+                                                 z=memory[l - 1]['z'], s_embedding=memory[l - 1]['s_embedding'],
+                                                 level=l, respect_mask=True, sample_action_autoencoder=True)
             memory[l], model_state[l] = self.forward_static(filtered_trajectory,
                                                             start_state=model_state[l], level=l,
                                                             n_steps=-1, n_warmup=warmup_steps[l],
@@ -322,23 +419,32 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 agent_o = rma.o_from_state(current_state)
                 _, a = rma(agent_o, sample=True)
                 current_state = world(a=a, last_state=current_state, use_posterior=False)
-                pred = world.decode(current_state[-1], sample=False, reconstruct_observation=True)
+                pred = world.decode(current_state[-1], sample=True, reconstruct_observation=True)
                 append_memory(mem, **rssm_add_labels(current_state), **pred, a=a)
 
             # compute eqn (4) from https://arxiv.org/abs/2204.12581
-            o = torch.stack(mem['s_embedding'])
-            r = torch.stack(mem['r'])
-            v = rma.critic_net(o)
-            # v = torch.minimum(rma.critic_net(o), rma.ema_critic_net(o))
-            # v = rma.return_running_average.normalize(v, rma.return_running_average.mean, rma.return_running_average.var)
+            # T(s', r | s, s) factorizes to p(z_t | z_t-1, h_t-1, a_t-1) * p(r_t | z_t) in this model and h_t and
+            # s_embedding_t are deterministic.
+            mask = compute_mask(mem['terminal'], first_step_mask=start_state_mask)
             z = torch.stack(mem['z'])
             z_dist_params = torch.stack(mem['z_prior'])
-            ##z_log_prob = self.rssm_modules[level].z_dist(z_dist_params).log_prob(z.detach()).unsqueeze(-1)
-            mask = compute_mask(mem['terminal'], first_step_mask=start_state_mask)
-            # pessimistic_loss = (r[:-1] + 0.99 * v[1:]).detach() * z_log_prob[1:]
-            pessimistic_loss = (r[:-1] + 0.99 * v[1:])
+            z_dist = self.rssm_modules[level].z_dist(z_dist_params)
+            r = torch.stack(mem['r'])
+            r_dist_params = torch.stack(mem['r_dist'])
+            r_dist = self.rssm_modules[level].r_decoder.dist(r_dist_params)
+            o = torch.stack(mem['s_embedding'])
+            # calc state values
+            v = rma.critic_net(o)
+
+            # v = torch.minimum(rma.critic_net(o), rma.ema_critic_net(o))
+            # v = rma.return_running_average.normalize(v, rma.return_running_average.mean, rma.return_running_average.var)
+
+            z_log_prob = z_dist.log_prob(z.detach()).unsqueeze(-1)
+            r_log_prob = r_dist.log_prob(r.detach()).unsqueeze(-1)
+            pessimistic_loss = (r.detach() + 0.99 * v) * z_log_prob * r_log_prob
+            #pessimistic_loss = (r[:-1] + 0.99 * v[1:])
             # pessimistic_loss = calc_lambda_returns(r[1:], terminal[1:], v[:-1], v[-1], 0.99, 0.95)
-            pessimistic_loss = self.pessimism_coeff * masked_mean(pessimistic_loss, mask[:-1])
+            pessimistic_loss = self.pessimism_coeff * masked_mean(pessimistic_loss, mask)
             # pessimistic_loss = 0.001 * masked_mean(v, mask)
         return pessimistic_loss
 
@@ -691,7 +797,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             kl_z = self.kl_balance * kl_0 + (1 - self.kl_balance) * kl_1
         else:
             kl_z = self._kl_div(z_post, z_prior, valid, free_nats=1.0)
-        kl_reg_z = self.kl_reg(z_post, valid)
+        kl_reg_z = torch.tensor(0.0).to(rec_r)  # self.kl_reg(z_post, valid)
 
         # minimize difference of reconstructions given slightly perturbed z
         # factor = states_stacked['z'].std(dim=[0, 1]) * 0.01
@@ -718,6 +824,27 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         loss = {'total': total, 'o': rec_o, 'r': rec_r, 'term': rec_term, 'kl_z': kl_z, 'kl_reg_z': kl_reg_z,
                 'monitoring_o': mae_o, 'monitoring_r': mae_r, 'monitoring_term': mae_term,
                 'contrastive_z': contrastive_z}  # , 'similarity_loss': similarity_loss}
+
+        with torch.no_grad():
+            # generate some statistics about the z distribution
+            if self.rssm_modules[level].latent_dist == 'normal':
+                all_z = torch.flatten(torch.stack(pred['z']), start_dim=0, end_dim=-2)
+                z_mean = all_z.mean()
+                z_std = all_z.std()
+                z_inter_dim_std = all_z.mean(dim=0).std()
+                z_dist_stats = {'z_mean': z_mean, 'z_std': z_std, 'inter_dim_z_std': z_inter_dim_std}
+            elif self.rssm_modules[level].latent_dist == 'categorical':
+                all_z = torch.flatten(torch.stack(pred['z']), start_dim=0, end_dim=-2)
+                all_z = torch.argmax(all_z, dim=-1).to(dtype=torch.float32)
+                z_mean = all_z.mean()
+                z_std = all_z.std()
+                # z_most_often = torch.bincount(all_z)
+                z_dist_stats = {'z_mean': z_mean, 'z_std': z_std}
+            else:
+                z_dist_stats = {}
+
+            z_dist_stats = {f'monitoring_{k}': v for k, v in z_dist_stats.items()}
+            loss.update(z_dist_stats)
 
         # if level > 0:
         #    nom = torch.sum(-o_dist.entropy() * valid)
@@ -781,7 +908,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                       distribution: torch.distributions.Distribution,
                       x_target: torch.Tensor,
                       valid: torch.Tensor):
-        if isinstance(distribution, torch.distributions.RelaxedOneHotCategorical):
+        if (isinstance(distribution, torch.distributions.Independent)
+                and isinstance(distribution.base_dist, torch.distributions.RelaxedOneHotCategorical)):
             # smooth out targets a bit to avoid inf/nan log probs with RelaxedOneHotCategorical
             x_target = torch.abs(x_target - 1e-5)
             x_target /= x_target.sum(dim=-1, keepdim=True)
@@ -830,13 +958,15 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             dummy = ps
 
         if isinstance(dummy, torchd.Normal):  # assume at least first distribution is not None
-            reg_dist = torch.distributions.Normal(loc=torch.zeros_like(ps.base_dist.loc),
-                                                  scale=torch.ones_like(ps.base_dist.scale))
+            reg_dist = torch.distributions.Normal(loc=torch.zeros_like(dummy.loc),
+                                                  scale=torch.ones_like(dummy.scale))
             reg_dist = torch.distributions.Independent(reg_dist, 1)
         # elif isinstance(ps[0], torch.distributions.ContinuousBernoulli):
         #    reg_dist = torch.distributions.ContinuousBernoulli(probs=torch.full_like(ps.probs, 0.5))
         elif isinstance(dummy, torchd.OneHotCategorical):
-            reg_dist = torch.distributions.OneHotCategorical(logits=torch.ones_like(ps.logits))
+            reg_dist = torch.distributions.OneHotCategorical(logits=torch.ones_like(dummy.logits))
+        elif isinstance(dummy, torchd.Bernoulli):
+            reg_dist = torchd.Bernoulli(logits=torch.ones_like(dummy.logits))
         else:
             raise ValueError(f'No regularization distribution for distribution {ps} found')
 

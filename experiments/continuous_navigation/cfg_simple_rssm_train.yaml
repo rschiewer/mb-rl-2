@@ -1,8 +1,8 @@
 ---
 neptune_cfg: "../neptune_settings.yaml"
-env_name: "MiniGrid-Empty-5x5-v0" #"gym_nav2d:nav2dHard-v0" # "PointMaze_UMaze-v3"#"InvertedPendulum-v4" #"Ant-v4" #"PointMaze_UMaze_static-v3" #"InvertedPendulum-v4" #"dm_control/cheetah-run-v0"# "gym_nav2d:nav2dEasySparse-v0" #"HalfCheetah-v4"#"InvertedPendulum-v4" #"gym_nav2d:nav2dEasySparse-v0" #"gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-v0"
+env_name: "MiniGrid-FixedLayoutFourRooms-v0" #"gym_nav2d:nav2dHard-v0" # "PointMaze_UMaze-v3"#"InvertedPendulum-v4" #"Ant-v4" #"PointMaze_UMaze_static-v3" #"InvertedPendulum-v4" #"dm_control/cheetah-run-v0"# "gym_nav2d:nav2dEasySparse-v0" #"HalfCheetah-v4"#"InvertedPendulum-v4" #"gym_nav2d:nav2dEasySparse-v0" #"gym_nav2d:nav2dEasy-v0" # "gym_nav2d:nav2dVeryEasy-v0"
 prefill_memory: "random" #"offline-dataset" # "random", False
-prefill_episodes: 10
+prefill_episodes: 500
 train_samples: null #"nav2d_Easy_train.samples" #"nav2d_Easy_train.samples"
 test_samples: null #"nav2d_EasySparse_expert.samples" #"nav2d_Easy_expert.samples"
 checkpoint_path: "checkpoints"
@@ -17,7 +17,7 @@ mdm:
          d_h: 300
          d_a: <infer>
          d_s_embedding: null
-         s_embedding_lws: [ 200, 200 ]
+         s_embedding_lws: []
          n_hidden_layers: 1
          hidden_dropout: 0.1
          epsilon: 0.1
@@ -26,8 +26,8 @@ mdm:
          layer_norm: True
          activation: "relu"
          rnn_type: "gru"
-         latent_dist: "normal"  #"normal" "categorical" "bernoulli"
-         n_latent_categories: 32
+         latent_dist: "categorical"  #"normal" "categorical" "bernoulli"
+         n_latent_categories: 20
          o_encoder:
             class: "MLPEncoder"
             d_x_encoded: 100
@@ -35,11 +35,12 @@ mdm:
             layer_norm: True
             activation: "relu"
          o_decoder:
-            class: "GaussianDecoder"
+            #class: "GaussianDecoder"
+            class: "BinomialDecoder"
             lws: [ 250, 250, 250 ]
             layer_norm: True
             activation: "relu"
-            epsilon: 0.1
+            #epsilon: 0.1
          r_decoder:
             class: "GaussianDecoder"
             lws: [ 250, 250, 250 ]
@@ -68,19 +69,19 @@ optim:
    lr: 0.0002 #0.0002
 
 trainer:
-   n_train_steps: 8000
+   n_train_steps: 50000
    freeze_model: False
    stop_collect: False
-   eval_interval: 100
-   plot_interval: 250
+   eval_interval: 250
+   plot_interval: 500
    d_batch: 256
-   subtrajectory_len: 50
-   collect_envs: 20
+   subtrajectory_len: 10
+   collect_envs: 10
    collect_interval: 50
    n_collect_trajectories: 10
    agent_train_interval: 1
    model_train_steps: [ -1 ]
-   agent_model_steps: [ 15 ]
+   agent_model_steps: [ 10 ]
    checkpoint_interval: 150
    sample_model_during_agent_training: True
    sample_agent_during_agent_training: True
@@ -92,7 +93,7 @@ agents:
       # level 0
       -  observation_type: 's_embedding'
          eps_exploration_init: 0.9
-         eps_exploration_coeff: 0.999
+         eps_exploration_coeff: 0.99995
          eps_exploration_min: 0.05
          discrete_actions: <infer>
          act_entropy_exploration_coeff: 0.0003
@@ -101,9 +102,9 @@ agents:
          novelty_exploration_coeff: 0.1
          tr_policy_kl_coeff: 0.1
          ema_update_coeff: 0.99
-         lr_actor: 0.00008
-         lr_critic: 0.0002
-         lr_other: 0.0003
+         lr_actor: 0.00005
+         lr_critic: 0.0001
+         lr_other: 0.0001
          min_scale: 0.1
          actor_lws: [ 250, 250, 250 ]
          critic_lws: [ 250, 250, 250 ]

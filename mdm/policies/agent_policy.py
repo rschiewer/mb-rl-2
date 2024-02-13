@@ -217,8 +217,6 @@ class HierarchicalLatentAgentPolicy(Policy):
             n_steps = self.model.strides[i_lvl]
             data_filtered = self.model.filter_up(o=self.env_data_below_cache[i_lvl]['o'],
                                                  a=self.env_data_below_cache[i_lvl]['a'],
-                                                 r=self.env_data_below_cache[i_lvl]['r'],
-                                                 terminal=self.env_data_below_cache[i_lvl]['terminal'],
                                                  level=i_lvl, n_steps=n_steps,
                                                  respect_mask=respect_mask,
                                                  sample_action_autoencoder=False)
