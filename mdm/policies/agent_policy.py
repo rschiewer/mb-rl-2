@@ -405,10 +405,12 @@ class HierarchicalLatentAgentPolicy(Policy):
         # if env.current_step > 0 and self.grounded_env_states[0] is None:
         #    raise RuntimeError(f'Env is already in step {env.current_step} but there\'s no recorded previous state')
 
+        # explicitly set eval mode
+        model_mode = self.model.training
         self.model.eval()
+        agent_modes = [a[0].training for a in self.model.r_max_agents + self.model.goal_seeking_agents]
         for agent in self.model.r_max_agents + self.model.goal_seeking_agents:
-            if agent is not None:
-                agent[0].eval()
+            agent[0].eval()
 
         # if isinstance(env, (CacheLastStepVecEnv)):
         #    d_batch = env.last_o.shape[0]
@@ -433,6 +435,11 @@ class HierarchicalLatentAgentPolicy(Policy):
 
         if isinstance(env, CacheLastStepEnv):  # remove batch dimension if it's not a vector env
             action = action[0]
+
+        # explicitly reset model and agents to previous mode
+        self.model.train(model_mode)
+        for agent, mode in zip(self.model.r_max_agents + self.model.goal_seeking_agents, agent_modes):
+            agent[0].train(mode)
         return action.detach().cpu().numpy()
 
 
