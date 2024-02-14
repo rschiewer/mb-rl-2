@@ -337,7 +337,8 @@ class GaussianEncoder(InputEncoder):
         self._mdl = torch.nn.Sequential(lwa(lws, activation, layer_norm=layer_norm, name='gaussian_encoder'))
         self.epsilon = epsilon
 
-    def forward(self, o: torch.Tensor,
+    def forward(self,
+                o: torch.Tensor,
                 sample: bool = True):
         o = torch.flatten(o, start_dim=-len(self.s_x_orig))
         params = self._mdl(o)
@@ -781,6 +782,24 @@ class UpwardsFilter(torch.nn.Module):
                 context: torch.Tensor | None = None,
                 window_size: int | None = None) -> torch.Tensor:
         x, mask, n_pad = self._preproc(x=x, mask=mask, window_size=window_size, assert_binary_mask=False)
+        return x
+
+
+class PadUpwardsFilter(UpwardsFilter):
+
+    def __init__(self,
+                 window_size: int,
+                 pad_value: float):
+        super().__init__(window_size)
+        self.pad_value = pad_value
+
+    def forward(self,
+                x: torch.Tensor,
+                mask: torch.Tensor | None = None,
+                context: torch.Tensor | None = None,
+                window_size: int | None = None) -> torch.Tensor:
+        x, mask, n_pad = self._preproc(x=x, mask=mask, window_size=window_size, pad_value=self.pad_value,
+                                       assert_binary_mask=False)
         return x
 
 
