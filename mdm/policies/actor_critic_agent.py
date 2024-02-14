@@ -183,6 +183,10 @@ class ActorCriticAgent(torch.nn.Module):
         else:
             world = sim_env.rssm_modules[self.level]
             other_world = sim_env._ema_rssm_modules[self.level]
+        world_mode = world.training
+        other_world_mode = other_world.training
+        world.eval()
+        other_world.eval()
 
         agent_memory = {} if agent_memory is None else agent_memory
         env_memory = {} if env_memory is None else env_memory
@@ -294,6 +298,8 @@ class ActorCriticAgent(torch.nn.Module):
             extend_memory(agent_memory, {'o': agent_o_t0_to_T, 'a': agent_a_t0_to_T, 'r': agent_r_t0_to_T,
                                          'terminal': agent_term_t0_to_T, 'a_dist': agent_a_dist_t0_to_T,
                                          'ema_a_dist': ema_a_dist_mock, 'model_novelty': disagreement})
+        world.train(world_mode)
+        other_world.train(world_mode)
 
         return {'agent': agent_memory, 'model': env_memory, 'model_state': s_final, 'ema_model': ema_env_mem}
 
