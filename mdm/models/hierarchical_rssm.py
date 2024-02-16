@@ -15,7 +15,6 @@ from mdm.models.dynamics_model import DynamicsModel
 from mdm.models.rssm_cell import RSSMCell, rssm_stack_states, rssm_detach_state, rssm_add_labels, RSSMStateType
 from mdm.models.vae import VAE
 from mdm.policies.actor_critic_agent import ActorCriticAgent
-from mdm.utils.gym_nav2d_tools import *
 from mdm.utils.torch_tools import *
 from mdm.utils.utils import (filter_mem_state_seq_to_batch, fig_to_img, append_memory, extend_memory, TempFigure,
                              list_of_tuples_to_tuple_of_lists, list_of_dicts_to_dict_of_lists)
@@ -260,8 +259,25 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             simulated_ground_truth['o'] = flt['o'](stack_if_list(o[:n_steps]), mask=mask,
                                                    window_size=window_size).detach()
         if a is not None:
-            simulated_ground_truth['a'] = flt['a'](stack_if_list(a[:n_steps]), mask=mask,
-                                                   window_size=window_size, sample=sample_action_autoencoder).detach()
+            if level > 0:
+                n_perm = 8
+                n_rep = 3
+                if window_size is None:
+                    ws = flt['a'].window_size
+                else:
+                    ws = window_size
+                a_ = stack_if_list(a[:n_steps])
+                z_ = stack_if_list(z[:n_steps])
+                rnn_states_ = stack_if_list(rnn_states[:n_steps])
+                s_embedding_ = stack_if_list(s_embedding[:n_steps])
+                mask_ = stack_if_list(mask)
+                a_, _ = self.sort_perm_invariant_actions(a_, z_, rnn_states_, s_embedding_, mask_, ws, n_perm,
+                                                         n_rep, level - 1)
+            else:
+                a_ = stack_if_list(a[:n_steps])
+
+            simulated_ground_truth['a'] = flt['a'](a_, mask=mask, window_size=window_size,
+                                                   sample=sample_action_autoencoder).detach()
         if r is not None:
             simulated_ground_truth['r'] = flt['r'](stack_if_list(r[:n_steps]), mask=mask,
                                                    window_size=window_size).detach()
@@ -762,24 +778,79 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                                 mask: torch.Tensor,
                                 target_lvl: int,
                                 a_enc_targets: None | torch.Tensor | List[torch.Tensor] = None):
-        n_perm = 8
+        n_perm = 9
         n_rep = 3
-        a_autoenc = self.upwards_filters[target_lvl]['a']
-        ws = a_autoenc.window_size
-        state_flt = PickOneUpwardsFilter(window_size=ws, offset=-1)
+        ws = self.upwards_filters[target_lvl]['a'].window_size
+        a_reordered, perm_invariant = self.sort_perm_invariant_actions(a, z, rnn_state, s_embedding, mask, ws, n_perm,
+                                                                      n_rep, target_lvl - 1)
+        #a_reordered, perm_invariant = self.sort_actions(a, z, rnn_state, s_embedding, mask, ws, n_perm,
+        #                                                n_rep, target_lvl - 1)
 
-        # For masking, switch from default zeros to ones as later on we will rearrange actions within chunks and
-        # zero padding actions at the end of the sequence could end up being shuffled somewhere in the sequence. Actions
-        # consisting of only ones howerver will always be sorted to the end of the chunk according to our sorting
-        # criteria. So they will remain in their masked positions.
-        # make newly added padding actions 1.0
-        a_flt = PadUpwardsFilter(window_size=ws, pad_value=1.0)
-        # make already present padding actions 1.0 as well
-        a = torch.where(mask.to(torch.bool), 1.0, a)
+        losses = self.upwards_filters[target_lvl]['a'].eval_step(a_reordered, mask=mask)
+        losses = {f'{k}_act_autoencoder': v for k, v in losses.items()}
+        losses['monitoring_perc_perm_invariant'] = perm_invariant.to(torch.float32).mean()
+        return losses
+
+    def sort_actions(self, a, z, rnn_state, s_embedding, mask, window_size, n_perm, n_rep, level):
+        ws = window_size
+        chunk_flt = UpwardsFilter(window_size=ws)
+
+        if mask is None:
+            mask = torch.zeros(a.shape[0], a.shape[1], 1, dtype=torch.bool, device=a.device)
 
         # START: get action sequences and permutations
-        a_filtered = a_flt(a, mask=mask)
-        mask_filtered = a_flt(mask)
+        a_filtered = chunk_flt(a, mask=mask)
+        mask_filtered = chunk_flt(mask)
+        # swap out T and T_chunk and fold T into B to obtain a tensor of shape [T_chunk, T*B, D]
+        a_seq = torch.swapaxes(a_filtered, 0, 1)
+        a_seq = a_seq.reshape(a_seq.shape[0], a_seq.shape[1] * a_seq.shape[2], a_seq.shape[3])
+        mask_seq = torch.swapaxes(mask_filtered, 0, 1)
+        mask_seq = mask_seq.reshape(mask_seq.shape[0], mask_seq.shape[1] * mask_seq.shape[2], 1)
+        # swap T_chunk and TxB dimensions so that each sequence can be permuted individually
+        a_seq = torch.swapaxes(a_seq, 0, 1)
+        mask_seq = torch.swapaxes(mask_seq, 0, 1)
+        # create a sorted version of the action sequences, use unique mapping that transforms each action to a scalar
+        if self.r_max_agents[level][0].discrete_actions:
+            a_seq_affine = a_seq  # one-hot actions,
+        else:
+            a_seq_affine = (a_seq + 1.0) * 0.5  # transform vector elements from interval [-1, 1] to interval [0, 1]
+            check_tensor(a_seq_affine, 0.0, 1.0)
+        # multiply each dimension of action vectors with a different power of 10 and add the results
+        mult = torch.pow(10, torch.arange(a.shape[-1])).to(a.device)
+        a_seq_mapped = torch.sum(a_seq_affine * mult, dim=-1)  # we now have a unique mapping for each action vector
+        a_seq_indices = torch.sort(a_seq_mapped, dim=1).indices
+        # use indices of sorting to sort the actual action sequences
+        a_seq_indices = a_seq_indices.unsqueeze(-1).expand_as(a_seq)
+        a_seq_sorted = torch.gather(a_seq, index=a_seq_indices, dim=1)
+        # undo the steps done to a_seq above to get the original a tensor back, just with reordered action sequences
+        # where they are permutation invariant
+        # bring T_chunk axis back to front and TxB axis back to 2nd dim
+        a_reordered = torch.swapaxes(a_seq_sorted, 0, 1)
+        # unfold T and B, but leave them in 2nd and 3rd dim as T_chunk still occupies 1st dim
+        n_chunks = a_filtered.shape[0]
+        d_batch_orig = a_filtered.shape[2]
+        a_reordered = a_reordered.reshape(a_reordered.shape[0], n_chunks, d_batch_orig, a_reordered.shape[-1])
+        # swap back T_chunk and T
+        a_reordered = torch.swapaxes(a_reordered, 0, 1)
+        # fold T_chunk into T to get original time axis back
+        a_reordered = a_reordered.reshape(a_reordered.shape[0] * a_reordered.shape[1], *a_reordered.shape[2:])
+        # cut the padding
+        a_reordered = a_reordered[:a.shape[0]]
+        return a_reordered, torch.full([a.shape[0]], False, dtype=torch.bool, device=a.device)
+
+    def sort_perm_invariant_actions(self, a, z, rnn_state, s_embedding, mask, window_size, n_perm, n_rep, level):
+        # return a, torch.full([a.shape[0]], False, dtype=torch.bool, device=a.device)
+
+        ws = window_size
+        last_valid_flt = PickOneUpwardsFilter(window_size=ws, offset=-1)
+        chunk_flt = UpwardsFilter(window_size=ws)
+
+        if mask is None:
+            mask = torch.zeros(a.shape[0], a.shape[1], 1, dtype=torch.bool, device=a.device)
+
+        # START: get action sequences and permutations
+        a_filtered = chunk_flt(a, mask=mask)
+        mask_filtered = chunk_flt(mask)
         # swap out T and T_chunk and fold T into B to obtain a tensor of shape [T_chunk, T*B, D]
         a_seq = torch.swapaxes(a_filtered, 0, 1)
         a_seq = a_seq.reshape(a_seq.shape[0], a_seq.shape[1] * a_seq.shape[2], a_seq.shape[3])
@@ -791,29 +862,42 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         # repeat each sequence n_perm + n_rep times
         a_seq_rep = torch.repeat_interleave(a_seq, repeats=n_rep + n_perm, dim=0)
         mask_seq_rep = torch.repeat_interleave(mask_seq, repeats=n_rep + n_perm, dim=0)
-        # build index tensor with [0, 1, ..., n] for first n_rep rows and n_perm rows of rand permutations
-        a_idx_perm = [torch.arange(ws) for _ in range(n_rep)] + [torch.randperm(ws) for _ in range(n_perm)]
-        a_idx_perm = torch.stack(a_idx_perm).to(a_seq_rep.device)
-        # index tensor currently fits n_perm+n_rep copies of a single batch item, repeat for all batch items
-        a_idx_perm = a_idx_perm.repeat(a_seq_rep.shape[0] // (n_rep + n_perm), 1)
-        # generate permutations with less than ws elements for masked
-
+        # prepare index tensor that holds per action sequence n_rep+n_perm distinct sets of indices, for now all indices
+        # are in order [0, 1, ..., N]
+        a_idx_perm = torch.arange(ws, device=a.device).unsqueeze(0).repeat(a_seq.shape[0] * (n_rep + n_perm), 1)
+        # reshape to make 1st dim iterate over action sequences and 2nd dim over permutations
+        a_idx_perm = a_idx_perm.reshape(a_seq.shape[0], n_rep + n_perm, ws)
+        # for each action sequence, leave n_rep sequences with the original order and generate n_perm permutations
+        # according to how many elements are masked for the respective sequence
+        steps_masked = mask_seq.sum(dim=1).squeeze(-1)  # calculate the amount of trailing padding actions per sequence
+        for n_masked in range(ws):
+            # do permutations for all sequences that have the current amount of n_masked mask actions
+            if torch.any(steps_masked == n_masked):
+                # generate n_perm different index permutations from index 0 to ws - n_masked
+                idx_perm_partial = [torch.randperm(ws - n_masked, device=a.device) for _ in range(n_perm)]
+                idx_perm_partial = torch.stack(idx_perm_partial)
+                # replace only the beginning ws - n_masked indices since those have been permuted, the indices beyond
+                # that reference masked padding actions and should not be permuted
+                a_idx_perm[steps_masked == n_masked, n_rep:, :ws - n_masked] = idx_perm_partial
+        # fold action sequence and permutation dims into one to match a_seq_rep tensor
+        a_idx_perm = a_idx_perm.reshape(a_idx_perm.shape[0] * a_idx_perm.shape[1], ws)
         # make last dimension of a_idx_perm fit the action dimension since torch.gather doesn't broadcast index
         a_idx_perm = a_idx_perm.unsqueeze(-1).repeat(1, 1, a.shape[-1])
         # use a_idx_perm to permute the action sequences (leaves n_rep unpermuted copies at beginnign of each block)
         a_seq_perm = torch.gather(a_seq_rep, dim=1, index=a_idx_perm)
         # restore previous format and swap batch and time dimensions back to original
         a_seq_perm = torch.swapaxes(a_seq_perm, 0, 1)
+        mask_seq_perm = torch.swapaxes(mask_seq_rep, 0, 1)
         # END: get action sequences and permutations
 
         # START: get start states for simulation
         # pick last state of each chunk as starting state for next chunk, add blank init start state for first chunk and
         # leave out last chunk
-        z_flt = state_flt(z, mask=mask)
+        z_flt = last_valid_flt(z, mask=mask)
         z_flt = torch.concat([torch.zeros_like(z_flt[0:1]), z_flt[:-1]])
-        rnn_state_flt = state_flt(rnn_state, mask=mask)
+        rnn_state_flt = last_valid_flt(rnn_state, mask=mask)
         rnn_state_flt = torch.concat([torch.zeros_like(rnn_state_flt[0:1]), rnn_state_flt[:-1]])
-        s_embed_flt = state_flt(s_embedding, mask=mask)
+        s_embed_flt = last_valid_flt(s_embedding, mask=mask)
         s_embed_flt = torch.concat([torch.zeros_like(s_embed_flt[0:1]), s_embed_flt[:-1]])
         # give start states the same treatment as action sequences above (sans permutation)
         # fold time into batch dimension
@@ -825,7 +909,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         rnn_state_flt = torch.repeat_interleave(rnn_state_flt, repeats=n_rep + n_perm, dim=0)
         s_embed_flt = torch.repeat_interleave(s_embed_flt, repeats=n_rep + n_perm, dim=0)
         # create start state mock
-        start_state = self.rssm_modules[target_lvl - 1].init_state(z_flt.shape[0], z.device)
+        start_state = self.rssm_modules[level].init_state(z_flt.shape[0], z.device)
         start_state = (start_state[0], z_flt, start_state[2], start_state[3], rnn_state_flt, s_embed_flt)
         # END: get start states for simulation
 
@@ -833,29 +917,33 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         trajectory = {'a': a_seq_perm, 'o': None}
         mode = self.training
         self.eval()
-        pred, _ = self.forward_static(trajectory=trajectory, start_state=start_state, level=target_lvl - 1,
+        pred, _ = self.forward_static(trajectory=trajectory, start_state=start_state, level=level,
                                       n_steps=-1, n_warmup=0, sample_state=True, sample_output=False, reconstruct=False)
         self.train(mode)
-
-        final_states = pred['s_embedding'][-1]
+        rollout_states = torch.stack(pred['s_embedding'])
+        final_states = last_valid_flt(rollout_states, mask=mask_seq_perm)
         # Reshape final states so that 1st dim iterates over the different sequences and 2nd dim over the permutations
         # per sequence.
         final_states_per_a_seq = final_states.reshape(-1, n_perm + n_rep, final_states.shape[-1])
-        # take n_rep repititions of non-permuted original act sequence and compute avg final state
+        # take n_rep repititions of non-permuted act sequence and compute avg final state
         avg_final_state_orig_seq = final_states_per_a_seq[:, :n_rep].mean(dim=1, keepdim=True)
         # use avg std between final states of non-permuted actions sequences as threshold to tell whether act sequences
         # result in different final states or not
-        limit = final_states_per_a_seq[:, :n_rep].std(dim=1).mean(dim=1, keepdim=True)
+        limit = final_states_per_a_seq[:, :n_rep].std(dim=1, keepdim=True)  # .mean(dim=1, keepdim=True)
         # calculate diff between final states of permuted action sequences and avg final state of non-permuted sequence
-        final_state_diff = torch.mean((final_states_per_a_seq[:, n_rep:] - avg_final_state_orig_seq) ** 2, dim=-1)
+        final_state_diff = (final_states_per_a_seq[:, n_rep:] - avg_final_state_orig_seq) ** 2
         # designate act sequences as permutation invariant if their final states differ less than limit from respective
         # non-permuted average final state
-        perm_invariant = final_state_diff < limit
+        # perm_invariant = torch.sum((final_state_diff < limit).to(torch.float32), dim=1)
+        perm_invariant = ~(torch.sum(final_state_diff > limit, dim=[1, 2]) > 0)
         # make perm_invariant broadcastable against a_seq
-        perm_invariant = perm_invariant.unsqueeze(-1).expand_as(a_seq)
+        perm_invariant = perm_invariant.unsqueeze(-1).unsqueeze(-1).expand_as(a_seq)
         # create a sorted version of the action sequences, use unique mapping that transforms each action to a scalar
-        a_seq_affine = (a_seq + 1.0) * 0.5  # transform vector elements from interval [-1, 1] to interval [0, 1]
-        check_tensor(a_seq_affine, 0.0, 1.0)
+        if self.r_max_agents[level][0].discrete_actions:
+            a_seq_affine = a_seq  # one-hot actions,
+        else:
+            a_seq_affine = (a_seq + 1.0) * 0.5  # transform vector elements from interval [-1, 1] to interval [0, 1]
+            check_tensor(a_seq_affine, 0.0, 1.0)
         # multiply each dimension of action vectors with a different power of 10 and add the results
         mult = torch.pow(10, torch.arange(a.shape[-1])).to(a.device)
         a_seq_mapped = torch.sum(a_seq_affine * mult, dim=-1)  # we now have a unique mapping for each action vector
@@ -863,7 +951,6 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         # use indices of sorting to sort the actual action sequences
         a_seq_indices = a_seq_indices.unsqueeze(-1).expand_as(a_seq)
         a_seq_sorted = torch.gather(a_seq, index=a_seq_indices, dim=1)
-
         # use canonically sorted action sequences where they are permutation invariant
         a_seq_reordered = torch.where(perm_invariant, a_seq_sorted, a_seq)
         # undo the steps done to a_seq above to get the original a tensor back, just with reordered action sequences
@@ -880,11 +967,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         a_reordered = a_reordered.reshape(a_reordered.shape[0] * a_reordered.shape[1], *a_reordered.shape[2:])
         # cut the padding
         a_reordered = a_reordered[:a.shape[0]]
-
-        losses = self.upwards_filters[target_lvl]['a'].eval_step(a_reordered, mask=mask)
-        losses = {f'{k}_act_autoencoder': v for k, v in losses.items()}
-        losses['monitoring_perc_perm_invariant'] = perm_invariant.to(torch.float32).mean()
-        return losses
+        return a_reordered, perm_invariant
 
     def rssm_loss(self,
                   pred: Dict[str, List[torch.Tensor]],
