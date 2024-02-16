@@ -268,7 +268,7 @@ def action_sequence_clustering_plot(i_step, logger, model, n_categories, train_d
     a_subsequences = a_subsequences.swapaxes(1, 2)
     # merge chunk index dimension and batch dimension, as we only care about the action subsequences and not
     # from which trajectory and what time steps they came from
-    a_subsequences = a_subsequences.reshape(-1, 8, a_subsequences.shape[-1])
+    a_subsequences = a_subsequences.reshape(-1, flt.window_size, a_subsequences.shape[-1])
     # merge intra-chunk time dimension with action dimension, as each action subsequence is considered one data
     # point as a whole
     a_subsequences = a_subsequences.reshape(a_subsequences.shape[0], -1)
