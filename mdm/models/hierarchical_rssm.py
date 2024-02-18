@@ -116,9 +116,9 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         self.goal_autoencoder = VAE(d_x=rssm_modules[0].d_s_embedding, d_z=50, latent_dist='normal',
                                     encoder_lws=[200, 200, 100], decoder_lws=[100, 200, 200], activation='relu',
                                     n_latent_categories=0, layer_norm=True, beta=0.01)
-        d_z = self.rssm_modules[0].d_z_smpl
-        d_goal_embedding = 50
-        self.goal_embedder = torch.nn.Sequential(lwa(lws=[d_z, 200, 200, 200, d_goal_embedding], activation='relu',
+        d_goal_in = self.rssm_modules[0].d_s_embedding + np.prod(self.rssm_modules[0].o_shape)
+        d_goal_embedding = 20
+        self.goal_embedder = torch.nn.Sequential(lwa(lws=[d_goal_in, 200, 200, 200, d_goal_embedding], activation='relu',
                                                      layer_norm=True, name='goal_embedding'))
 
     @property
@@ -271,8 +271,10 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 rnn_states_ = stack_if_list(rnn_states[:n_steps])
                 s_embedding_ = stack_if_list(s_embedding[:n_steps])
                 mask_ = stack_if_list(mask)
-                a_, _ = self.sort_perm_invariant_actions(a_, z_, rnn_states_, s_embedding_, mask_, ws, n_perm,
-                                                         n_rep, level - 1)
+                a_ = self.bin_actions(a_)
+                # a_, _ = self.sort_perm_invariant_actions(a_, z_, rnn_states_, s_embedding_, mask_, ws, n_perm,
+                #                                         n_rep, level - 1)
+                a_, _ = self.sort_actions(a_, z_, rnn_states_, s_embedding_, mask_, ws, n_perm, n_rep, level - 1)
             else:
                 a_ = stack_if_list(a[:n_steps])
 
@@ -571,8 +573,9 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             # markov_loss = self.markovianity_loss(targets[level], level=level, delta_max=5)#len(targets[level]['o']))
             # loss_level.update(markov_loss)
 
-            # markov_loss = self.markov_goal_embedding(targets[level], level=level, delta_max=5)
-            # loss_level.update(markov_loss)
+            if level == 0:
+                markov_loss = self.markov_goal_embedding(targets[level], level=level, delta_max=5)
+                loss_level.update(markov_loss)
 
             if level == 0:
                 s_embeddings = torch.stack(pred[level]['s_embedding']).detach()
@@ -674,6 +677,20 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         return {'total_markov_loss': total_markov_loss, 'similarity_markov_loss': sim_loss,
                 'contrastive_markov_loss': contr_loss}
 
+    def embed_goal(self,
+                   s_embedding: torch.Tensor,
+                   level: int,
+                   allow_grad_flow: bool):
+        model = self.rssm_modules[level]
+        o_rec = model.decode(s_embedding, sample=False, reconstruct_observation=True)['o']
+        o_rec_flat = torch.flatten(o_rec, start_dim=s_embedding.ndim - 1)  # in case we have multi-dim observations
+        # use the goal embedder to produce a goal embedding for the last time step's state
+        goal_embedder_in = torch.concat([s_embedding, o_rec_flat], dim=-1)
+        if not allow_grad_flow:
+            goal_embedder_in = goal_embedder_in.detach()
+        latent_goal = self.goal_embedder(goal_embedder_in)
+        return latent_goal
+
     def markov_goal_embedding(self,
                               targets: Dict[str, torch.Tensor],
                               level: int,
@@ -686,7 +703,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         model = self.rssm_modules[level]
 
         # Get time windows from training data. Iterate over all time steps and cut out multiple subtrajectories of
-        # varying length that end in that time step. Note that the windows heavily overlap, but that's ok.
+        # varying length that end in that time step. Note that the windows heavily overlap.
         subtrajectories = []
         for delta in range(delta_min, delta_max):
             subtraj_current_delta = []
@@ -702,31 +719,31 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         # is capped.
 
         # produce rollouts and store final destination state for comparison
+        predictions_final_step = []
         predictions = []
         for batch in subtrajectories:
-            o = model.o_encoder(batch['o'])
+            o_enc = model.o_encoder(batch['o'])
             a = batch['a']
-            states = model.scan(a=a, o_enc=o, start_state=None, posterior_steps=a.shape[0], sample_state=True)
-            # keep only last time step's s_repr
-            final_state = states[-1]
-            s_repr = final_state[-1]
+            states = model.scan(a=a, o_enc=o_enc, start_state=None, posterior_steps=a.shape[0], sample_state=True)
+            states = list_of_tuples_to_tuple_of_lists(states)
+            s_embed = torch.stack(states[-1])
             # make sure we don't modify weights of the RSSM but only the goal embedder
-            s_repr = s_repr.detach()
-            # use the goal embedder to produce a goal embedding for the last time step's state
-            s_embedding = self.goal_embedder(s_repr)
-            predictions.append(s_embedding)
+            latent_goal = self.embed_goal(s_embed, level, allow_grad_flow=False)
+            # store only last step for similarity term of contrastive loss
+            predictions_final_step.append(latent_goal[-1])
+            predictions.append(latent_goal)
         # for batches with smaller delta, more time steps were added to the batch as we could take them from closer to
         # the trajectory start. Get rid of those for now for simplicity.
-        # cutoff = len(predictions[-1])  # choose batch with largest time window
-        # predictions = [pred[:cutoff] for pred in predictions]
+        # cutoff = len(predictions_final_step[-1])  # choose batch with largest time window
+        # predictions_final_step = [pred[:cutoff] for pred in predictions_final_step]
 
-        # Each element in predictions is the final s_embedding of a subtrajectory rollout of some length. The rollout
+        # Each element in predictions_final_step is final latent_goal of a subtrajectory rollout of some length. Rollout
         # spans all possible time steps of the original trajectories in targets, starting with the last one to the
-        # earliest time step possible. Thue, by construction the batch index and end state stays the same over all the
-        # various rollouts in predictions except that shorter rollouts can be performed for earlier time
+        # earliest time step possible. Thus, by construction the batch index and end state stays the same over all the
+        # various rollouts in predictions_final_step except that shorter rollouts can be performed for earlier time
         # steps of the trajectories. We can compute the similarity loss in a straightforward manner. Use expensive n^2
         # comparison for now.
-        sim_loss = list(combinations(predictions, 2))  # for some reason, we need to explicitly make a list here
+        sim_loss = list(combinations(predictions_final_step, 2))  # for some reason, need to explicitly make list
         # In case we compare two rollouts where one subtrajectory was shorter, it covers more states from the
         # beginning of the input trajectories. Here, truncate the states we have no comparison partner for.
         sim_loss = [(a[:min(len(a), len(b))], b[:min(len(a), len(b))]) for a, b in sim_loss]
@@ -737,10 +754,12 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         # contrastive term that encourages the model to increase the difference of adjacent states, irrespective
         # of the amount of time steps that came before them
         contr_loss = [torch.mean((pred[:-1] - pred[1:]) ** 2) for pred in predictions]
-        contr_loss = -torch.stack(contr_loss).mean()
+        contr_loss = -0.05 * torch.stack(contr_loss).mean()
 
         # clamp contrastive loss term at [-1.0, inf] to prevent it from destabilizing learning
         total_markov_loss = sim_loss + torch.maximum(contr_loss, torch.tensor(-1.0).to(contr_loss))
+        #total_markov_loss = sim_loss + 0.2 * torch.nn.functional.tanh(contr_loss)
+        #total_markov_loss = sim_loss + contr_loss
 
         return {'total_markov_loss': total_markov_loss, 'similarity_markov_loss': sim_loss,
                 'contrastive_markov_loss': contr_loss}
@@ -781,15 +800,22 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         n_perm = 9
         n_rep = 3
         ws = self.upwards_filters[target_lvl]['a'].window_size
-        a_reordered, perm_invariant = self.sort_perm_invariant_actions(a, z, rnn_state, s_embedding, mask, ws, n_perm,
-                                                                      n_rep, target_lvl - 1)
-        #a_reordered, perm_invariant = self.sort_actions(a, z, rnn_state, s_embedding, mask, ws, n_perm,
-        #                                                n_rep, target_lvl - 1)
+        # a_reordered, perm_invariant = self.sort_perm_invariant_actions(a, z, rnn_state, s_embedding, mask, ws, n_perm,
+        #                                                              n_rep, target_lvl - 1)
+        a = self.bin_actions(a)
+        a_reordered, perm_invariant = self.sort_actions(a, z, rnn_state, s_embedding, mask, ws, n_perm,
+                                                        n_rep, target_lvl - 1)
 
         losses = self.upwards_filters[target_lvl]['a'].eval_step(a_reordered, mask=mask)
         losses = {f'{k}_act_autoencoder': v for k, v in losses.items()}
         losses['monitoring_perc_perm_invariant'] = perm_invariant.to(torch.float32).mean()
         return losses
+
+    def bin_actions(self,
+                    a: torch.Tensor):
+        bin_value = 0.05
+        a_binned = torch.round(a / bin_value) * bin_value
+        return a_binned
 
     def sort_actions(self, a, z, rnn_state, s_embedding, mask, window_size, n_perm, n_rep, level):
         ws = window_size
@@ -815,10 +841,14 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         else:
             a_seq_affine = (a_seq + 1.0) * 0.5  # transform vector elements from interval [-1, 1] to interval [0, 1]
             check_tensor(a_seq_affine, 0.0, 1.0)
+        # zero out masked actions that became non-zero due to affine transform
+        a_seq_affine = a_seq_affine * (1 - mask_seq.to(torch.float32))
         # multiply each dimension of action vectors with a different power of 10 and add the results
         mult = torch.pow(10, torch.arange(a.shape[-1])).to(a.device)
+        # multipliy a_seq_affine with mult and mask to make sure masked actions are zero'ed out
         a_seq_mapped = torch.sum(a_seq_affine * mult, dim=-1)  # we now have a unique mapping for each action vector
-        a_seq_indices = torch.sort(a_seq_mapped, dim=1).indices
+        # sort in descending order to leave masked time steps at the end of a sequence (mask * mult == 0 everywhere)
+        a_seq_indices = torch.sort(a_seq_mapped, dim=1, descending=True).indices
         # use indices of sorting to sort the actual action sequences
         a_seq_indices = a_seq_indices.unsqueeze(-1).expand_as(a_seq)
         a_seq_sorted = torch.gather(a_seq, index=a_seq_indices, dim=1)
@@ -944,10 +974,13 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         else:
             a_seq_affine = (a_seq + 1.0) * 0.5  # transform vector elements from interval [-1, 1] to interval [0, 1]
             check_tensor(a_seq_affine, 0.0, 1.0)
+        # zero out masked actions that became non-zero due to affine transform
+        a_seq_affine = a_seq_affine * (1 - mask_seq.to(torch.float32))
         # multiply each dimension of action vectors with a different power of 10 and add the results
         mult = torch.pow(10, torch.arange(a.shape[-1])).to(a.device)
-        a_seq_mapped = torch.sum(a_seq_affine * mult, dim=-1)  # we now have a unique mapping for each action vector
-        a_seq_indices = torch.sort(a_seq_mapped, dim=1).indices
+        a_seq_mapped = torch.sum(a_seq_affine * mult, dim=-1)  # we now have unique mapping for each act vec
+        # sort in descending order to leave masked time steps at the end of a sequence (mask * mult == 0 everywhere)
+        a_seq_indices = torch.sort(a_seq_mapped, dim=1, descending=True).indices
         # use indices of sorting to sort the actual action sequences
         a_seq_indices = a_seq_indices.unsqueeze(-1).expand_as(a_seq)
         a_seq_sorted = torch.gather(a_seq, index=a_seq_indices, dim=1)

@@ -200,7 +200,7 @@ class ActorCriticAgent(torch.nn.Module):
         agent_a_t0_to_T = [self.filler_a(d_batch, device)]
         agent_a_dist_t0_to_T = [self.filler_a_dist_params(d_batch, device)]
         # do rollout
-        with FreezeParameters([world, other_world]):
+        with FreezeParameters([world, other_world, sim_env.goal_embedder]):
             for t in range(n_steps):
                 a_dist, a = self(agent_o_t0_to_T[-1].detach(), sample=sample_actions, expl_noise=expl_noise)
                 current_env_state = world(a=a, last_state=s_mem_t0_to_T[-1], use_posterior=False,
@@ -244,19 +244,28 @@ class ActorCriticAgent(torch.nn.Module):
                 # s_embed_stacked = torch.zeros_like(s_embed_stacked)
                 # s_embed_stacked[:, :, :obs_enc.shape[-1]] = obs_enc
 
+                # TODO: mix of state and obs reward?
+                goal = goal.detach()
+                goal_tiled = goal.unsqueeze(0).expand(n_steps + 1, -1, -1)
+                goal_tiled_embed = sim_env.embed_goal(goal_tiled, 0, allow_grad_flow=False)
+                s_embed_t0_to_T_embed = sim_env.embed_goal(s_embed_t0_to_T, 0, allow_grad_flow=True)
+                agent_r_t0_to_T = self.goal_similarity(s_embed_t0_to_T_embed, goal_tiled_embed)
+
+                # use latent state similarity for goal reward
                 #goal = goal.detach()  # goals come from upper level management and should not be changed by workers
                 # repeat the same goal for each time step
                 #goal_tiled = goal.unsqueeze(0).expand(n_steps + 1, -1, -1)
                 #agent_r_t0_to_T = self.goal_similarity(s_embed_t0_to_T, goal_tiled)
-                #agent_term_t0_to_T = self.goal_terminal(agent_r_t0_to_T)
-                goal = world.decode(goal.detach(), sample=False, reconstruct_observation=True)['o']
-                goal = torch.flatten(goal, start_dim=1)  # in case of observations that have more than 1 data dimension
-                goal_tiled = goal.unsqueeze(0).expand(n_steps + 1, -1, -1).clone()  # clone to be safe
-                state_obs = torch.stack(env_memory['o'])
-                state_obs = torch.flatten(state_obs, start_dim=2)
-                agent_r_t0_to_T = self.goal_similarity(state_obs, goal_tiled)
-                agent_term_t0_to_T = self.goal_terminal(agent_r_t0_to_T)
 
+                # use observation similarity for goal reward
+                #goal = world.decode(goal.detach(), sample=False, reconstruct_observation=True)['o']
+                #goal = torch.flatten(goal, start_dim=1)  # in case of observations that have more than 1 data dimension
+                #goal_tiled = goal.unsqueeze(0).expand(n_steps + 1, -1, -1).clone()  # clone to be safe
+                #state_obs = torch.stack(env_memory['o'])
+                #state_obs = torch.flatten(state_obs, start_dim=2)
+                #agent_r_t0_to_T = self.goal_similarity(state_obs, goal_tiled)
+
+                agent_term_t0_to_T = self.goal_terminal(agent_r_t0_to_T)
                 agent_r_t0_to_T = dim_to_list(agent_r_t0_to_T, 0)
                 agent_term_t0_to_T = dim_to_list(agent_term_t0_to_T, 0)
                 pred['r'] = None

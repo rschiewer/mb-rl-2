@@ -168,7 +168,7 @@ class HierarchicalLatentAgentPolicy(Policy):
 
     @staticmethod
     def _empty_cache():
-        return {'o': [], 'a': [], 'r': [], 'terminal': [], 'time_step': []}
+        return {'o': [], 'a': [], 'r': [], 'terminal': [], 'z': [], 'rnn_state': [], 's_embedding': [], 'time_step': []}
 
     def reset(self):
         self.grounded_env_states = [None for _ in self.model.rssm_modules]
@@ -199,6 +199,7 @@ class HierarchicalLatentAgentPolicy(Policy):
         env_data = {'o': o, 'a': a, 'r': r, 'terminal': terminal, 'truncated': truncated, 'mask': torch.empty_like(r)}
         env_data = prepare_data(env_data, remove_keys=['truncated', 'mask'], n_categories=self.one_hot_keys)
         env_data = {k: list(v.unbind(0)) for k, v in env_data.items()}
+        env_data.update({'z': [], 'rnn_state': [], 's_embedding': []})
         return env_data
 
     @torch.no_grad()
@@ -217,6 +218,9 @@ class HierarchicalLatentAgentPolicy(Policy):
             n_steps = self.model.strides[i_lvl]
             data_filtered = self.model.filter_up(o=self.env_data_below_cache[i_lvl]['o'],
                                                  a=self.env_data_below_cache[i_lvl]['a'],
+                                                 rnn_states=self.env_data_below_cache[i_lvl]['rnn_state'],
+                                                 z=self.env_data_below_cache[i_lvl]['z'],
+                                                 s_embedding=self.env_data_below_cache[i_lvl]['s_embedding'],
                                                  level=i_lvl, n_steps=n_steps,
                                                  respect_mask=respect_mask,
                                                  sample_action_autoencoder=False)
@@ -262,6 +266,9 @@ class HierarchicalLatentAgentPolicy(Policy):
                 self.env_data_below_cache[i_lvl + 1]['a'].append(mem['a'])
                 self.env_data_below_cache[i_lvl + 1]['r'].append(mem['r'])
                 self.env_data_below_cache[i_lvl + 1]['terminal'].append(mem['terminal'])
+                self.env_data_below_cache[i_lvl + 1]['z'].append(mem['z'])
+                self.env_data_below_cache[i_lvl + 1]['rnn_state'].append(mem['rnn_state'])
+                self.env_data_below_cache[i_lvl + 1]['s_embedding'].append(mem['s_embedding'])
                 # self.env_data_below_cache[i_lvl + 1]['time_step'].append(timestep)
 
             # remove data used for this update step
@@ -269,6 +276,9 @@ class HierarchicalLatentAgentPolicy(Policy):
             self.env_data_below_cache[i_lvl]['a'] = self.env_data_below_cache[i_lvl]['a'][n_steps:]
             self.env_data_below_cache[i_lvl]['r'] = self.env_data_below_cache[i_lvl]['r'][n_steps:]
             self.env_data_below_cache[i_lvl]['terminal'] = self.env_data_below_cache[i_lvl]['terminal'][n_steps:]
+            self.env_data_below_cache[i_lvl]['z'] = self.env_data_below_cache[i_lvl]['z'][n_steps:]
+            self.env_data_below_cache[i_lvl]['rnn_state'] = self.env_data_below_cache[i_lvl]['rnn_state'][n_steps:]
+            self.env_data_below_cache[i_lvl]['s_embedding'] = self.env_data_below_cache[i_lvl]['s_embedding'][n_steps:]
 
             # reset counter
             self.next_state_update[i_lvl] = self.model.strides[i_lvl]

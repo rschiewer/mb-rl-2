@@ -31,7 +31,7 @@ def main():
     parser.add_argument('-seed', type=int, default=None)
     args = parser.parse_args()
 
-    cfg = load_yaml(here() / 'cfg_hierarchical_nav2d.yaml')
+    cfg = load_yaml(here() / 'cfg_hierarchical_pointmaze.yaml')
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
     if args.d_batch:

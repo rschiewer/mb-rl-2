@@ -443,7 +443,6 @@ class RSSMCell(torch.nn.Module):
         else:
             o_dist, o_smpl = self.zero_o_dist(d_batch, s.device), self.zero_o(d_batch, s.device)
         r_dist, r_smpl = self.r_decoder(s, sample)
-        # r_smpl = torch.nn.functional.tanh(r_smpl)
         term_dist, term_smpl = self.term_decoder(s, sample)
 
         return {'o': o_smpl, 'o_dist': o_dist, 'r': r_smpl, 'r_dist': r_dist, 'terminal': term_smpl,
