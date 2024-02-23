@@ -120,6 +120,15 @@ def cfg_infer_missing_values(cfg: dict,
         module_args['term_decoder']['d_x_encoded'] = d_state
         module_args['name'] = f'rssm_level_{i_module}'
 
+    # check upwards filters for things to calculate
+    for i_lvl, filters_level in enumerate(cfg['mdm']['upwards_filters']):
+        d_a_below = cfg['mdm']['rssm_modules'][i_lvl]['d_a']
+        d_a_above = cfg['mdm']['rssm_modules'][i_lvl + 1]['d_a']  # fails if no. upwards filters == no. lvls
+        for flt, flt_args in filters_level.items():
+            if flt_args['class'] in ('AutoencodingUpwardsFilter','RandomProjectionUpwardsFilter', 'EMAClustering'):
+                flt_args['s_x_orig'] = (flt_args['window_size'], d_a_below)
+                flt_args['d_x_filtered'] = d_a_above
+
     # just for logging
     cfg['hierarchy_levels'] = len(cfg['mdm']['rssm_modules'])
 
