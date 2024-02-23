@@ -953,7 +953,7 @@ class AutoencodingUpwardsFilter(UpwardsFilter):
 
     def __init__(self,
                  s_x_orig: Tuple[int],
-                 d_x_enc: int,
+                 d_x_filtered: int,
                  window_size: int,
                  encoder_lws: List[int],
                  encoder_type: str,
@@ -963,35 +963,37 @@ class AutoencodingUpwardsFilter(UpwardsFilter):
                  layer_norm: bool,
                  epsilon: float,
                  beta: float,
+                 input_noise: float,
                  reg_sigma: float = 1.0):
         super(AutoencodingUpwardsFilter, self).__init__(window_size)
 
         if encoder_type == 'squashed_normal':
-            self.encoder = SquashedGaussianEncoder(s_x_orig=s_x_orig, d_x_encoded=d_x_enc, lws=encoder_lws,
+            self.encoder = SquashedGaussianEncoder(s_x_orig=s_x_orig, d_x_encoded=d_x_filtered, lws=encoder_lws,
                                                    activation=activation, layer_norm=layer_norm, epsilon=epsilon)
         elif encoder_type == 'normal':
-            self.encoder = GaussianEncoder(s_x_orig=s_x_orig, d_x_encoded=d_x_enc, lws=encoder_lws,
+            self.encoder = GaussianEncoder(s_x_orig=s_x_orig, d_x_encoded=d_x_filtered, lws=encoder_lws,
                                            activation=activation, layer_norm=layer_norm, epsilon=epsilon)
         elif encoder_type == 'mlp':
-            self.encoder = MLPEncoder(s_x_orig=s_x_orig, d_x_encoded=d_x_enc, lws=encoder_lws,
+            self.encoder = MLPEncoder(s_x_orig=s_x_orig, d_x_encoded=d_x_filtered, lws=encoder_lws,
                                       activation=activation, layer_norm=layer_norm)
         else:
             raise ValueError(f'Unknown encoder type: {encoder_type}')
 
         if decoder_type == 'squashed_normal':
-            self.decoder = SquashedGaussianDecoder(s_x_orig=s_x_orig, d_x_encoded=d_x_enc, lws=decoder_lws,
+            self.decoder = SquashedGaussianDecoder(s_x_orig=s_x_orig, d_x_encoded=d_x_filtered, lws=decoder_lws,
                                                    activation=activation, layer_norm=layer_norm, epsilon=epsilon)
         elif decoder_type == 'normal':
-            self.decoder = GaussianDecoder(s_x_orig=s_x_orig, d_x_encoded=d_x_enc, lws=decoder_lws,
+            self.decoder = GaussianDecoder(s_x_orig=s_x_orig, d_x_encoded=d_x_filtered, lws=decoder_lws,
                                            activation=activation, layer_norm=layer_norm, epsilon=epsilon)
         elif decoder_type == 'mlp':
-            self.decoder = MLPDecoder(s_x_orig=s_x_orig, d_x_encoded=d_x_enc, lws=decoder_lws,
+            self.decoder = MLPDecoder(s_x_orig=s_x_orig, d_x_encoded=d_x_filtered, lws=decoder_lws,
                                       activation=activation, layer_norm=layer_norm)
         else:
             raise ValueError(f'Unknown decoder type: {decoder_type}')
 
         self.mask_filter = MinUpwardsFilter(window_size=window_size)
         self.beta = beta
+        self.input_noise = input_noise
         self.reg_sigma = reg_sigma
 
     def decode_det(self,
@@ -1041,6 +1043,7 @@ class AutoencodingUpwardsFilter(UpwardsFilter):
 
         if x_target is None:
             x_target = x
+        x_target = x_target + torch.rand_like(x_target) * self.input_noise
 
         x_perm = self._preproc_enc(x, mask)
         # encoder expects 2D x of shape (T_chunk, D) i.e. T_chunk became new data dimension
@@ -1265,7 +1268,7 @@ class EMAClustering(UpwardsFilter):
     def __init__(self,
                  window_size: int,
                  s_x_orig: int | Tuple[int],
-                 n_centroids: int,
+                 d_x_filtered: int,
                  alpha: float,
                  dead_zone_mode: str = 'off',
                  dead_zone_size: float = 0.0):
@@ -1274,19 +1277,19 @@ class EMAClustering(UpwardsFilter):
         assert dead_zone_mode in ('off', 'relative', 'absolute'), f'Unknown dead zone mode: {dead_zone_mode}'
 
         if dead_zone_mode != 'off':
-            n_centroids = n_centroids - 1  # save one action for all inputs that land in the dead zone
+            d_x_filtered = d_x_filtered - 1  # save one action for all inputs that land in the dead zone
 
         d_x = np.prod(s_x_orig) * window_size
-        self.n_centroids = n_centroids
+        self.n_centroids = d_x_filtered
         self.s_x_orig = s_x_orig
         self.d_x = d_x
         self.alpha = alpha
         self.dead_zone_mode = dead_zone_mode
         self.dead_zone_size = dead_zone_size
 
-        self.centroids = torch.nn.Parameter(torch.empty((n_centroids, d_x), dtype=None, device=None),
+        self.centroids = torch.nn.Parameter(torch.empty((d_x_filtered, d_x), dtype=None, device=None),
                                             requires_grad=False)
-        self.cluster_size_stats = RunningMeanStd(shape=n_centroids)
+        self.cluster_size_stats = RunningMeanStd(shape=d_x_filtered)
 
         torch.nn.init.kaiming_uniform_(self.centroids, a=math.sqrt(5))
 
