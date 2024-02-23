@@ -99,6 +99,20 @@ mdm:
             class: "PickOneUpwardsFilter"
             window_size: 8
             offset: -1
+         a:
+            class: "AutoencodingUpwardsFilter"
+            s_x_orig: <infer>
+            d_x_filtered: <infer>
+            window_size: 8
+            encoder_lws: [100, 100, 100]
+            decoder_lws: [100, 100, 100]
+            encoder_type: "squashed_normal"
+            decoder_type: "squashed_normal"
+            activation: "relu"
+            layer_norm: True,
+            epsilon: 0.01
+            beta: 0.0001
+            input_noise: 0.01
          r:
             class: "AvgUpwardsFilter"  # sum makes resulting reward invariant w.r.t. chunk size for incomplete chunks
             window_size: 8

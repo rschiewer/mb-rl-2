@@ -52,9 +52,9 @@ mdm:
             layer_norm: True
             activation: "relu"
       # RSSM no. 2
-      -  d_z: 20
+      -  d_z: 30
          d_h: 300
-         d_a: 3
+         d_a: 10
          d_s_embedding: null
          s_embedding_lws: [ 200, 200 ]
          n_hidden_layers: 1
@@ -97,6 +97,20 @@ mdm:
             class: "PickOneUpwardsFilter"
             window_size: 8
             offset: -1
+         a:
+            class: "AutoencodingUpwardsFilter"
+            s_x_orig: <infer>
+            d_x_filtered: <infer>
+            window_size: 8
+            encoder_lws: [100, 100, 100]
+            decoder_lws: [100, 100, 100]
+            encoder_type: "squashed_normal"
+            decoder_type: "squashed_normal"
+            activation: "relu"
+            layer_norm: True,
+            epsilon: 0.01
+            beta: 0.01
+            input_noise: 0.01
          r:
             class: "AvgUpwardsFilter"  # sum makes resulting reward invariant w.r.t. chunk size for incomplete chunks
             window_size: 8
@@ -113,8 +127,9 @@ mdm:
    ema_coeff: 0.95
    ema_update_interval: 10
    latent_overshooting: [] #[14, 9]
-   pessimism_coeff: 0.000000
+   pessimism_coeff: 0.000
    reachability_penalty: False
+   action_bin_size: null
    temporal_activation_regularization: 0.0
    kl_balance: 0.8
 
@@ -151,7 +166,7 @@ agents:
          eps_exploration_min: 0.05
          discrete_actions: <infer>
          min_scale: 0.1
-         act_entropy_exploration_coeff: 0.0001
+         act_entropy_exploration_coeff: 0.0003
          learn_act_entropy_exploration_coeff: False
          target_act_entropy: "auto"
          novelty_exploration_coeff: 0.05
@@ -176,7 +191,7 @@ agents:
          eps_exploration_min: 0.05
          discrete_actions: False
          min_scale: 0.1
-         act_entropy_exploration_coeff: 0.0001
+         act_entropy_exploration_coeff: 0.005
          learn_act_entropy_exploration_coeff: False
          target_act_entropy: "auto"
          novelty_exploration_coeff: 0.05
@@ -202,7 +217,7 @@ agents:
          eps_exploration_min: 0.05
          discrete_actions: <infer>
          min_scale: 0.1
-         act_entropy_exploration_coeff: 0.0001
+         act_entropy_exploration_coeff: 0.0003
          learn_act_entropy_exploration_coeff: False
          target_act_entropy: "auto"
          novelty_exploration_coeff: 0.01
@@ -217,7 +232,7 @@ agents:
          critic_act_fn: "relu"
          actor_layer_norm: True
          critic_layer_norm: True
-         dynamics_loss: False
+         dynamics_loss: True
          use_slow_value_target: True
          use_slow_world_model: False
 eval:
