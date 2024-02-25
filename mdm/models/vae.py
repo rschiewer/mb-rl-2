@@ -19,6 +19,7 @@ class VAE(torch.nn.Module):
                  n_latent_categories: int = 0,
                  n_output_categories: int = 0,
                  epsilon: float = 0.1,
+                 input_noise: float = 0.0,
                  output_dist: str = None):
         super().__init__()
 
@@ -55,6 +56,7 @@ class VAE(torch.nn.Module):
         self.beta = beta
         self.n_latent_categories = n_latent_categories
         self.epsilon = epsilon
+        self.input_noise = input_noise
         self.output_dist = output_dist
 
     def z_dist(self,
@@ -185,7 +187,10 @@ class VAE(torch.nn.Module):
                   x: torch.Tensor,
                   mask: torch.Tensor = None):
         x = x.detach()
-        z_dist_params, z_smpl, x_rec_dist_params, x_rec_smpl = self(x, sample=True)
+
+        # add input noise if configured
+        x_in = x + self.input_noise * torch.rand_like(x)
+        z_dist_params, z_smpl, x_rec_dist_params, x_rec_smpl = self(x_in, sample=True)
 
         if self.output_dist is None:
             rec_loss = (x - x_rec_smpl) ** 2
