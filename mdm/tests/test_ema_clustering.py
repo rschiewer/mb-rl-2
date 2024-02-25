@@ -35,7 +35,7 @@ class TestEMAClustering(unittest.TestCase):
         init_centroids = torch.tensor([[1.1, 1.1],
                                        [0.9, 0.1],
                                        [-1.1, -1.1]], dtype=torch.float32)
-        clustering = EMAClustering(window_size=2, s_x_orig=1, n_centroids=3,
+        clustering = EMAClustering(window_size=2, s_x_orig=1, d_x_filtered=3,
                                    alpha=0.1, dead_zone_mode='off')
         clustering.centroids.copy_(init_centroids)
 
@@ -78,7 +78,7 @@ class TestEMAClustering(unittest.TestCase):
         # plt.show()
 
         # train clustering algorithm
-        clustering = EMAClustering(window_size=window_size, s_x_orig=s_x_orig, n_centroids=n_centroids,
+        clustering = EMAClustering(window_size=window_size, s_x_orig=s_x_orig, d_x_filtered=n_centroids,
                                    alpha=0.05, dead_zone_mode='off')
         n_rows = 4
         n_cols = 4
@@ -138,7 +138,7 @@ class TestEMAClustering(unittest.TestCase):
         # plt.show()
 
         # train clustering algorithm
-        clustering = EMAClustering(window_size=window_size, s_x_orig=s_x_orig, n_centroids=n_centroids,
+        clustering = EMAClustering(window_size=window_size, s_x_orig=s_x_orig, d_x_filtered=n_centroids,
                                    alpha=0.05, dead_zone_mode='relative', dead_zone_size=1.0)
         n_rows = 4
         n_cols = 4
