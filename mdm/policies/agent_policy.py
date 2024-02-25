@@ -232,12 +232,12 @@ class HierarchicalLatentAgentPolicy(Policy):
             # self.env_data_below_cache[i_lvl]['terminal'] = self.env_data_below_cache[i_lvl]['terminal'][n_steps:]
 
             # take real actions from this level instead of the ones from action autoencoder if they are available
-            # if len(self.act_cache[i_lvl]) > 0:
-            #    data_filtered['a'] = self.act_cache[i_lvl].pop(0).unsqueeze(0)  # take oldest action from cache
+            if len(self.act_cache[i_lvl]) > 0:
+                data_filtered['a'] = self.act_cache[i_lvl].pop(0).unsqueeze(0)  # take oldest action from cache
             # else:
             #    self.action_history[i_lvl].append(data_filtered['a'][0])  # add filtered up action + remove time dim
-            if len(self.act_cache[i_lvl]) > 0:
-                self.act_cache[i_lvl].pop(0)  # remove oldest action from action cache
+            #if len(self.act_cache[i_lvl]) > 0:
+            #    self.act_cache[i_lvl].pop(0)  # remove oldest action from action cache
 
             # memorize the latest inputs the model has seen as they are needed for the agent during planning
             state = self.grounded_env_states[i_lvl]
