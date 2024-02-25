@@ -200,7 +200,7 @@ class ActorCriticAgent(torch.nn.Module):
         agent_a_t0_to_T = [self.filler_a(d_batch, device)]
         agent_a_dist_t0_to_T = [self.filler_a_dist_params(d_batch, device)]
         # do rollout
-        with FreezeParameters([world, other_world, sim_env.goal_embedder]):
+        with FreezeParameters([world, other_world, sim_env.goal_autoencoder]):
             for t in range(n_steps):
                 a_dist, a = self(agent_o_t0_to_T[-1].detach(), sample=sample_actions, expl_noise=expl_noise)
                 current_env_state = world(a=a, last_state=s_mem_t0_to_T[-1], use_posterior=False,
@@ -244,7 +244,7 @@ class ActorCriticAgent(torch.nn.Module):
                 # s_embed_stacked = torch.zeros_like(s_embed_stacked)
                 # s_embed_stacked[:, :, :obs_enc.shape[-1]] = obs_enc
 
-                # TODO: mix of state and obs reward?
+                # mix of state and obs reward
                 goal = goal.detach()
                 goal_tiled = goal.unsqueeze(0).expand(n_steps + 1, -1, -1)
                 goal_tiled_embed = sim_env.embed_goal(goal_tiled, 0, allow_grad_flow=False)
@@ -298,10 +298,14 @@ class ActorCriticAgent(torch.nn.Module):
             disagreement = disagreement.mean(dim=-1, keepdim=True)
             disagreement = dim_to_list(disagreement, 0)
 
-            # if self.level > 0:
-            #    _, _, _, s_embed_rec = obs_autoenc(s_embed_stacked, sample=False)
-            #    novelty_loss = torch.mean((s_embed_stacked - s_embed_rec) ** 2, dim=-1, keepdim=True)
-            #    agent_r_t0_to_T = [r_t + reconstr_loss_t for r_t, reconstr_loss_t in zip(agent_r_t0_to_T, novelty_loss)]
+            if self.level > 0:
+                goals = torch.stack(pred['o'])
+                o_rec = sim_env.rssm_modules[0].decode(goals, sample=False, reconstruct_observation=True)['o']
+                o_rec_flat = torch.flatten(o_rec, start_dim=goals.ndim - 1)
+                goal_autoenc_in = torch.concat([goals, o_rec_flat], dim=-1)
+                _, _, _, goals_rec = sim_env.goal_autoencoder(goal_autoenc_in, sample=False)
+                recon_err = torch.mean((goal_autoenc_in - goals_rec) ** 2, dim=-1, keepdim=True)
+                agent_r_t0_to_T = [r_t + 0.1 * recon_err_t for r_t, recon_err_t in zip(agent_r_t0_to_T, recon_err)]
 
             ema_a_dist_mock = [torch.zeros_like(x) for x in agent_a_dist_t0_to_T]
             extend_memory(agent_memory, {'o': agent_o_t0_to_T, 'a': agent_a_t0_to_T, 'r': agent_r_t0_to_T,
@@ -562,7 +566,20 @@ class ActorCriticAgent(torch.nn.Module):
             baseline = v_actor[:-2]  # this was v_actor[:-2] before, but didn't work at all
             advantage_actor = lambda_returns_actor[1:] - baseline  # .detach()
             policy_loss = - masked_mean(a_log_prob[1:-1] * advantage_actor.detach(), mask_t1_to_Hm1)
-        # policy_loss = torch.sum(policy_loss)
+
+        """
+        # DYN loss
+        if not self.discrete_actions:
+            policy_loss_dyn = - masked_mean(lambda_returns_actor[1:], mask_t1_to_Hm1)
+        else:
+            policy_loss_dyn = 0.0
+        # PG loss
+        baseline = v_actor[:-2]
+        advantage_actor = lambda_returns_actor[1:] - baseline
+        policy_loss_pg = - masked_mean(a_log_prob[1:-1] * advantage_actor.detach(), mask_t1_to_Hm1)
+        # combine DYN and PG losses
+        policy_loss = 0.5 * policy_loss_dyn + 0.5 * policy_loss_pg
+        """
 
         # ACTION ENTROPY LOSS
         # act_entropy = self._a_dist_entropy(a_dist[1:-1])
@@ -849,6 +866,8 @@ class ActorCriticAgent(torch.nn.Module):
                          goal: Optional[torch.Tensor] = None):
         o = self.o_from_state(step)
         if self.goal_seeking:
+            # build relative goal
+            goal = goal - o
             return torch.concat([o, goal], dim=-1)
         else:
             return o
