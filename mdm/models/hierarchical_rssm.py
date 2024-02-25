@@ -39,8 +39,12 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                  temporal_activation_regularization: int = 0,
                  pessimism_coeff: float = 0.0,
                  reachability_penalty: bool = False,
+                 action_bin_size: float = None,
                  kl_balance: int | bool = False):
         super(HierarchicalRSSM, self).__init__()
+
+        if action_bin_size is not None:
+            assert action_bin_size > 0.0
 
         assert len(links) == len(rssm_modules) - 1
         assert len(upwards_filters) == len(rssm_modules) - 1
@@ -53,6 +57,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         for i_level, level in enumerate(upwards_filters):
             assert level.keys() <= set(self._filter_names), (f'Allowed filter names: {self._filter_names}, found'
                                                              f'filter names: {level.keys()}')
+            """
             d_a_below = rssm_modules[i_level].d_a
             d_a_above = rssm_modules[i_level + 1].d_a
             d_s_embedding = rssm_modules[i_level].d_s_embedding
@@ -62,7 +67,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                                                    window_size=window_size, encoder_lws=[200, 100, 100],
                                                    encoder_type='squashed_normal', decoder_lws=[100, 100, 200],
                                                    decoder_type='squashed_normal', activation='relu', layer_norm=True,
-                                                   epsilon=0.1, beta=0.1)
+                                                   epsilon=0.01, beta=0.01, input_noise=0.01)
             # level['a'] = EMAClustering(window_size=window_size, s_x_orig=d_a_below, n_centroids=d_a_above, alpha=0.01,
             #                           dead_zone_mode='off', dead_zone_size=1.0)
             # level['a'] = RandomProjectionUpwardsFilter(window_size=window_size, s_x_orig=(window_size, d_a_below),
@@ -70,6 +75,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             # window_size = level['o'].window_size
             # mask_and_action_filters = {'mask': MinUpwardsFilter(window_size), 'a': ConstUpwardsFilter(window_size, 0)}
             # level.update(mask_and_action_filters)
+            """
         upwards_filters = [ModuleDict(lvl_0_filters)] + [ModuleDict(x) for x in upwards_filters]
 
         # generate EMA shadow copies of the RSSMs
@@ -108,18 +114,20 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         self.kl_balance = kl_balance
         self.pessimism_coeff = pessimism_coeff
         self.reachability_penalty = reachability_penalty
+        self.action_bin_size = action_bin_size
         self.dbg_timestep = 0
         self.avg_chunk_dist_early = ModuleList([RunningMeanStd(shape=(mod.d_z,)) for mod in self.rssm_modules[:-1]])
         self.avg_chunk_dist_mid = ModuleList([RunningMeanStd(shape=(mod.d_z,)) for mod in self.rssm_modules[:-1]])
         self.avg_chunk_dist_late = ModuleList([RunningMeanStd(shape=(mod.d_z,)) for mod in self.rssm_modules[:-1]])
 
-        self.goal_autoencoder = VAE(d_x=rssm_modules[0].d_s_embedding, d_z=50, latent_dist='normal',
-                                    encoder_lws=[200, 200, 100], decoder_lws=[100, 200, 200], activation='relu',
-                                    n_latent_categories=0, layer_norm=True, beta=0.01)
         d_goal_in = self.rssm_modules[0].d_s_embedding + np.prod(self.rssm_modules[0].o_shape)
-        d_goal_embedding = 20
-        self.goal_embedder = torch.nn.Sequential(lwa(lws=[d_goal_in, 200, 200, 200, d_goal_embedding], activation='relu',
-                                                     layer_norm=True, name='goal_embedding'))
+        d_goal_embedding = 30
+        self.goal_autoencoder = VAE(d_x=d_goal_in, d_z=d_goal_embedding, latent_dist='normal',
+                                    encoder_lws=[200, 200, 100], decoder_lws=[100, 200, 200], activation='relu',
+                                    n_latent_categories=0, layer_norm=True, beta=0.001, epsilon=0.01)
+        self.goal_embedder = torch.nn.Sequential(
+            lwa(lws=[d_goal_in, 200, 200, 200, d_goal_embedding], activation='relu',
+                layer_norm=True, name='goal_embedding'))
 
     @property
     def current_device(self):
@@ -271,7 +279,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 rnn_states_ = stack_if_list(rnn_states[:n_steps])
                 s_embedding_ = stack_if_list(s_embedding[:n_steps])
                 mask_ = stack_if_list(mask)
-                a_ = self.bin_actions(a_)
+                if self.action_bin_size is not None:
+                    a_ = self.bin_actions(a_, self.action_bin_size)
                 # a_, _ = self.sort_perm_invariant_actions(a_, z_, rnn_states_, s_embedding_, mask_, ws, n_perm,
                 #                                         n_rep, level - 1)
                 a_, _ = self.sort_actions(a_, z_, rnn_states_, s_embedding_, mask_, ws, n_perm, n_rep, level - 1)
@@ -299,10 +308,11 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 # min reachabilitiy is 0, which means the agent needed all steps or even more
                 reach_penalty = self.reachability(rnn_states, z, s_embedding, level)
                 # avoid that rewards becones zero at full penalty, this could accidentally drown out negative rewards
-                reach_penalty = torch.clamp(reach_penalty, 0.0, 0.5)
-                simulated_ground_truth['r'] = torch.where(simulated_ground_truth['r'] > 0,
-                                                          simulated_ground_truth['r'] * (1 - reach_penalty),
-                                                          simulated_ground_truth['r'] * (1 + reach_penalty))
+                #reach_penalty = torch.clamp(reach_penalty, 0.0, 0.5)
+                #simulated_ground_truth['r'] = torch.where(simulated_ground_truth['r'] > 0,
+                #                                          simulated_ground_truth['r'] * (1 - reach_penalty),
+                #                                          simulated_ground_truth['r'] * (1 + reach_penalty))
+                simulated_ground_truth['r'] += reach_penalty * 0.1
 
                 if GlobalLogger.can_log('reachability_penalty', self._current_train_step):
                     msg = {'reachability_penalty': reach_penalty.mean().unsqueeze(0).detach().cpu().numpy()}
@@ -405,7 +415,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                                                  r=targets[l - 1]['r'], terminal=targets[l - 1]['terminal'],
                                                  mask=targets[l - 1]['mask'], rnn_states=memory[l - 1]['rnn_state'],
                                                  z=memory[l - 1]['z'], s_embedding=memory[l - 1]['s_embedding'],
-                                                 level=l, respect_mask=True, sample_action_autoencoder=True)
+                                                 level=l, respect_mask=True, sample_action_autoencoder=False)
             memory[l], model_state[l] = self.forward_static(filtered_trajectory,
                                                             start_state=model_state[l], level=l,
                                                             n_steps=-1, n_warmup=warmup_steps[l],
@@ -453,7 +463,9 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
             z_log_prob = z_dist.log_prob(z.detach()).unsqueeze(-1)
             r_log_prob = r_dist.log_prob(r.detach()).unsqueeze(-1)
-            pessimistic_loss = (r.detach() + 0.99 * v) * z_log_prob * r_log_prob
+            #pessimistic_loss = (r.detach() + 0.99 * v) * z_log_prob * r_log_prob
+            pessimistic_loss = (r + 0.99 * v)
+            #pessimistic_loss = (r + 0.99 * v).detach() * z_log_prob * r_log_prob
             # pessimistic_loss = (r[:-1] + 0.99 * v[1:])
             # pessimistic_loss = calc_lambda_returns(r[1:], terminal[1:], v[:-1], v[-1], 0.99, 0.95)
             pessimistic_loss = self.pessimism_coeff * masked_mean(pessimistic_loss, mask)
@@ -573,13 +585,17 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             # markov_loss = self.markovianity_loss(targets[level], level=level, delta_max=5)#len(targets[level]['o']))
             # loss_level.update(markov_loss)
 
-            if level == 0:
-                markov_loss = self.markov_goal_embedding(targets[level], level=level, delta_max=5)
-                loss_level.update(markov_loss)
+            #if level == 0:
+                #markov_loss = self.markov_goal_embedding(targets[level], level=level, delta_max=5)
+                #loss_level.update(markov_loss)
 
             if level == 0:
-                s_embeddings = torch.stack(pred[level]['s_embedding']).detach()
-                goal_loss = self.goal_autoencoder.eval_step(x=s_embeddings, mask=targets[level]['mask'])
+                s_embeddings = torch.stack(pred[level]['s_embedding'])
+                pred_o = torch.stack(pred[level]['o'])
+                o_rec_flat = torch.flatten(pred_o, start_dim=s_embeddings.ndim - 1)
+                # use the goal autoencoder to produce a goal embedding
+                goal_autoenc_in = torch.concat([s_embeddings, o_rec_flat], dim=-1)
+                goal_loss = self.goal_autoencoder.eval_step(x=goal_autoenc_in, mask=targets[level]['mask'])
                 goal_loss = {f'{k}_goal_autoenc': v for k, v in goal_loss.items()}
                 loss_level.update(goal_loss)
 
@@ -684,11 +700,12 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         model = self.rssm_modules[level]
         o_rec = model.decode(s_embedding, sample=False, reconstruct_observation=True)['o']
         o_rec_flat = torch.flatten(o_rec, start_dim=s_embedding.ndim - 1)  # in case we have multi-dim observations
-        # use the goal embedder to produce a goal embedding for the last time step's state
-        goal_embedder_in = torch.concat([s_embedding, o_rec_flat], dim=-1)
+        # use the goal autoencoder to produce a goal embedding
+        goal_autoenc_in = torch.concat([s_embedding, o_rec_flat], dim=-1)
         if not allow_grad_flow:
-            goal_embedder_in = goal_embedder_in.detach()
-        latent_goal = self.goal_embedder(goal_embedder_in)
+            goal_autoenc_in = goal_autoenc_in.detach()
+        #latent_goal = self.goal_embedder(goal_autoenc_in)
+        _, latent_goal = self.goal_autoencoder.encode(goal_autoenc_in, sample=False)
         return latent_goal
 
     def markov_goal_embedding(self,
@@ -758,8 +775,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
         # clamp contrastive loss term at [-1.0, inf] to prevent it from destabilizing learning
         total_markov_loss = sim_loss + torch.maximum(contr_loss, torch.tensor(-1.0).to(contr_loss))
-        #total_markov_loss = sim_loss + 0.2 * torch.nn.functional.tanh(contr_loss)
-        #total_markov_loss = sim_loss + contr_loss
+        # total_markov_loss = sim_loss + 0.2 * torch.nn.functional.tanh(contr_loss)
+        # total_markov_loss = sim_loss + contr_loss
 
         return {'total_markov_loss': total_markov_loss, 'similarity_markov_loss': sim_loss,
                 'contrastive_markov_loss': contr_loss}
@@ -802,9 +819,12 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         ws = self.upwards_filters[target_lvl]['a'].window_size
         # a_reordered, perm_invariant = self.sort_perm_invariant_actions(a, z, rnn_state, s_embedding, mask, ws, n_perm,
         #                                                              n_rep, target_lvl - 1)
-        a = self.bin_actions(a)
+        if self.action_bin_size is not None:
+            a = self.bin_actions(a, self.action_bin_size)
         a_reordered, perm_invariant = self.sort_actions(a, z, rnn_state, s_embedding, mask, ws, n_perm,
                                                         n_rep, target_lvl - 1)
+        #a_reordered = a
+        #perm_invariant = torch.tensor(0.0).to(a)
 
         losses = self.upwards_filters[target_lvl]['a'].eval_step(a_reordered, mask=mask)
         losses = {f'{k}_act_autoencoder': v for k, v in losses.items()}
@@ -812,8 +832,8 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         return losses
 
     def bin_actions(self,
-                    a: torch.Tensor):
-        bin_value = 0.05
+                    a: torch.Tensor,
+                    bin_value: float):
         a_binned = torch.round(a / bin_value) * bin_value
         return a_binned
 
