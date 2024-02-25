@@ -1532,8 +1532,7 @@ def nav2d_gsa_plot(cfg, eval_env, eval_steps, i_step, logger, model, train_drive
     gsa_goals = gsa.o_from_state(rssm_remove_labels(states))
     goals = model.filter_up(o=gsa_goals[1:], terminal=targets[0]['terminal'][1:], level=1)['o']
     goal_obs = model.filter_up(o=targets[0]['o'][1:], terminal=targets[0]['terminal'][1:], level=1)['o']
-    goal_terminals = model.filter_up(o=targets[0]['terminal'][1:], terminal=targets[0]['terminal'][1:],
-                                     level=1)['o']
+    goal_terminals = model.filter_up(o=targets[0]['terminal'][1:], terminal=targets[0]['terminal'][1:], level=1)['o']
     goal_distances = []
     for i in range(len(goals)):
         goal_distances.append([])

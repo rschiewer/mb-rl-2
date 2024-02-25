@@ -890,7 +890,6 @@ class SquashedNormal(torch.distributions.transformed_distribution.TransformedDis
         value = torch.clamp(value, min=-1.0 + 1e-6, max=1.0 - 1e-6)
         return super().log_prob(value)
 
-
 # from https://github.com/ray-project/ray/blob/master/rllib/algorithms/dreamer/utils.py#L48
 class TanhBijector(torch.distributions.Transform):
     def __init__(self):
