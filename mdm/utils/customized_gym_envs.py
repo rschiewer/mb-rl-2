@@ -28,25 +28,27 @@ static_u_maze_map_small_2 = [[1, 1, 1, 1, 1],
                              [1, 'g', 'r', 'r', 1],
                              [1, 1, 1, 1, 1]]
 
-medium_maze_map = [[1, 1, 1, 1, 1, 1, 1, 1, 1],
-                   [1, 0, 0, 0, 1, 0, 0, 0, 1],
-                   [1, 0, 0, 0, 1, 0, 'r', 0, 1],
-                   [1, 0, 0, 1, 1, 0, 0, 0, 1],
-                   [1, 0, 0, 0, 'r', 0, 0, 0, 1],
-                   [1, 0, 0, 0, 'r', 0, 0, 0, 1],
-                   [1, 0, 0, 0, 1, 1, 0, 0, 1],
-                   [1, 0, 'r', 0, 1, 'g', 0, 0, 1],
-                   [1, 1, 1, 1, 1, 1, 1, 1, 1]]
+medium_maze_map = [[ 1 , 1 , 1 , 1 , 1 , 1 , 1 , 1 , 1 ],
+                   [ 1 ,'c','c','c', 1 ,'c','c','c', 1 ],
+                   [ 1 ,'c','c','c', 1 ,'c','c','c', 1 ],
+                   [ 1 ,'c','c', 1 , 1 ,'c','c','c', 1 ],
+                   [ 1 ,'c','c','c','c','c','c','c', 1 ],
+                   [ 1 ,'c','c','c','c','c','c','c', 1 ],
+                   [ 1 ,'c','c','c', 1 , 1 ,'c','c', 1 ],
+                   [ 1 ,'c','c','c', 1 ,'c','c','c', 1 ],
+                   [ 1 , 1 , 1 , 1 , 1 , 1 , 1 , 1 , 1 ]]
 
-medium_maze_map_2 = [[1, 1, 1, 1, 1, 1, 1, 1, 1],
-                     [1, 0, 0, 0, 1, 0, 0, 0, 1],
-                     [1, 0, 0, 'g', 1, 0, 'r', 0, 1],
-                     [1, 0, 0, 1, 1, 0, 0, 0, 1],
-                     [1, 0, 0, 0, 'r', 0, 0, 0, 1],
-                     [1, 0, 0, 0, 'r', 0, 0, 0, 1],
-                     [1, 0, 0, 0, 1, 1, 0, 0, 1],
-                     [1, 0, 'r', 0, 1, 0, 0, 0, 1],
-                     [1, 1, 1, 1, 1, 1, 1, 1, 1]]
+
+medium_maze_map_2 = [[ 1 , 1 , 1 , 1 , 1 , 1 , 1 , 1 , 1 ],
+                     [ 1 , 0 , 0 , 0 , 1 , 0 , 0 , 0 , 1 ],
+                     [ 1 , 0 , 0 ,'r', 1 , 0 , 0 , 0 , 1 ],
+                     [ 1 , 0 , 0 , 1 , 1 , 0 , 0 , 0 , 1 ],
+                     [ 1 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 1 ],
+                     [ 1 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 1 ],
+                     [ 1 , 0 , 0 , 0 , 1 , 1 , 0 , 0 , 1 ],
+                     [ 1 , 0 , 0 , 0 , 1 ,'g', 0 , 0 , 1 ],
+                     [ 1 , 1 , 1 , 1 , 1 , 1 , 1 , 1 , 1 ]]
+
 
 gym.register(
     id=f"PointMaze_UMaze_static-v3",
@@ -77,14 +79,14 @@ gym.register(
 )
 
 gym.register(
-    id=f"PointMaze_UMaze_medium-v0",
+    id=f"PointMaze_SplitMaze_dense-v0",
     entry_point="gymnasium_robotics.envs.maze.point_maze:PointMazeEnv",
     kwargs={"maze_map": medium_maze_map, 'continuing_task': False, 'reset_target': False},
     max_episode_steps=300,
 )
 
 gym.register(
-    id=f"PointMaze_UMaze_medium_alternate-v0",
+    id=f"PointMaze_SplitMaze_sparse-v0",
     entry_point="gymnasium_robotics.envs.maze.point_maze:PointMazeEnv",
     kwargs={"maze_map": medium_maze_map, 'continuing_task': False, 'reset_target': False},
     max_episode_steps=300,
