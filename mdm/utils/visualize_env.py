@@ -75,22 +75,33 @@ def plot_maze_env(env: gym.Env,
     prop_cycle = plt.rcParams['axes.prop_cycle']
     colors = prop_cycle.by_key()['color']
     if observations is not None:
+        # select only the observations we want to plot
         observations = observations[:, :n_trajs]
+        # use terminals if available to belnd out observations past terminal state
+        if terminals is None:
+            terminals = np.zeros_like(observations)
+        else:
+            terminals = terminals[:, :n_trajs]
+
+        # precompute alpa value from terminals using the mask calculation technique
+        terminals = np.concatenate([np.zeros_like(terminals[0:1]), terminals[:-1]])
+        alpha = np.cumprod(1 - terminals, axis=0)
+
         for i_traj in range(observations.shape[1]):
             c = colors[i_traj % len(colors)]
             for t in range(observations.shape[0]):
                 if t == 0:
                     canvas.scatter(observations[t, i_traj, 4], observations[t, i_traj, 5], marker=r'$\bigcirc$', c=c,
                                    s=90)
-                canvas.scatter(observations[t, i_traj, 4], observations[t, i_traj, 5], marker=f'${t + 1}$', c=c, s=25)
+                canvas.text(observations[t, i_traj, 4], observations[t, i_traj, 5], f'${t + 1}$', c=c, alpha=alpha[t, i_traj])
     if goal_observations is not None:
         goal_observations = goal_observations[:, :n_trajs]
         for i_traj in range(goal_observations.shape[1]):
             c = colors[i_traj % len(colors)]
             for t in range(goal_observations.shape[0]):
-                canvas.scatter(goal_observations[t, i_traj, 0], goal_observations[t, i_traj, 1],
+                canvas.scatter(goal_observations[t, i_traj, 4], goal_observations[t, i_traj, 5],
                                marker='h', c=c, s=80)
-                canvas.scatter(goal_observations[t, i_traj, 0], goal_observations[t, i_traj, 1],
+                canvas.scatter(goal_observations[t, i_traj, 4], goal_observations[t, i_traj, 5],
                                marker=f'${t + 1}$', c='white', s=25)
 
 
