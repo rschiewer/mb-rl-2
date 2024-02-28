@@ -1,13 +1,12 @@
 import colorsys
 
-import numpy as np
 import gymnasium as gym
+import matplotlib.pyplot as plt
+import numpy as np
 from gym_nav2d.envs import Nav2dEnv
 from gymnasium_robotics.envs.maze.maze_v4 import MazeEnv
-import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle, Ellipse
 from matplotlib.colors import to_rgb
-from minigrid.minigrid_env import MiniGridEnv
+from matplotlib.patches import Rectangle, Ellipse
 
 from mdm.utils.utils import env_class_is, get_env_instance
 
@@ -22,7 +21,7 @@ def visualize_env(env: gym.Env, canvas: plt.Figure | plt.Axes, **kwargs):
         plot_maze_env(env=env, canvas=canvas, **kwargs)
     elif env_class_is(env, Nav2dEnv):
         plot_nav2d_env(env=env, canvas=canvas, **kwargs)
-    #elif env_class_is(env, MiniGridEnv):
+    # elif env_class_is(env, MiniGridEnv):
     #    plot_minigrid_env(env=env, canvas=canvas, **kwargs)
 
 
@@ -62,14 +61,13 @@ def plot_maze_env(env: gym.Env,
         right = width / 2
         bottom = - length / 2
         top = length / 2
-        canvas.imshow(maze_map, extent=(left, right, bottom, top))
+        maze_map = 1 - maze_map
+        canvas.imshow(maze_map, extent=(left, right, bottom, top))#, cmap='virdis')
 
     for loc in start_locations:
-        canvas.scatter(loc[0], loc[1], marker='.', c='red', s=500)
-        canvas.scatter(loc[0], loc[1], marker='$S$', c='white', s=45)
+        canvas.scatter(loc[0], loc[1], marker='|', c='black', s=45, alpha=0.5)
     for loc in goal_locations:
-        canvas.scatter(loc[0], loc[1], marker='.', c='green', s=500)
-        canvas.scatter(loc[0], loc[1], marker='$R$', c='white', s=45)
+        canvas.scatter(loc[0], loc[1], marker='_', c='black', s=45, alpha=0.5)
 
     # plot individual trajectories
     prop_cycle = plt.rcParams['axes.prop_cycle']
@@ -92,8 +90,10 @@ def plot_maze_env(env: gym.Env,
             for t in range(observations.shape[0]):
                 if t == 0:
                     canvas.scatter(observations[t, i_traj, 4], observations[t, i_traj, 5], marker=r'$\bigcirc$', c=c,
-                                   s=90)
-                canvas.text(observations[t, i_traj, 4], observations[t, i_traj, 5], f'${t + 1}$', c=c, alpha=alpha[t, i_traj])
+                                   s=100)
+                canvas.text(observations[t, i_traj, 4], observations[t, i_traj, 5], f'${t + 1}$', c=c,
+                            alpha=alpha[t, i_traj], fontdict={'ha': 'center', 'va': 'center', 'size': 'small',
+                                                              'weight': 'heavy'})
     if goal_observations is not None:
         goal_observations = goal_observations[:, :n_trajs]
         for i_traj in range(goal_observations.shape[1]):
