@@ -890,6 +890,7 @@ class SquashedNormal(torch.distributions.transformed_distribution.TransformedDis
         value = torch.clamp(value, min=-1.0 + 1e-6, max=1.0 - 1e-6)
         return super().log_prob(value)
 
+
 # from https://github.com/ray-project/ray/blob/master/rllib/algorithms/dreamer/utils.py#L48
 class TanhBijector(torch.distributions.Transform):
     def __init__(self):
@@ -1099,6 +1100,19 @@ def plot_grad_flow(named_parameters):
                 Line2D([0], [0], color="b", lw=4),
                 Line2D([0], [0], color="k", lw=4)], ['max-gradient', 'mean-gradient', 'zero-gradient'])
     plt.tight_layout()
+
+
+def fold_time_to_batch(x: torch.Tensor):
+    T, B = x.shape[:2]
+    x_rs = x.reshape(T * B, *x.shape[2:])
+    return x_rs, T, B
+
+
+def unfold_time_batch(x: torch.Tensor,
+                      d_time: int,
+                      d_batch: int):
+    x_rs = x.reshape(d_time, d_batch, *x.shape[1:])
+    return x_rs
 
 
 def check_tensor(x: torch.Tensor,
