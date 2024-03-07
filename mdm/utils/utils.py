@@ -1156,12 +1156,12 @@ def infer_observation_info(env: gym.Env):
     return s_o, is_discrete
 
 
-def list_of_tuples_to_tuple_of_lists(list_of_tpls: List[Any]):
+def list_of_tuples_to_tuple_of_lists(list_of_tpls: List[Any, ...]) -> Tuple[Any, ...]:
     state = tuple([list(x) for x in zip(*list_of_tpls)])
     return state
 
 
-def list_of_dicts_to_dict_of_lists(list_of_dicts: List[Dict[Any, Any]]):
+def list_of_dicts_to_dict_of_lists(list_of_dicts: List[Dict[Any, ...]]):
     ret = {k: [] for k in list_of_dicts[0].keys()}
     for i,x in enumerate(list_of_dicts):
         try:
