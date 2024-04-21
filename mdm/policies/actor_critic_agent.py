@@ -26,7 +26,8 @@ from mdm.models.rssm_cell import RSSMStateType, rssm_detach_state, rssm_add_labe
 from mdm.utils.torch_tools import layers_with_activation as lwa, SquashedNormal, RunningMeanStd, dim_to_list
 from mdm.utils.torch_tools import (FuzzyDeviceMixin, compute_mask, detach_dist, stack_dists,
                                    concat_dists, TanhBijector, FreezeParameters,
-                                   plot_grad_flow, masked_mean, masked_var, check_tensor)
+                                   plot_grad_flow, masked_mean, masked_var, check_tensor, fold_time_to_batch,
+                                   unfold_time_batch)
 from mdm.utils.utils import fig_to_img, append_memory, numpyfy, extend_memory, list_of_tuples_to_tuple_of_lists
 from mdm.logging.logger import GlobalLogger, Scope, Logger
 
@@ -58,6 +59,8 @@ class ActorCriticAgent(torch.nn.Module):
                  use_slow_world_model: bool = False,
                  use_slow_value_target: bool = False,
                  goal_seeking: bool = False,
+                 goal_similarity_measure: str | None = None,
+                 goal_comparator: str | None = None,
                  dynamics_loss: bool = True,
                  init_action_variance: float = 2.0,
                  **kwargs):
@@ -105,6 +108,8 @@ class ActorCriticAgent(torch.nn.Module):
         for param in self._ema_actor_net.parameters(): param.requires_grad = False
         for param in self.ema_critic_net.parameters(): param.requires_grad = False
         self._current_train_step = 0
+        self.goal_similarity_measure = goal_similarity_measure
+        self.goal_comparator = goal_comparator
         self.dynamics_loss = dynamics_loss
         self.init_action_variance = init_action_variance
 
@@ -203,7 +208,7 @@ class ActorCriticAgent(torch.nn.Module):
         with FreezeParameters([world, other_world, sim_env.goal_autoencoder]):
             for t in range(n_steps):
                 a_dist, a = self(agent_o_t0_to_T[-1].detach(), sample=sample_actions, expl_noise=expl_noise)
-                current_env_state = world(a=a, last_state=s_mem_t0_to_T[-1], use_posterior=False,
+                current_env_state = world(a=a, o_enc=None, last_state=s_mem_t0_to_T[-1], use_posterior=False,
                                           sample_state=sample_states)
 
                 s_mem_t0_to_T.append(current_env_state)
@@ -212,7 +217,7 @@ class ActorCriticAgent(torch.nn.Module):
                 agent_a_dist_t0_to_T.append(a_dist)
 
             s_final = s_mem_t0_to_T[-1]  # store away final state to return from this method
-            # prepare partial lists for model disagreement computation
+            # prepare partial lists for model disagreement and reachability computation
             s_mem_t0_to_Tm1 = s_mem_t0_to_T[:-1]
             s_mem_t1_to_T = s_mem_t0_to_T[1:]
 
@@ -221,9 +226,50 @@ class ActorCriticAgent(torch.nn.Module):
             s_mem_t0_to_Tm1 = list_of_tuples_to_tuple_of_lists(s_mem_t0_to_Tm1)
             s_mem_t1_to_T = list_of_tuples_to_tuple_of_lists(s_mem_t1_to_T)
 
+            # stack each element of the state memory tuples
+            s_mem_t0_to_Tm1 = [torch.stack(x) for x in s_mem_t0_to_Tm1]
+            s_mem_t1_to_T = [torch.stack(x) for x in s_mem_t1_to_T]
+
             # decode predictions from states
-            s_embed_t0_to_T = torch.stack(s_mem_t0_to_T[-1])
+            s_embed_t0_to_T = torch.stack(s_mem_t0_to_T[5])  # use sampled s_embedding if sample_states is true
             pred = world.decode(s_embed_t0_to_T, sample=False, reconstruct_observation=reconstruct)
+
+            # repeat the goal over the time dimension to match the format in s_mem_t0_to_T
+            if self.goal_seeking:
+                goal = goal.detach()
+                if self.goal_comparator == 'encoded_world_state':  # mix of state and obs reward
+                    goal_tiled = goal.unsqueeze(0).expand(n_steps + 1, -1, -1)
+                    goal_tiled_embed = sim_env.embed_goal(goal_tiled, 0, allow_grad_flow=False, sample=False)
+                    s_embed_t0_to_T_embed = sim_env.embed_goal(s_embed_t0_to_T, 0, allow_grad_flow=True, sample=False)
+                    agent_r_t0_to_T = self.goal_similarity(s_embed_t0_to_T_embed, goal_tiled_embed)
+                elif self.goal_comparator == 'world_state':  # use latent state similarity for goal reward
+                    # repeat the same goal for each time step
+                    goal_tiled = goal.unsqueeze(0).expand(n_steps + 1, -1, -1)
+                    agent_r_t0_to_T = self.goal_similarity(s_embed_t0_to_T, goal_tiled)
+                elif self.goal_comparator == 'recon_observation':  # use observation similarity for goal reward
+                    goal = world.decode(goal, sample=False, reconstruct_observation=True)['o']
+                    goal = torch.flatten(goal, start_dim=1)  # in case of obs that have more than 1 data dimension
+                    goal_tiled = goal.unsqueeze(0).expand(n_steps + 1, -1, -1).clone()  # clone to be safe
+                    state_obs = torch.flatten(pred['o'], start_dim=2)
+                    agent_r_t0_to_T = self.goal_similarity(state_obs, goal_tiled)
+                else:
+                    raise RuntimeError(f'Unknown goal comparator: {self.goal_comparator}')
+
+                # compute goal terminals from goal rewards
+                agent_term_t0_to_T = self.goal_terminal(agent_r_t0_to_T)
+                agent_term_t0_to_T = torch.zeros_like(agent_term_t0_to_T)
+                # where env terminal and goal terminal are true, give GSA a bit of env reward to make final step into
+                # goals more precise if they lead into an env reward
+                # both_term = pred['terminal'] * agent_term_t0_to_T
+                # agent_r_t0_to_T = (1 - both_term) * agent_r_t0_to_T + both_term * pred['r']
+                # make time dimension list
+                agent_r_t0_to_T = dim_to_list(agent_r_t0_to_T, 0)
+                agent_term_t0_to_T = dim_to_list(agent_term_t0_to_T, 0)
+                # agent_r_t0_to_T = [0.8 * x + 0.2 * y for x, y in zip(agent_r_t0_to_T, pred['r'])]
+            else:
+                agent_r_t0_to_T = pred['r']
+                agent_term_t0_to_T = pred['terminal']
+
             # adhere to convention and make first dimension a list
             pred = {k: dim_to_list(v, 0) for k, v in pred.items()}
             # add rssm state components to memory
@@ -232,52 +278,10 @@ class ActorCriticAgent(torch.nn.Module):
             pred['a'] = agent_a_t0_to_T
             extend_memory(env_memory, pred)
 
-            # repeat the goal over the time dimension to match the format in s_mem_t0_to_T
-            if self.goal_seeking:
-                # goal = goal.detach()  # goals come from upper level management and should not be changed by workers
-                # encode goal and observations for easier comparison
-                # _, goal_enc = obs_autoenc.encode(goal, sample=False)
-                # _, obs_enc = obs_autoenc.encode(s_embed_stacked, sample=False)
-                # insert observation and goal encodings into their respective tensors
-                # goal = torch.zeros_like(goal)
-                # goal[:, :goal_enc.shape[-1]] = goal_enc
-                # s_embed_stacked = torch.zeros_like(s_embed_stacked)
-                # s_embed_stacked[:, :, :obs_enc.shape[-1]] = obs_enc
-
-                # mix of state and obs reward
-                goal = goal.detach()
-                goal_tiled = goal.unsqueeze(0).expand(n_steps + 1, -1, -1)
-                goal_tiled_embed = sim_env.embed_goal(goal_tiled, 0, allow_grad_flow=False)
-                s_embed_t0_to_T_embed = sim_env.embed_goal(s_embed_t0_to_T, 0, allow_grad_flow=True)
-                agent_r_t0_to_T = self.goal_similarity(s_embed_t0_to_T_embed, goal_tiled_embed)
-
-                # use latent state similarity for goal reward
-                #goal = goal.detach()  # goals come from upper level management and should not be changed by workers
-                # repeat the same goal for each time step
-                #goal_tiled = goal.unsqueeze(0).expand(n_steps + 1, -1, -1)
-                #agent_r_t0_to_T = self.goal_similarity(s_embed_t0_to_T, goal_tiled)
-
-                # use observation similarity for goal reward
-                #goal = world.decode(goal.detach(), sample=False, reconstruct_observation=True)['o']
-                #goal = torch.flatten(goal, start_dim=1)  # in case of observations that have more than 1 data dimension
-                #goal_tiled = goal.unsqueeze(0).expand(n_steps + 1, -1, -1).clone()  # clone to be safe
-                #state_obs = torch.stack(env_memory['o'])
-                #state_obs = torch.flatten(state_obs, start_dim=2)
-                #agent_r_t0_to_T = self.goal_similarity(state_obs, goal_tiled)
-
-                agent_term_t0_to_T = self.goal_terminal(agent_r_t0_to_T)
-                agent_r_t0_to_T = dim_to_list(agent_r_t0_to_T, 0)
-                agent_term_t0_to_T = dim_to_list(agent_term_t0_to_T, 0)
-                pred['r'] = None
-            else:
-                agent_r_t0_to_T = pred['r']
-                agent_term_t0_to_T = pred['terminal']
-
             # 1-step prediction with EMA model
             # get valid agent actions (exclude time step zero filler actions)
             agent_a_t1_to_T = torch.stack(agent_a_t0_to_T[1:])
             # stack each element in state memory
-            s_mem_t0_to_Tm1 = [torch.stack(x) for x in s_mem_t0_to_Tm1]
             # fold time dim into batch dim to form start states and actions
             s_Tm1xB = [x.reshape(x.shape[0] * x.shape[1], *x.shape[2:]) for x in s_mem_t0_to_Tm1]
             a_Tm1xB = agent_a_t1_to_T.reshape(agent_a_t1_to_T.shape[0] * agent_a_t1_to_T.shape[1],
@@ -289,7 +293,7 @@ class ActorCriticAgent(torch.nn.Module):
             # reshape prior distribution parameters from (TxB, ...) back to (T, B, ...)
             z_prior_EMA_t1_to_T = z_prior_EMA_Tm1xB.reshape(n_steps, -1, *z_prior_EMA_Tm1xB.shape[1:])
             # get z prior distribution parameters from online model rollout above
-            z_prior_t1_to_T = torch.stack(s_mem_t1_to_T[2])
+            z_prior_t1_to_T = s_mem_t1_to_T[2]
 
             # compute disagreement as MSE between EMA and online model distribution parameters
             disagreement = torch.nn.functional.mse_loss(z_prior_EMA_t1_to_T, z_prior_t1_to_T, reduction='none')
@@ -299,6 +303,7 @@ class ActorCriticAgent(torch.nn.Module):
             disagreement = dim_to_list(disagreement, 0)
 
             if self.level > 0:
+                # compute novelty reward as goal autoencoder reconstruction loss
                 goals = torch.stack(pred['o'])
                 o_rec = sim_env.rssm_modules[0].decode(goals, sample=False, reconstruct_observation=True)['o']
                 o_rec_flat = torch.flatten(o_rec, start_dim=goals.ndim - 1)
@@ -307,10 +312,23 @@ class ActorCriticAgent(torch.nn.Module):
                 recon_err = torch.mean((goal_autoenc_in - goals_rec) ** 2, dim=-1, keepdim=True)
                 agent_r_t0_to_T = [r_t + 0.1 * recon_err_t for r_t, recon_err_t in zip(agent_r_t0_to_T, recon_err)]
 
+                # compute reachability reward
+                goals_t0_to_Tm1_folded, T, B = fold_time_to_batch(goals[:-1])
+                goals_t1_to_T_folded, _, _ = fold_time_to_batch(goals[1:])
+                reach_penalty_folded = sim_env.reachability_simple(s_embed_start=goals_t0_to_Tm1_folded,
+                                                                   s_embed_end=goals_t1_to_T_folded, level=self.level)
+                reach_penalty = unfold_time_batch(reach_penalty_folded, T, B)
+                reach_penalty = dim_to_list(reach_penalty, 0)
+            else:
+                T, B = s_mem_t1_to_T[0].shape[:2]
+                device = s_mem_t1_to_T[0].device
+                reach_penalty = [torch.zeros(B, 1, dtype=torch.float32, device=device) for _ in range(T)]
+
             ema_a_dist_mock = [torch.zeros_like(x) for x in agent_a_dist_t0_to_T]
             extend_memory(agent_memory, {'o': agent_o_t0_to_T, 'a': agent_a_t0_to_T, 'r': agent_r_t0_to_T,
                                          'terminal': agent_term_t0_to_T, 'a_dist': agent_a_dist_t0_to_T,
-                                         'ema_a_dist': ema_a_dist_mock, 'model_novelty': disagreement})
+                                         'ema_a_dist': ema_a_dist_mock, 'model_novelty': disagreement,
+                                         'reach_penalty': reach_penalty})
         world.train(world_mode)
         other_world.train(world_mode)
 
@@ -465,8 +483,9 @@ class ActorCriticAgent(torch.nn.Module):
                   # o_env: list[torch.Tensor],
                   # o_env_next: list[torch.Tensor],
                   # goal: Union[List[torch.Tensor], List[None]],
+                  reach_penalty: List[torch.Tensor],
                   first_step_mask: Optional[torch.Tensor] = None,
-                  for_train_step: bool = False):
+                  **kwargs):
         # In general: First time step comes from replay memory, so the first action is zero padding and not optimized by
         # the actor. The last action doesn't yield any outcome and is thus not optimized either. Only the critic can
         # optimize the first time step. It doesn't optimize the last time step however, as it serves as the bootstrap
@@ -479,6 +498,7 @@ class ActorCriticAgent(torch.nn.Module):
         ema_a_dist = torch.stack(ema_a_dist)
         a_log_prob = self._a_log_prob(a_dist, a.detach())
         model_novelty = torch.stack(model_novelty)
+        reach_penalty = torch.stack(reach_penalty)
 
         if self.goal_seeking:
             gamma = 0.95
@@ -567,6 +587,9 @@ class ActorCriticAgent(torch.nn.Module):
             advantage_actor = lambda_returns_actor[1:] - baseline  # .detach()
             policy_loss = - masked_mean(a_log_prob[1:-1] * advantage_actor.detach(), mask_t1_to_Hm1)
 
+        # reachability penalty
+        reachability_loss = 0.0 * masked_mean(reach_penalty, mask_t1_to_H)
+
         """
         # DYN loss
         if not self.discrete_actions:
@@ -609,14 +632,14 @@ class ActorCriticAgent(torch.nn.Module):
             ema_value_loss = masked_mean(ema_value_loss, mask_t1_to_H)
 
         v_critic = self.critic_net(o.detach()[:-1])
-        #value_loss = torch.nn.functional.smooth_l1_loss(v_critic, value_target.detach(), reduction='none')
+        # value_loss = torch.nn.functional.smooth_l1_loss(v_critic, value_target.detach(), reduction='none')
         value_loss = torch.nn.functional.mse_loss(v_critic, value_target.detach(), reduction='none')
         value_loss = masked_mean(value_loss, mask_t1_to_H)
 
         # TODO: currently last action is not trained, we can change that and record last state in act_in_sim as well
 
         ppo_loss = torch.zeros_like(value_loss)  # torch.mean(ppo_loss)
-        loss = policy_loss + value_loss + act_entropy_loss + alpha_loss  # + ppo_loss
+        loss = policy_loss + value_loss + act_entropy_loss + alpha_loss + reachability_loss  # + ppo_loss
 
         # log statistics
         with torch.no_grad():
@@ -668,6 +691,7 @@ class ActorCriticAgent(torch.nn.Module):
                   'action_entropy_reward_aug': act_entropy_loss,
                   'eps_exploration': self.eps,
                   'alpha_loss': alpha_loss,
+                  'reachability_loss': reachability_loss,
                   'monitoring_a_dist_mean': a_dist_mean,
                   'monitoring_a_dist_std': a_dist_std,
                   'monitoring_a_min': a_min,
@@ -732,19 +756,7 @@ class ActorCriticAgent(torch.nn.Module):
                     critic_optimizer: torch.optim.Optimizer,
                     other_optimizer: torch.optim.Optimizer,
                     logger: Logger = None):
-        losses = self.eval_step(a_dist=simulation_data['a_dist'],
-                                ema_a_dist=simulation_data['ema_a_dist'],
-                                model_novelty=simulation_data['model_novelty'],
-                                a=simulation_data['a'],
-                                r=simulation_data['r'],
-                                # r_raw=simulation_data['r_raw'],
-                                terminal=simulation_data['terminal'],
-                                o=simulation_data['o'],
-                                # o_env=simulation_data['o_env'],
-                                # o_env_next=simulation_data['o_env_next'],
-                                # goal=simulation_data['goal'],
-                                first_step_mask=first_step_mask,
-                                for_train_step=True)
+        losses = self.eval_step(**simulation_data)
 
         actor_optimizer.zero_grad(set_to_none=True)
         critic_optimizer.zero_grad(set_to_none=True)
@@ -800,19 +812,25 @@ class ActorCriticAgent(torch.nn.Module):
             for param, ema_param in zip(params, ema_params):
                 ema_param[:] = self.ema_coeff * ema_param + (1 - self.ema_coeff) * param
 
-    @staticmethod
-    def goal_similarity(o: torch.Tensor,
+    def goal_similarity(self,
+                        o: torch.Tensor,
                         goal: torch.Tensor) -> torch.Tensor:
-        # o_norm = torch.linalg.vector_norm(o, dim=-1, keepdim=True)
-        # goal_norm = torch.linalg.vector_norm(goal, dim=-1, keepdim=True)
-        # norm = torch.maximum(o_norm, goal_norm).detach()
-        # similarity = torch.linalg.vecdot(goal / norm, o / norm, dim=-1).unsqueeze(-1)
+        if self.goal_similarity_measure == 'sdp':  # scaled dot product
+            o_norm = torch.linalg.vector_norm(o, dim=-1, keepdim=True)
+            goal_norm = torch.linalg.vector_norm(goal, dim=-1, keepdim=True)
+            norm = torch.maximum(o_norm, goal_norm).detach()
+            similarity = torch.linalg.vecdot(goal / norm, o / norm, dim=-1).unsqueeze(-1)
+        elif self.goal_similarity_measure == 'ndp':  # normalised dot product
+            o_norm = torch.linalg.vector_norm(o, dim=-1, keepdim=True)
+            goal_norm = torch.linalg.vector_norm(goal, dim=-1, keepdim=True)
+            similarity = torch.linalg.vecdot(goal / goal_norm, o / o_norm, dim=-1).unsqueeze(-1)
+        elif self.goal_similarity_measure == 'mae':  # mean absolute error
+            similarity = - torch.abs(o - goal).mean(dim=-1, keepdim=True)
+        elif self.goal_similarity_measure == 'mse':  # mean squared error
+            similarity = - torch.nn.functional.mse_loss(o, goal, reduction='none').mean(dim=-1, keepdim=True)
+        else:
+            raise RuntimeError(f'Unknown similarity measure: {self.goal_similarity_measure}')
 
-        # similarity = torch.where(similarity < 0.999, 0.0, 1.0)
-
-        similarity = - torch.nn.functional.mse_loss(o, goal, reduction='none').mean(dim=-1, keepdim=True)
-        # similarity = - torch.mean(torch.sqrt((o - goal) ** 2), dim=-1, keepdim=True)
-        # similarity = torch.where(similarity >= -0.0001, 1.0, 0.0)
         check_tensor(similarity)
         return similarity
 
@@ -826,8 +844,8 @@ class ActorCriticAgent(torch.nn.Module):
         # term_zone_core_radius = 0.001
         # term_zone_perimeter_radius = 0.003
 
-        term_zone_core_radius = 0.0005
-        term_zone_perimeter_radius = 0.05
+        term_zone_core_radius = 0.0001
+        term_zone_perimeter_radius = 0.0005
 
         # sigmoid is close to 1.0 at x=3.0 and close to 0.0 at x=-3.0
         sig_min = -5.0
