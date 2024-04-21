@@ -98,6 +98,8 @@ def get_expert_policy(env_name: str, fallback_policy: callable):
             return nav2d_expert_policy
         case 'gym_nav2d:nav2dEasy-v0':
             return nav2d_expert_policy
+        case 'gym_nav2d:nav2dHard-v0':
+            return nav2d_expert_policy
         case _:
             return fallback_policy
 
