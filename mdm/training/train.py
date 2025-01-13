@@ -4,6 +4,7 @@ import textwrap
 from math import ceil
 
 import gym_nav2d.envs
+import matplotlib.pyplot as plt
 import torch
 from gymnasium_robotics.envs.maze.maze_v4 import MazeEnv
 from sklearn.cluster import KMeans
@@ -11,7 +12,9 @@ from sklearn.decomposition import PCA
 import umap
 from sklearn.manifold import TSNE
 from matplotlib.colors import hsv_to_rgb, to_rgba
-from matplotlib.patches import Rectangle
+from matplotlib.patches import Rectangle, Circle, Patch
+from matplotlib.ticker import MaxNLocator
+from matplotlib.lines import Line2D
 from tqdm import tqdm
 import moviepy.editor as mp
 import cv2
@@ -102,8 +105,6 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
         # logger.log(_to_np(train_losses), Scope.TRAIN() / 'observation_mode', i_step)
 
         # p0 = torch.sum(torch.stack([p.mean() for p in model.parameters()]))
-        # print(f'Model: {logger.n_log_calls}')
-        logger.n_log_calls = 0
 
         # train agents
         sample_model = cfg['trainer']['sample_model_during_agent_training']
@@ -136,7 +137,9 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                     #                                     sample_agents)
                     # train_goal_seeking_agent_goals_above_with_agent(model, level, pred, targets, eval_env, cfg, i_step,
                     #                                                logger, sample_agents, use_her=False)
+
                     train_gsa(model, level, pred, targets, eval_env, cfg, i_step, logger, sample_agents, use_her=False)
+
                     # train_goal_seeking_agent_one_step(model, level, pred, targets, eval_env, cfg, i_step, logger,
                     #                                 sample_agents)
                     pass
@@ -155,23 +158,88 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
             collect_fn(explore=True, i_step=i_step)
 
         # eval =========================================================================================================
-        if i_step % cfg['trainer']['eval_interval'] == 0 and i_step > 0:
+        if i_step % cfg['trainer']['eval_interval'] == 0:  # and i_step > 0:
             with torch.no_grad():
                 agent_eval_mode(r_max_agents + goal_seeking_agents)
                 model.eval()
 
                 # model
-                trajs_orig = test_driver.interact(cfg['trainer']['d_batch'])
+                trajs_orig = train_driver.interact(cfg['trainer']['d_batch'])
                 # trajs_orig = add_no_ops(trajs_orig, model.strides[1])
                 batch = to_tensors(trajs_orig, model.device)
                 batch = prepare_data(batch, n_categories=n_categories)
-                if cfg['trainer']['subtrajectory_len'] > 0:
-                    batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
-                eval_steps = [-1] + cfg['trainer']['model_train_steps'][1:]
-                eval_losses, pred, targets = model.eval_step(batch, model_steps=eval_steps, sample_state=False,
-                                                             sample_output=False,
-                                                             force_warmup=[-1 for _ in range(model.levels)])
+                # if cfg['trainer']['subtrajectory_len'] > 0:
+                #    batch = valid_subtrajectories(batch, cfg['trainer']['subtrajectory_len'])
+                batch = valid_subtrajectories(batch, 40)
+                eval_steps = [-1, -1]
+                mode = 'Closed Loop'
+                if mode == 'Closed Loop':
+                    eval_losses, pred, targets = model.eval_step(batch, model_steps=eval_steps, sample_state=True,
+                                                                sample_output=False,
+                                                                force_warmup=[-1 for _ in range(model.levels)])
+                elif mode == 'Open Loop':
+                    eval_losses, pred, targets = model.eval_step(batch, model_steps=eval_steps, sample_state=True,
+                                                                 sample_output=False,
+                                                                 force_warmup=[8, 1])
+                else:
+                    raise ValueError(f'Unknown mode: {mode}')
                 logger.log(to_np(eval_losses), Scope.TEST(), i_step)
+
+                if env_class_is(eval_env, Nav2dEnv):
+                    with TempFigure(figsize=(10, 10)) as fig:
+                        ax = fig.add_subplot(1, 1, 1)
+                        ax.set_xlim([-1.1, 1.1])
+                        ax.set_ylim([-1.1, 1.1])
+                        ax.add_patch(Rectangle((-1.0, -1.0), 2.0, 2.0, fill=None, linestyle='--'))
+                        c_s, c_e = 0.4, 0.8
+
+                        # select random trajectory, try to pick one that gets to reward
+                        i_traj = random.randint(0, cfg['trainer']['d_batch'] - 1)
+                        for i in range(30):
+                            has_term = (targets[0]['terminal'][:, i_traj] * targets[0]['mask'][:, i_traj]).sum() > 0.9
+                            if has_term:
+                                break
+                            else:
+                                i_traj = random.randint(0, cfg['trainer']['d_batch'] - 1)
+
+                        legend_elements = []
+                        gt_obs = targets[0]['o'][:, i_traj].detach().cpu().numpy()
+
+                        # plot reward
+                        goal_pos = gt_obs[0, 2], gt_obs[0, 3]
+                        goal_radius = get_env_instance(eval_env).eps / 255
+                        ax.add_patch(Circle(goal_pos, goal_radius, facecolor=(0, 0, 0, 0), edgecolor='red',
+                                            linestyle=(0, (1, 1)), linewidth=2))
+                        legend_elements.append(Patch(facecolor=(0, 0, 0, 0), edgecolor='red', linestyle=(0, (1, 1)),
+                                                     linewidth=2, label='Reward'))
+
+                        # plot groundtruth obs and reward
+                        c = plt.cm.Greens(np.linspace(c_s, c_e, gt_obs.shape[0]))
+                        ax.scatter(gt_obs[:, 0], gt_obs[:, 1], color=c, marker='D', s=15)
+                        legend_elements.append(Line2D([0], [0], marker='D', color='w', markerfacecolor=c[len(c) // 2],
+                                                      markersize=7, label=f'Ground truth'))
+
+                        # plot reconstructed model predictions
+                        cmaps = [plt.cm.Blues, plt.cm.Oranges, plt.cm.Purples]
+                        markers = ['p', '*', '*']
+                        marker_sizes = [9, 13]
+                        for level, (pred_lvl, targets_lvl) in enumerate(zip(pred, targets)):
+                            obs = torch.stack(pred_lvl['o'])
+                            obs = model.decode_to_obs(goals=obs, level=level)
+                            obs = obs.detach().cpu().numpy()
+                            c = cmaps[level](np.linspace(c_s, c_e, obs.shape[0]))
+                            a = 1 - targets_lvl['mask'][:, i_traj, 0].detach().cpu().numpy()
+                            ax.scatter(obs[:, i_traj, 0], obs[:, i_traj, 1], color=c, alpha=a, label=f'Level {level}',
+                                       marker=markers[level])
+                            legend_elements.append(Line2D([0], [0], marker=markers[level],
+                                                          markersize=marker_sizes[level],
+                                                          color='w',
+                                                          markerfacecolor=c[len(c) // 2],
+                                                          label=f'Level {level}'))
+                        plt.title(f'{mode} Rollout Reconstructed Observations')
+                        plt.legend(handles=legend_elements, framealpha=1.0)
+                        logger.log_plot(fig, Scope.TEST() / f'model_simulation_visualization', i_step)
+                        #plt.show()
 
                 if i_step % cfg['trainer']['plot_interval'] == 0:
                     log_prediction_error_plot(batch, cfg, i_step, logger, model)
@@ -209,6 +277,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                 if env_class_is(eval_env, Nav2dEnv) and i_step % cfg['trainer']['plot_interval'] == 0:
                     latent_state_pca_plot(model, eval_env, eval_steps, i_step, logger)
 
+                    """
                     # plot samples from goal autoencoder prior
                     g_sampled = model.goal_autoencoder.gen_unconditionally(d_batch=256, device=batch['o'].device)
                     g_o_sampled = model.rssm_modules[0].decode(g_sampled, sample=False, reconstruct_observation=True)[
@@ -230,6 +299,7 @@ def train_model(cfg, model, opt_model, r_max_agents, goal_seeking_agents, collec
                         ax_1.set_ylim([-1.1, 1.1])
                         plt.legend()
                         logger.log_plot(fig, Scope.TRAIN() / f'goal_autoencoder_sampled', i_step)
+                    """
 
                 # log model and agent params
                 # log_params(model, logger, Scope.PARAMETERS() / 'model', time_step=i_step)
@@ -322,6 +392,7 @@ def action_sequence_clustering_plot(i_step, logger, model, n_categories, train_d
 
 
 def model_dispersion(model, batch, logger):
+    raise NotImplementedError()
     n_wu = [1 for _ in range(model.levels)]
     n_stp = [-1 for _ in range(model.levels)]
 
@@ -369,7 +440,7 @@ def plot_latent_state_differences(pred, logger, i_step, major_scope):
     def neg_mse(a, b):
         return -torch.mean((a - b) ** 2, dim=-1, keepdim=True)
 
-    sim_fns = [neg_mse, ActorCriticAgent.goal_similarity]
+    sim_fns = [neg_mse]
     n_rows = 1
     n_cols = len(sim_fns)
     obs = pred['o']
@@ -586,18 +657,54 @@ def train_rmax_agent(agent_model_steps, cfg, eval_env, i_step, level, logger, mo
                                    first_step_mask=start_state_mask.unsqueeze(0),
                                    **optimizers,
                                    logger=logger)
+    rollout_mask = compute_mask(torch.stack(rma_simulation['agent']['terminal']), first_step_mask=start_state_mask)
+    # calculate average observation distance
+    goals = torch.stack(rma_simulation['model']['o'])
+    obs = model.decode_to_obs(goals=goals, level=level)
+    avg_obs_dist = masked_mean((obs[:-1] - obs[1:]) ** 2, rollout_mask[:-1])
+    r_max_losses['monitoring_average_o_distance'] = avg_obs_dist
+
+    # calculate average amount of steps with poisitive reward
+    n_pos_rewards = (torch.stack(rma_simulation['agent']['r']) >= 0).to(torch.float32)
+    # mask out invalid steps
+    n_pos_rewards = torch.where(rollout_mask.to(torch.bool), 0.0, n_pos_rewards)
+    # calculate average amount of trajectories with more than one positive reward step
+    avg_pos_r_per_rollout = torch.mean((n_pos_rewards.sum(dim=0) > 1).to(torch.float32))
+    r_max_losses['monitoring_avg_pos_r_steps'] = avg_pos_r_per_rollout
+
     logger.log(to_np(r_max_losses), Scope.TRAIN() / f'r_max_agent/{level}/', i_step)
     # debugging and inspection
-    if i_step % cfg['trainer']['plot_interval'] == 0 and env_class_is(eval_env, Nav2dEnv):
-        plot_value_function(eval_env, model, rma, level, logger, i_step)
-        plot_rewards(eval_env, model, level, logger, i_step)
-        if level > 0:
-            pass
-            # plot_goals(rma_simulation, model, logger, i_step, level)
+    # if i_step % cfg['trainer']['plot_interval'] == 0 and env_class_is(eval_env, Nav2dEnv):
+    #    plot_value_function(eval_env, model, rma, level, logger, i_step)
+    #    plot_rewards(eval_env, model, level, logger, i_step)
+    #    if level > 0:
+    #        pass
+    #        # plot_goals(rma_simulation, model, logger, i_step, level)
 
-    if level < model.levels - 1:
-        pass
-        # update_model_chunk_distance(i_step, level, logger, model, rma_simulation)
+    if i_step % 5 == 0 and env_class_is(eval_env, Nav2dEnv):
+        with TempFigure(figsize=(12, 12)) as fig:
+            obs = numpyfy(obs)
+            rewards = numpyfy(rma_simulation['agent']['r'])
+            terminals = numpyfy(rma_simulation['agent']['terminal'])
+            rollout_mask = numpyfy(rollout_mask)
+
+            # select one among the highe reward trajectory
+            # rewards_masked = rewards * rollout_mask
+            # i_high_reward_traj = np.argsort(rewards_masked.sum(axis=0))
+            # upper_fraction = ceil(len(i_high_reward_traj) / 10)
+            # i_high_reward_traj = np.random.choice(i_high_reward_traj[-upper_fraction:])
+
+            i_high_reward_traj = random.randint(0, obs.shape[1] - 1)
+            obs = obs[:, i_high_reward_traj, None]
+            rewards = rewards[:, i_high_reward_traj, None]
+            terminals = terminals[:, i_high_reward_traj, None]
+
+            visualize_env(eval_env, fig, observations=obs, rewards=rewards,
+                          terminals=terminals, n_trajs=1)
+            # plt.show()
+            logger.log_plot(fig_to_img(fig),
+                            Scope.TRAIN() / f'r_max_agent/{level}/train_visualization',
+                            i_step)
 
 
 def abstract_model_training_static(abstract_train_driver, model, optimizer):
@@ -626,7 +733,7 @@ def abstract_model_training(abstract_train_driver, model, optimizer, cfg):
     # generate up to date latent states from lower level
     pred, _, _ = model.forward_static(batch, start_state=None, level=0, n_steps=-1, n_warmup=-1)
     # use batch data and up to date world model states to generate inputs for higher level
-    batch_upper = model.filter_up(o=pred['s_embedding'],
+    batch_upper = model.filter_up(o=pred['s_embedding_smpl'],
                                   r=batch['r'],
                                   terminal=batch['terminal'],
                                   level=1)
@@ -701,8 +808,8 @@ def train_gsa(model, level, pred, targets, eval_env, cfg, i_step, logger, sample
 
     """
     # sample random goals from model
-    d_batch = state['s_embedding'].shape[0]
-    device = state['s_embedding'].device
+    d_batch = state['s_embedding_smpl'].shape[0]
+    device = state['s_embedding_smpl'].device
     goal = model.goal_autoencoder.gen_unconditionally(d_batch=d_batch, device=device)
     goal_obs = model.rssm_modules[level].decode(goal, sample=False, reconstruct_observation=True)['o']
 
@@ -718,7 +825,7 @@ def train_gsa(model, level, pred, targets, eval_env, cfg, i_step, logger, sample
     goal = goal.repeat(d_time - 1, 1)
     # this makes the goal sample more noisy and thus adds diversity to the goals
     # _, _, _, goal = model.goal_autoencoder(goal, sample=True)
-    goal = goal.detach()
+    goal = goal.detach()  # prevent gradients to flow through goal to upper level model
     goal_obs = model.rssm_modules[level].decode(goal, sample=False, reconstruct_observation=True)['o']
 
     # perform gsa rollout
@@ -735,14 +842,27 @@ def train_gsa(model, level, pred, targets, eval_env, cfg, i_step, logger, sample
         rewards = numpyfy(goal_simulation['agent']['r'])
         terminals = numpyfy(goal_simulation['agent']['terminal'])
         goal_obs = numpyfy(goal_obs)[None]  # need to add a time dimension to goal observations as well
-        with TempFigure(figsize=(10, 10)) as fig:
+
+        # randomly select n_trajs trajectories
+        n_trajs = 4
+        i_rand = [np.random.randint(0, obs.shape[1]) for _ in range(n_trajs)]
+
+        # traj_lens = np.cumprod(1 - terminals, axis=0).sum(axis=0)
+        # i_length_sorted = np.argsort(traj_lens)[::-1]
+
+        obs = obs[:, i_rand]
+        rewards = rewards[:, i_rand]
+        terminals = terminals[:, i_rand]
+        goal_obs = goal_obs[:, i_rand]
+        with TempFigure(figsize=(12, 12)) as fig:
             visualize_env(eval_env, fig, observations=obs, goal_observations=goal_obs, rewards=rewards,
-                          terminals=terminals, n_trajs=2)
+                          terminals=terminals, n_trajs=n_trajs)
             logger.log_plot(fig, Scope.TRAIN() / f'goal_seeking_agent/{level}/goal_seeking_train_performance', i_step)
 
 
 def train_goal_seeking_agent_goals_above_with_agent(model, level, pred, targets, eval_env, cfg, i_step, logger,
                                                     sample_agents, use_her):
+    raise NotImplementedError('Last used with old RSSM state size of only 6 elements')
     n_groundtruth_goals = 0
     n_generated_goals = 2
     chunk_size = model.strides[level + 1]
@@ -1324,6 +1444,11 @@ def record_episode(cfg, i_step, logger, model, video_env):
     clip = mp.VideoFileClip(video_path)
     n_frames = clip.reader.nframes
 
+    # frame = clip.get_frame(0.1)
+    # plt.imshow(frame)
+    # plt.axis('off')
+    # plt.show()
+
     # resizing the video and printing action and reward values on top
     font = cv2.FONT_HERSHEY_PLAIN
     font_scale = 0.7
@@ -1455,7 +1580,7 @@ def plot_goal_conditioned_value_function(eval_env, model, agent, level, logger, 
     _, pred_grid, _ = model.eval_step(grid_trajs, model_steps=[-1 for _ in range(model.levels)],
                                       sample_state=False, sample_output=False,
                                       force_warmup=[-1 for _ in range(model.levels)])
-    s_embeddings = torch.stack(pred_grid[level]['s_embedding']).flatten(start_dim=0, end_dim=-2)
+    s_embeddings = torch.stack(pred_grid[level]['s_embedding_smpl']).flatten(start_dim=0, end_dim=-2)
     fig, axes = plt.subplots(n_rows, n_cols, subplot_kw={"projection": "3d", 'computed_zorder': False},
                              figsize=(10, 10))
     for ax in axes.ravel():
@@ -1707,39 +1832,26 @@ def update_model_chunk_distance(i_step, l, logger, model, r_max_simulation):
 
 
 def log_prediction_error_plot(batch, cfg, i_step, logger, model):
-    traj_len = 20
+    traj_len = 32
+    max_wu_iterations = 8
     rand_number = random.randint(0, sys.maxsize)
     random.seed(rand_number)
-    trunc_test_batch = valid_subtrajectories_2(batch, traj_len)
-
-    # testing
-    random.seed(rand_number)
-    trunc_test_batch_2 = valid_subtrajectories_2(batch, traj_len)
-    random.seed(rand_number)
-    trunc_test_batch_3 = valid_subtrajectories_debug(batch, traj_len)
-    for k, v in trunc_test_batch.items():
-        assert torch.all(v == trunc_test_batch_2[k])
-        if k != 'terminal':
-            assert torch.all(v == trunc_test_batch_3[k])
-        else:
-            assert not torch.all(v == trunc_test_batch_3[k])
-    # testing end
+    # trunc_test_batch = valid_subtrajectories_2(batch, traj_len)
+    trunc_test_batch = valid_subtrajectories(batch, traj_len)
 
     eval_steps = [-1] + cfg['trainer']['model_train_steps'][1:]
     measurements = [{'o': [], 'r': [], 'terminal': [], 'n_warmup': [], 'perc_valid': None} for _ in range(model.levels)]
-    for n_wu in range(1, traj_len, 3):
-        eval_losses, pred, targets = model.eval_step(trunc_test_batch, model_steps=eval_steps,
-                                                     sample_state=False, sample_output=False,
-                                                     force_warmup=[n_wu for _ in range(model.levels)])
-        eval_losses2, pred2, targets2 = model.eval_step(trunc_test_batch_2, model_steps=eval_steps,
-                                                        sample_state=False, sample_output=False,
-                                                        force_warmup=[n_wu for _ in range(model.levels)])
-        for k, v in pred[0].items():
-            assert torch.all(torch.stack(v) == torch.stack(pred2[0][k])), f'mismatch in {k}'
-        for k, v in targets[0].items():
-            assert torch.all(v == targets2[0][k])
-
-        for l in range(model.levels):
+    for l in range(model.levels):
+        traj_len_level = ceil(traj_len / model.strides[l])
+        wu_stride = 1
+        while (traj_len_level / wu_stride) > max_wu_iterations:
+            wu_stride += 1
+        for n_wu in range(wu_stride, traj_len_level, wu_stride):
+            warmup_steps = [-1] * model.levels
+            warmup_steps[l] = n_wu
+            eval_losses, pred, targets = model.eval_step(trunc_test_batch, model_steps=eval_steps,
+                                                         sample_state=True, sample_output=False,
+                                                         force_warmup=[n_wu for _ in range(model.levels)])
             mask = targets[l]['mask']
 
             # shape of predictions: [T, B, D]
@@ -1766,21 +1878,22 @@ def log_prediction_error_plot(batch, cfg, i_step, logger, model):
         r_diff = measurements[l]['r']
         term_diff = measurements[l]['terminal']
         with TempFigure(figsize=(13, 4)) as fig:
-            for diff, title, pos in zip([o_diff, r_diff, term_diff], ('o', 'r', 'terminal'), (1, 2, 3)):
+            o_key = 'o' if l == 0 else 'goal'
+            for diff, title, pos in zip([o_diff, r_diff, term_diff], (o_key, 'r', 'terminal'), (1, 2, 3)):
                 time_steps = list(range(len(diff[0])))
                 ax = fig.add_subplot(1, 3, pos, projection='3d', computed_zorder=False)
                 ax.set_title(f'Prediction MAE {title}')
                 ax.set_xlabel('Time')
                 ax.set_ylabel('Warmup Steps')
                 ax.set_zlabel('Prediction MAE')
-                ax.set_xticks(time_steps[::2])
+                ax.xaxis.set_major_locator(MaxNLocator(integer=True))
                 ax.set_yticks(warmup_steps)
                 ax.grid(which='major', linewidth=2.0)
                 ax.grid(which='minor', linewidth=0.5)
                 ax.invert_yaxis()
                 # plot percentage of valid trajectories in the background first
-                ax.bar(left=time_steps, height=np.ones_like(time_steps), zs=0, zdir='y', color='lightgrey', alpha=0.7)
-                ax.bar(left=time_steps, height=measurements[l]['perc_valid'], zs=0, zdir='y', color='grey', alpha=0.7)
+                # ax.bar(left=time_steps, height=np.ones_like(time_steps), zs=0, zdir='y', color='lightgrey', alpha=0.7)
+                # ax.bar(left=time_steps, height=measurements[l]['perc_valid'], zs=0, zdir='y', color='grey', alpha=0.7)
                 for i_run, n_wu in enumerate(warmup_steps):
                     y_coord = [n_wu for _ in time_steps]
                     z_coord = diff[i_run]
@@ -1793,7 +1906,7 @@ def log_prediction_error_plot(batch, cfg, i_step, logger, model):
                     ax.plot(time_steps, y_coord, z_coord, linewidth=2)
             plt.tight_layout()
             # plt.show()
-            logger.log_plot(fig_to_img(fig), Scope.TRAIN() / f'model/{l}/prediction_error', i_step)
+            logger.log_plot(fig_to_img(fig, bbox_inches=None), Scope.TRAIN() / f'model/{l}/prediction_error', i_step)
 
 
 # print(torch.cuda.memory_allocated() / torch.cuda.max_memory_allocated())

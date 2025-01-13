@@ -272,7 +272,9 @@ def fig_to_img(fig: plt.Figure,
                minimize_size: bool = True,
                **fig_kwargs):
     buffer = io.BytesIO()
-    fig.savefig(buffer, bbox_inches='tight', **fig_kwargs)
+    if 'bbox_inches' not in fig_kwargs:
+        fig_kwargs['bbox_inches'] = 'tight'
+    fig.savefig(buffer, **fig_kwargs)
     # print(buffer.tell() / 1024)
     if clear_fig:
         plt.clf()
@@ -407,7 +409,7 @@ def prepare_data_old(o: Union[np.ndarray, torch.Tensor],
 
 def count_env_interactions(mem: Sequence[Dict[str, np.ndarray]]):
     # N observations means N-1 interactions, so subtract 1 from trajectory length
-    n_interactions = reduce(lambda a, b: a + len(b['o']) - 1,  mem, 0)
+    n_interactions = reduce(lambda a, b: a + len(b['o']) - 1, mem, 0)
     return n_interactions
 
 
@@ -1120,11 +1122,11 @@ def prepare_env(env: gym.Env):
         # CAUTION: The OneHot wrappers of minigrid produce observation vectors that may have more than one 1 in them,
         # so they're technically not one-hot vectors.
         env = minigrid.wrappers.FullyObsWrapper(env)
-        #env = minigrid.wrappers.OneHotPartialObsWrapper(env)
+        # env = minigrid.wrappers.OneHotPartialObsWrapper(env)
         env = minigrid.wrappers.ImgObsWrapper(env)
-        #env = gym.wrappers.FlattenObservation(env)  # flatten observation tensor to vector
-        #env = minigrid.wrappers.ImgObsWrapper(env)  # remove 'mission' and other fields in observation dice
-        #env = minigrid.wrappers.FlatObsWrapper(env)
+        # env = gym.wrappers.FlattenObservation(env)  # flatten observation tensor to vector
+        # env = minigrid.wrappers.ImgObsWrapper(env)  # remove 'mission' and other fields in observation dice
+        # env = minigrid.wrappers.FlatObsWrapper(env)
         env = minigrid.wrappers.ReseedWrapper(env)
     elif isinstance(env.observation_space, gym.spaces.dict.Dict):
         env = gym.wrappers.FlattenObservation(env)
@@ -1163,7 +1165,7 @@ def list_of_tuples_to_tuple_of_lists(list_of_tpls: List[Any, ...]) -> Tuple[Any,
 
 def list_of_dicts_to_dict_of_lists(list_of_dicts: List[Dict[Any, ...]]):
     ret = {k: [] for k in list_of_dicts[0].keys()}
-    for i,x in enumerate(list_of_dicts):
+    for i, x in enumerate(list_of_dicts):
         try:
             for k, v in x.items():
                 ret[k].append(v)

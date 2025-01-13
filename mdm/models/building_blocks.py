@@ -713,7 +713,8 @@ class MLPDecoder(OutputDecoder):
 
 def pad_time_series(x: torch.Tensor,
                     pad_value: float,
-                    window_size: int):
+                    window_size: int,
+                    pad_front: bool = False):
     d_time, d_batch = x.shape[:2]
     overhang = d_time % window_size
 
@@ -726,7 +727,10 @@ def pad_time_series(x: torch.Tensor,
         pad_shp = list(x.shape)
         pad_shp[0] = n_pad
         x_pad = torch.full(pad_shp, pad_value, device=x.device)
-        x = torch.concat([x, x_pad], dim=0)
+        if pad_front:
+            x = torch.concat([x_pad, x], dim=0)
+        else:
+            x = torch.concat([x, x_pad], dim=0)
 
     return x, n_pad
 

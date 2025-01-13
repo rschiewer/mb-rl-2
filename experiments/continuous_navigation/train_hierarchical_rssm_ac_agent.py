@@ -31,7 +31,7 @@ def main():
     parser.add_argument('-seed', type=int, default=None)
     args = parser.parse_args()
 
-    cfg = load_yaml(here() / 'cfg_hierarchical_pointmaze.yaml')
+    cfg = load_yaml(here() / 'cfg_hierarchical_nav2d.yaml')
     neptune_cfg = load_yaml(here() / cfg['neptune_cfg'])
 
     if args.d_batch:
@@ -53,7 +53,7 @@ def main():
                                '_mask_agent': 50,
                                '_simulated_ground_truth_goal_distance': 50,
                                '_sanity_check_goal_computation': 50,
-                               'reachability_penalty': 200})
+                               'reachability_penalty': 100})
 
     def make_env_fn():
         _env = gym.make(cfg['env_name'])
@@ -90,10 +90,10 @@ def main():
 
     collect_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['trainer']['collect_envs'])
     collect_env = CacheLastStepVecEnv(collect_env)
-    # collect_env = CacheLastStepEnv(make_env_fn())
+    #collect_env = CacheLastStepEnv(make_env_fn())
     eval_env = gym.vector.AsyncVectorEnv([make_env_fn] * cfg['eval']['eval_envs'])
     eval_env = CacheLastStepVecEnv(eval_env)
-    # eval_env = CacheLastStepEnv(make_env_fn())
+    #eval_env = CacheLastStepEnv(make_env_fn())
 
     video_env = gym.make(cfg['env_name'], render_mode='rgb_array')
     video_env = prepare_env(video_env)
@@ -148,11 +148,14 @@ def main():
 
         with TempFigure() as fig:
             for i_lvl, plan_lvl in enumerate(plan):
-                axis = fig.add_subplot(1, len(plan), i_lvl+1)
-                axis.set_title(f'Level {i_lvl} Plan')
-                plan_lvl = {k: numpyfy(v) for k, v in plan_lvl.items()}
-                visualize_env(collect_env, axis, observations=plan_lvl['o'], rewards=plan_lvl['r'],
-                              terminals=plan_lvl['terminal'])
+                try:
+                    plan_lvl = {k: numpyfy(v) for k, v in plan_lvl.items()}
+                    axis = fig.add_subplot(1, len(plan), i_lvl+1)
+                    axis.set_title(f'Level {i_lvl} Plan')
+                    visualize_env(collect_env, axis, observations=plan_lvl['o'], rewards=plan_lvl['r'],
+                                  terminals=plan_lvl['terminal'])
+                except RuntimeError:
+                    pass
             logger.log_plot(fig, Scope.TRAIN() / 'eval_policy_plan', i_step)
 
     print('Starting Training')

@@ -11,6 +11,8 @@ from mdm.models.hierarchical_rssm import HierarchicalRSSM
 from mdm.utils.utils import prepare_data, append_memory, extend_memory
 from mdm.utils.torch_tools import unsqueeze_right, compute_mask
 from mdm.utils.gym_wrappers import CacheLastStepEnv, CacheLastStepVecEnv
+from mdm.models.rssm_cell import rssm_state_keys, rssm_remove_labels
+from mdm.models.building_blocks import pad_time_series
 
 
 class LatentAgentPolicy(Policy):
@@ -232,12 +234,14 @@ class HierarchicalLatentAgentPolicy(Policy):
             # self.env_data_below_cache[i_lvl]['terminal'] = self.env_data_below_cache[i_lvl]['terminal'][n_steps:]
 
             # take real actions from this level instead of the ones from action autoencoder if they are available
-            if len(self.act_cache[i_lvl]) > 0:
-                data_filtered['a'] = self.act_cache[i_lvl].pop(0).unsqueeze(0)  # take oldest action from cache
+            # if len(self.act_cache[i_lvl]) > 0:
+            #    data_filtered['a'] = self.act_cache[i_lvl].pop(0).unsqueeze(0)  # take oldest action from cache
             # else:
             #    self.action_history[i_lvl].append(data_filtered['a'][0])  # add filtered up action + remove time dim
-            #if len(self.act_cache[i_lvl]) > 0:
-            #    self.act_cache[i_lvl].pop(0)  # remove oldest action from action cache
+
+            # take lower level actions and filter them up instead of taking the real upper level action
+            if len(self.act_cache[i_lvl]) > 0:
+                self.act_cache[i_lvl].pop(0)  # remove oldest action from action cache
 
             # memorize the latest inputs the model has seen as they are needed for the agent during planning
             state = self.grounded_env_states[i_lvl]
@@ -284,22 +288,71 @@ class HierarchicalLatentAgentPolicy(Policy):
             self.next_state_update[i_lvl] = self.model.strides[i_lvl]
 
     @torch.no_grad()
+    def _replan_precise(self):
+        # find highest planning level
+        i_highest = sum(self.level_active) - 1
+
+        # Do one r_max step on highest active level, except when a terminal transition on the highest active
+        # level is predictied. In that case, use next lower level until either no terminal transition is predicted
+        # or we're at level 0.
+        for manager_lvl in reversed(range(i_highest + 1)):
+            state = self.grounded_env_states[i_highest]
+            agent = self.model.r_max_agents[i_highest][0]
+            simulation = agent.act_in_sim(env_start_state=state, sim_env=self.model, n_steps=1,
+                                          sample_actions=self.stochastic, sample_states=self.sample_world_model,
+                                          expl_noise=self.exploration_noise, reconstruct=True)
+            a_agent = simulation['agent']['a'][1:]  # remove frst action from record as it's padding
+            model_sim = {k: v[1:] for k, v in simulation['model'].items()}  # remove first time step as it's the input
+            extend_memory(self.planning_record[i_highest], model_sim)
+
+            assert len(a_agent) == 1
+
+            self.act_cache[i_highest] += a_agent
+            self.action_history[i_highest] += a_agent
+
+            # if a terminal transition is predicted, transfer control to next lower level
+            if model_sim['terminal'][0]:
+                self.level_active[manager_lvl] = False
+                i_highest -= 1
+            else:
+                break
+
+        # act with goal seeking agents
+        if i_highest > 0:
+            goals_from_above = simulation['model']['o'][1:]  # remove first goal as it's for current state
+            chunk_id = random.randint(0, 100000)
+            for i_lvl in reversed(range(0, i_highest)):
+                state = self.grounded_env_states[i_lvl]
+                agent = self.model.goal_seeking_agents[i_lvl][0]
+                n_steps = self.chunk_lengths[i_lvl + 1]
+                new_goals = []
+                for goal in goals_from_above:
+                    simulation = agent.act_in_sim(env_start_state=state, sim_env=self.model, n_steps=n_steps, goal=goal,
+                                                  sample_actions=self.stochastic, expl_noise=0.0,
+                                                  sample_states=self.sample_world_model, reconstruct=True)
+                    # simulation['agent']['a'] = [torch.zeros_like(x) for x in simulation['agent']['a']]
+                    state = simulation['model_state']
+                    a_agent = simulation['agent']['a'][1:]  # remove frst action from record as it's padding
+                    self.act_cache[i_lvl] += a_agent
+                    self.action_history[i_lvl] += a_agent
+                    self.chunk_history.extend([chunk_id for _ in a_agent])
+                    # store planning results to record for later
+                    model_sim = {k: v[1:] for k, v in simulation['model'].items()}
+                    extend_memory(self.planning_record[i_lvl], model_sim)
+                    if i_lvl > 0:
+                        new_goals += simulation['model']['o'][1:]
+                goals_from_above = new_goals
+        else:
+            self.chunk_history.append(-1)
+
+        self.action_queue += self.act_cache[0]
+
+    @torch.no_grad()
     def _replan(self):
         # find highest planning level
         i_highest = sum(self.level_active) - 1
 
-        # 1: plan with r_max agent on highest level available
-        # 2: use all agents below to go to intermediate goals
-
-        # find out if we're in warmup phase and need to plan more than one step ahead
-        # if i_highest < self.model.i_top:
-        #    n_plan_steps = self.model.strides[i_highest + 1] - 1  # first initial zero action
-        # elif i_highest < self.model.i_top:
-        #    n_plan_steps = self.model.strides[i_highest + 1]
-        # else:
-        #    n_plan_steps = 1  # we're not in warmup phase anymore, only plan a single step ahead on highest level
-
-        # one r_max step on highest level
+        # one r_max step on highest active level
         state = self.grounded_env_states[i_highest]
         agent = self.model.r_max_agents[i_highest][0]
         simulation = agent.act_in_sim(env_start_state=state, sim_env=self.model, n_steps=1,
@@ -468,16 +521,17 @@ def extract_plan(policy: HierarchicalLatentAgentPolicy):
     env_terminal = torch.stack(flight_record[0]['terminal'])
 
     for i_lvl, record in enumerate(planning_record):
-        o[i_lvl] = torch.stack(record['o'])
-        # decode goal to observation if we're at an higher level
-        if i_lvl > 0:
-            i_current_lvl = i_lvl
-            while i_current_lvl > 0:
-                o[i_lvl] = model.rssm_modules[i_current_lvl - 1].decode(o[i_lvl], sample=False,
-                                                                        reconstruct_observation=True)['o']
-                i_current_lvl -= 1
-        r[i_lvl] = torch.stack(record['r'])
-        terminal[i_lvl] = torch.stack(record['terminal'])
+        if len(record['o']) > 0:
+            o[i_lvl] = torch.stack(record['o'])
+            # decode goal to observation if we're at an higher level
+            if i_lvl > 0:
+                i_current_lvl = i_lvl
+                while i_current_lvl > 0:
+                    o[i_lvl] = model.rssm_modules[i_current_lvl - 1].decode(o[i_lvl], sample=False,
+                                                                            reconstruct_observation=True)['o']
+                    i_current_lvl -= 1
+            r[i_lvl] = torch.stack(record['r'])
+            terminal[i_lvl] = torch.stack(record['terminal'])
 
     return [{'o': o_, 'r': r_, 'terminal': terminal_} for o_, r_, terminal_ in zip(o, r, terminal)]
 
@@ -525,3 +579,193 @@ def extract_train_data(policy: HierarchicalLatentAgentPolicy,
     abstract_trajectory = {k: v.detach().cpu().numpy()[:, 0] for k, v in abstract_trajectory.items()}
 
     return [abstract_trajectory]
+
+
+class ReactiveHierarchicalLatentAgentPolicy(Policy):
+
+    def __init__(self,
+                 model: HierarchicalRSSM,
+                 exploration_noise: float = 0.0,
+                 stochastic: bool = False,
+                 max_history_len: int = 50,
+                 use_slow_world_model: bool = False,
+                 sample_world_model: bool = False):
+        super().__init__()
+        raise NotImplementedError('forbidden')
+
+        self.model = model
+        self.exploration_noise = exploration_noise
+        self.stochastic = stochastic
+        self.max_histroy_len = max_history_len
+        self.env_data_cache = {}
+
+        o_key = []
+        for agent in itertools.chain.from_iterable([model.r_max_agents, model.goal_seeking_agents]):
+            if agent is not None:
+                o_key.append(agent[0].observation_type)
+
+        o_key = set(o_key)
+        assert len(o_key) == 1, "all agents should use the same observation key"
+        self.use_slow_world_model = use_slow_world_model
+        self.sample_world_model = sample_world_model
+
+        if model.r_max_agents[0][0].discrete_actions:
+            self.one_hot_keys = {'a': model.r_max_agents[0][0].d_a}
+        else:
+            self.one_hot_keys = {}
+
+        self.reset()
+
+    def reset(self):
+        self.env_data_cache = {}
+
+    @torch.no_grad()
+    def _prep_step(self,
+                   env: Union[CacheLastStepEnv, CacheLastStepVecEnv]):
+        device = self.model.device
+        # get data and add time dim
+        o = torch.from_numpy(np.array(env.last_o)).unsqueeze(0).to(device=device, dtype=torch.float32)
+        a = torch.from_numpy(np.array(env.last_a)).unsqueeze(0).to(device=device, dtype=torch.float32)
+        r = torch.from_numpy(np.array(env.last_r)).unsqueeze(0).to(device=device, dtype=torch.float32)
+        terminal = torch.from_numpy(np.array(env.last_term)).unsqueeze(0).to(device=device, dtype=torch.float32)
+        truncated = torch.from_numpy(np.array(env.last_trunc)).unsqueeze(0).to(device=device, dtype=torch.float32)
+        if isinstance(env, CacheLastStepEnv):  # add batch dim if unbatched env
+            o, a, r, terminal, truncated = [x.unsqueeze(1) for x in (o, a, r, terminal, truncated)]
+        env_data = {'o': o, 'a': a, 'r': r, 'terminal': terminal, 'truncated': truncated, 'mask': torch.zeros_like(r)}
+        env_data = prepare_data(env_data, remove_keys=['truncated'], n_categories=self.one_hot_keys)
+        env_data = {k: v[0] for k, v in env_data.items()}
+        return env_data
+
+    @torch.no_grad()
+    def _replan(self):
+        # find highest planning level
+        i_highest = sum(self.level_active) - 1
+
+        # one r_max step on highest active level
+        state = self.grounded_env_states[i_highest]
+        agent = self.model.r_max_agents[i_highest][0]
+        simulation = agent.act_in_sim(env_start_state=state, sim_env=self.model, n_steps=1,
+                                      sample_actions=self.stochastic, sample_states=self.sample_world_model,
+                                      expl_noise=self.exploration_noise, reconstruct=True)
+        a_agent = simulation['agent']['a'][1:]  # remove frst action from record as it's padding
+        model_sim = {k: v[1:] for k, v in simulation['model'].items()}  # remove first time step as it's the input
+        extend_memory(self.planning_record[i_highest], model_sim)
+
+        assert len(a_agent) == 1
+
+        self.act_cache[i_highest] += a_agent
+        self.action_history[i_highest] += a_agent
+
+        # act with goal seeking agents
+        if i_highest > 0:
+            goals_from_above = simulation['model']['o'][1:]  # remove first goal as it's for current state
+            chunk_id = random.randint(0, 100000)
+            for i_lvl in reversed(range(0, i_highest)):
+                state = self.grounded_env_states[i_lvl]
+                agent = self.model.goal_seeking_agents[i_lvl][0]
+                n_steps = self.chunk_lengths[i_lvl + 1]
+                new_goals = []
+                for goal in goals_from_above:
+                    simulation = agent.act_in_sim(env_start_state=state, sim_env=self.model, n_steps=n_steps, goal=goal,
+                                                  sample_actions=self.stochastic, expl_noise=0.0,
+                                                  sample_states=self.sample_world_model, reconstruct=True)
+                    # simulation['agent']['a'] = [torch.zeros_like(x) for x in simulation['agent']['a']]
+                    state = simulation['model_state']
+                    a_agent = simulation['agent']['a'][1:]  # remove frst action from record as it's padding
+                    self.act_cache[i_lvl] += a_agent
+                    self.action_history[i_lvl] += a_agent
+                    self.chunk_history.extend([chunk_id for _ in a_agent])
+                    # store planning results to record for later
+                    model_sim = {k: v[1:] for k, v in simulation['model'].items()}
+                    extend_memory(self.planning_record[i_lvl], model_sim)
+                    if i_lvl > 0:
+                        new_goals += simulation['model']['o'][1:]
+                goals_from_above = new_goals
+        else:
+            self.chunk_history.append(-1)
+
+        self.action_queue += self.act_cache[0]
+
+    @torch.no_grad()
+    def get_action(self):
+        # check what's the currently highest possible model level
+        n_env_steps = len(self.env_data_cache['o'])
+        required_env_steps = np.cumprod(self.model.strides)
+
+        highest_level = 0
+        for level, req_steps in reversed(list(enumerate(required_env_steps))):
+            if req_steps <= n_env_steps:
+                highest_level = level
+                break
+
+        if n_env_steps > self.max_histroy_len:
+            truncated_env_data = {k: v[-self.max_histroy_len:] for k, v in self.env_data_cache.items()}
+        else:
+            truncated_env_data = {k: v for k, v in self.env_data_cache.items()}
+        env_data = {k: torch.stack(v) for k, v in truncated_env_data.items()}
+
+        # if n_env_steps - required_env_steps[highest_level] > 0 and n_env_steps % re:
+        #    n_pad = required_env_steps[highest_level] - (n_env_steps % required_env_steps[highest_level])
+        # else:
+        #    n_pad = 0
+
+        # if n_pad > 0:
+        env_data_pad = {k: pad_time_series(v, 0.0, required_env_steps[highest_level], pad_front=True)[0] for k, v in
+                        env_data.items()}
+
+        _, _, model_state = self.model.forward_all_levels(env_data_pad,
+                                                          warmup_steps=[-1 for _ in self.model.rssm_modules],
+                                                          model_steps=[-1 for _ in self.model.rssm_modules],
+                                                          sample_state=self.sample_world_model,
+                                                          sample_output=False)
+
+        agent = self.model.r_max_agents[highest_level][0]
+        simulation = agent.act_in_sim(env_start_state=model_state[highest_level], sim_env=self.model, n_steps=1,
+                                      sample_actions=self.stochastic, sample_states=self.sample_world_model,
+                                      expl_noise=self.exploration_noise, reconstruct=True)
+
+        # act with goal seeking agents
+        if highest_level > 0:
+            for plan_level in reversed(range(0, highest_level)):
+                goal_from_above = simulation['model']['o'][1]  # 0th goal is reconstruction from start state
+                agent = self.model.goal_seeking_agents[plan_level][0]
+                n_steps = self.model.strides[plan_level + 1]
+                simulation = agent.act_in_sim(env_start_state=model_state[plan_level], sim_env=self.model, n_steps=1,
+                                              goal=goal_from_above, sample_actions=self.stochastic, expl_noise=0.0,
+                                              sample_states=self.sample_world_model, reconstruct=True)
+
+        a_agent = simulation['agent']['a'][1]  # frst action from record is padding
+
+        return a_agent
+
+    @torch.no_grad()
+    def __call__(self,
+                 env: Union[CacheLastStepEnv, CacheLastStepVecEnv]):
+        # explicitly set eval mode
+        model_mode = self.model.training
+        self.model.eval()
+        agent_modes = [a[0].training for a in self.model.r_max_agents + self.model.goal_seeking_agents]
+        for agent in self.model.r_max_agents + self.model.goal_seeking_agents:
+            agent[0].eval()
+
+        # first step: store current env ground truth data to cache
+        preproc_env_data = self._prep_step(env)
+        for k, v in preproc_env_data.items():
+            data = self.env_data_cache.get(k, [])
+            data.append(v)
+            self.env_data_cache[k] = data
+
+        action = self.get_action()
+
+        # check if we have one-hot actions, in that case we need to transform actions back to int index format
+        if 'a' in self.one_hot_keys:
+            action = torch.argmax(action, dim=-1)
+
+        if isinstance(env, CacheLastStepEnv):  # remove batch dimension if it's not a vector env
+            action = action[0]
+
+        # explicitly reset model and agents to previous mode
+        self.model.train(model_mode)
+        for agent, mode in zip(self.model.r_max_agents + self.model.goal_seeking_agents, agent_modes):
+            agent[0].train(mode)
+        return action.detach().cpu().numpy()

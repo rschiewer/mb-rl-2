@@ -445,6 +445,8 @@ class RSSMCell(torch.nn.Module):
         r_dist, r_smpl = self.r_decoder(s, sample)
         term_dist, term_smpl = self.term_decoder(s, sample)
 
+        #term_smpl = torch.where(r_smpl > 0, torch.ones_like(term_smpl), torch.zeros_like(term_smpl))
+
         return {'o': o_smpl, 'o_dist': o_dist, 'r': r_smpl, 'r_dist': r_dist, 'terminal': term_smpl,
                 'terminal_dist': term_dist}
 
@@ -456,12 +458,13 @@ class RSSMCell(torch.nn.Module):
 
         d_batch = s_embedding.shape[0]
         # generate empty init state tuple and fill in h, z and s_embedding
-        state = self.init_state(d_batch)
         # extract h and z sample from embedding, which is just a concatenation of the two
         h = s_embedding[..., :self.d_h]
         z_smpl = s_embedding[..., self.d_h:]
+        state = self.init_state(d_batch, s_embedding.device)
         # re-pack state tuple
         state = (h, z_smpl, state[2], state[3], state[4], s_embedding)
+        #state = (h, z_smpl, None, None, None, s_embedding)
 
         return state  # holds all information required to continue a rollout with the RSSM
 

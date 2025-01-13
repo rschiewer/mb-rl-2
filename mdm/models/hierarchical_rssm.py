@@ -5,6 +5,7 @@ import random
 import sys
 from itertools import chain, combinations
 
+import matplotlib.pyplot as plt
 import torch.distributions as torchd
 import torch.nn
 from torch.nn import ModuleList, ModuleDict
@@ -12,7 +13,8 @@ from torch.nn import ModuleList, ModuleDict
 from mdm.logging.logger import GlobalLogger, Scope
 from mdm.models.building_blocks import *
 from mdm.models.dynamics_model import DynamicsModel
-from mdm.models.rssm_cell import RSSMCell, rssm_stack_states, rssm_detach_state, rssm_add_labels, RSSMStateType
+from mdm.models.rssm_cell import RSSMCell, rssm_stack_states, rssm_detach_state, rssm_add_labels, RSSMStateType, \
+    rssm_state_keys, rssm_remove_labels
 from mdm.models.vae import VAE
 from mdm.policies.actor_critic_agent import ActorCriticAgent
 from mdm.utils.torch_tools import *
@@ -191,7 +193,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         s_mem_tm1_to_Tm1 = list_of_tuples_to_tuple_of_lists(s_mem_tm1_to_Tm1)
 
         # decode predictions from states
-        s_embed_t0_to_T = torch.stack(s_mem_t0_to_T[-1])
+        s_embed_t0_to_T = torch.stack(s_mem_t0_to_T[5])
         pred_t0_to_T = mdl.decode(s_embed_t0_to_T, sample=sample_output, reconstruct_observation=reconstruct)
         # adhere to convention and make first dimension a list
         pred_t0_to_T = {k: dim_to_list(v, 0) for k, v in pred_t0_to_T.items()}
@@ -262,10 +264,41 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             assert mask is not None
             assert torch.allclose(torch.round(mask), mask), 'Mask seems to contain values other than 1.0 and 0.0'
 
+        if mask is None:
+            if o:
+                x = o
+            elif a:
+                x = a
+            elif r:
+                x = r
+            elif terminal:
+                x = terminal
+            else:
+                raise RuntimeError('Need at least one of o, a, r, terminal arguments')
+            mask = torch.zeros(len(x), x[0].shape[0], 1, device=x[0].device, dtype=x[0].dtype)
+
         simulated_ground_truth = {}
         if o is not None:
-            simulated_ground_truth['o'] = flt['o'](stack_if_list(o[:n_steps]), mask=mask,
+            simulated_ground_truth['o'] = flt['o'](stack_if_list(o[:n_steps]), mask=mask[:n_steps],
                                                    window_size=window_size).detach()
+            if window_size is None:
+                ws = flt['o'].window_size
+            else:
+                ws = window_size
+
+            if rnn_states is not None and z is not None and s_embedding is not None \
+                    and len(rnn_states) > 1 and len(z) > 1 and len(s_embedding) > 1:
+                flt_ = PickOneUpwardsFilter(window_size=ws, offset=-1)
+                rnn_states_ = flt_(stack_if_list(rnn_states[:n_steps]), mask=mask[:n_steps], window_size=ws).detach()
+                z_ = flt_(stack_if_list(z[:n_steps]), mask=mask[:n_steps], window_size=ws).detach()
+                s_embedding_ = flt_(stack_if_list(s_embedding[:n_steps]), mask=mask[:n_steps], window_size=ws).detach()
+                mask_ = flt_(stack_if_list(mask[:n_steps]), window_size=ws).detach()
+
+                if len(rnn_states_) > 1 and len(z_) > 1 and len(s_embedding_) > 1:
+                    pass
+                    # corrected_goals = self.correct_goals(rnn_states_, z_, s_embedding_, mask_, level)
+                    # simulated_ground_truth['o'] = 0.7 * simulated_ground_truth['o'] + 0.3 * corrected_goals
+
         if a is not None:
             if level > 0:
                 n_perm = 8
@@ -278,50 +311,52 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 z_ = stack_if_list(z[:n_steps])
                 rnn_states_ = stack_if_list(rnn_states[:n_steps])
                 s_embedding_ = stack_if_list(s_embedding[:n_steps])
-                mask_ = stack_if_list(mask)
+                mask_ = stack_if_list(mask[:n_steps])
                 if self.action_bin_size is not None:
                     a_ = self.bin_actions(a_, self.action_bin_size)
                 # a_, _ = self.sort_perm_invariant_actions(a_, z_, rnn_states_, s_embedding_, mask_, ws, n_perm,
                 #                                         n_rep, level - 1)
-                a_, _ = self.sort_actions(a_, z_, rnn_states_, s_embedding_, mask_, ws, n_perm, n_rep, level - 1)
+                # a_, _ = self.sort_actions(a_, z_, rnn_states_, s_embedding_, mask_, ws, n_perm, n_rep, level - 1)
             else:
                 a_ = stack_if_list(a[:n_steps])
 
-            simulated_ground_truth['a'] = flt['a'](a_, mask=mask, window_size=window_size,
+            simulated_ground_truth['a'] = flt['a'](a_, mask=mask[:n_steps], window_size=window_size,
                                                    sample=sample_action_autoencoder).detach()
         if r is not None:
-            simulated_ground_truth['r'] = flt['r'](stack_if_list(r[:n_steps]), mask=mask,
+            simulated_ground_truth['r'] = flt['r'](stack_if_list(r[:n_steps]), mask=mask[:n_steps],
                                                    window_size=window_size).detach()
             if level > 0 and self.reachability_penalty:
-                # obs_diff = torch.mean((simulated_ground_truth['o'][:-1] - simulated_ground_truth['o'][1:]) ** 2,
-                #                      dim=-1, keepdim=True)
-                # simulated_ground_truth['r'][1:] += obs_diff
+                if window_size is None:
+                    ws = self.strides[level]
+                else:
+                    ws = window_size
 
                 # filter out states and state embeddings from end of each chunk
-                state_flt = PickOneUpwardsFilter(window_size=self.strides[level], offset=-1)
-                rnn_states = state_flt(stack_if_list(rnn_states[:n_steps]), mask=mask, window_size=window_size).detach()
-                z = state_flt(stack_if_list(z[:n_steps]), mask=mask, window_size=window_size).detach()
-                s_embedding = state_flt(stack_if_list(s_embedding[:n_steps]), mask=mask,
-                                        window_size=window_size).detach()
+                flt_ = PickOneUpwardsFilter(window_size=ws, offset=-1)
+                rnn_states_ = flt_(stack_if_list(rnn_states[:n_steps]), mask=mask[:n_steps], window_size=ws).detach()
+                z_ = flt_(stack_if_list(z[:n_steps]), mask=mask[:n_steps], window_size=ws).detach()
+                s_embedding_ = flt_(stack_if_list(s_embedding[:n_steps]), mask=mask[:n_steps], window_size=ws).detach()
+                mask_ = flt_(stack_if_list(mask[:n_steps]), window_size=ws).detach()
                 # compute reachability with the resulting states
                 # max reachability is 1, which means the starting state and the goal are directly adjacent
                 # min reachabilitiy is 0, which means the agent needed all steps or even more
-                reach_penalty = self.reachability(rnn_states, z, s_embedding, level)
-                # avoid that rewards becones zero at full penalty, this could accidentally drown out negative rewards
-                #reach_penalty = torch.clamp(reach_penalty, 0.0, 0.5)
-                #simulated_ground_truth['r'] = torch.where(simulated_ground_truth['r'] > 0,
-                #                                          simulated_ground_truth['r'] * (1 - reach_penalty),
-                #                                          simulated_ground_truth['r'] * (1 + reach_penalty))
-                simulated_ground_truth['r'] += reach_penalty * 0.1
+                if z_.shape[0] > 1:  # only compute reachability penalty if we have more than 1 step
+                    reach_penalty = self.reachability(rnn_states_, z_, s_embedding_, mask_, level)
+                    # avoid that rewards becones zero at full penalty
+                    # reach_penalty = torch.clamp(reach_penalty, 0.0, 0.5)
+                    # simulated_ground_truth['r'] = torch.where(simulated_ground_truth['r'] > 0,
+                    #                                          simulated_ground_truth['r'] * (1 - reach_penalty),
+                    #                                          simulated_ground_truth['r'] * (1 + reach_penalty))
+                    simulated_ground_truth['r'] -= reach_penalty * 0.1
 
-                if GlobalLogger.can_log('reachability_penalty', self._current_train_step):
-                    msg = {'reachability_penalty': reach_penalty.mean().unsqueeze(0).detach().cpu().numpy()}
-                    GlobalLogger.logger.log(msg,
-                                            Scope.TRAIN() / f'model/{level}/reachability_penalty',
-                                            time_step=self._current_train_step)
+                    if GlobalLogger.can_log('reachability_penalty', self._current_train_step):
+                        msg = {'reachability_penalty': reach_penalty.mean().unsqueeze(0).detach().cpu().numpy()}
+                        GlobalLogger.logger.log(msg,
+                                                Scope.TRAIN() / f'model/{level}',
+                                                time_step=self._current_train_step)
 
         if terminal is not None:
-            simulated_ground_truth['terminal'] = flt['terminal'](stack_if_list(terminal[:n_steps]), mask=mask,
+            simulated_ground_truth['terminal'] = flt['terminal'](stack_if_list(terminal[:n_steps]), mask=mask[:n_steps],
                                                                  window_size=window_size).detach()
         if mask is not None:
             simulated_ground_truth['mask'] = flt['mask'](stack_if_list(mask[:n_steps]), mask=None,
@@ -329,10 +364,104 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
         return simulated_ground_truth
 
+    def correct_goals(self,
+                      rnn_states: torch.Tensor,
+                      z: torch.Tensor,
+                      s_embedding: torch.Tensor,
+                      mask: torch.Tensor,
+                      level: int):
+        # Let GSA start in final state of one chunk and navigate to final state of next chunk to obtain a correction
+        # for the goals.
+        # The first elements in rnn_states and z come from the end of the first chunk. Thus, we technically omit the
+        # first chunk when computing the penalty.
+
+        # create aliases for various subtrajectories
+        states_t0_to_Tm1 = rnn_states[:-1]
+        z_t0_to_Tm1 = z[:-1]
+        s_embed_t0_to_Tm1 = s_embedding[:-1]
+        s_embed_t1_to_T = s_embedding[1:]
+        mask_t0_to_Tm1 = mask[:-1]
+        # create aliases for time and batch dimension sizes
+        T, B = s_embedding.shape[:2]
+        Tm1 = T - 1
+
+        # fold time into batch dimension
+        states_t0_to_Tm1_rs = states_t0_to_Tm1.reshape(Tm1 * B, *states_t0_to_Tm1.shape[2:])
+        z_t0_to_Tm1_rs = z_t0_to_Tm1.reshape(Tm1 * B, *z_t0_to_Tm1.shape[2:])
+        s_embed_t0_to_Tm1_rs = s_embed_t0_to_Tm1.reshape(Tm1 * B, *s_embed_t0_to_Tm1.shape[2:])
+        s_embed_t1_to_T_rs = s_embed_t1_to_T.reshape(Tm1 * B, *s_embed_t1_to_T.shape[2:])
+        mask_t0_to_Tm1_rs = mask_t0_to_Tm1.reshape(Tm1 * B, 1)
+
+        # we only need the rnn_state, z and s_embed fields in RSSM state to start simulation, rest can be zeros
+        start_state_t0_to_Tm1 = self.rssm_modules[level - 1].init_state(Tm1 * B, z.device)
+        start_state_t0_to_Tm1 = (start_state_t0_to_Tm1[0],
+                                 z_t0_to_Tm1_rs,
+                                 start_state_t0_to_Tm1[2],
+                                 start_state_t0_to_Tm1[3],
+                                 states_t0_to_Tm1_rs,
+                                 s_embed_t0_to_Tm1_rs,
+                                 s_embed_t0_to_Tm1_rs)
+
+        # do simulation
+        gsa = self.goal_seeking_agents[level - 1][0]
+        with FreezeParameters([gsa]):
+            simulation = gsa.act_in_sim(env_start_state=start_state_t0_to_Tm1, sim_env=self,
+                                        n_steps=self.strides[level] + 1, goal=s_embed_t1_to_T_rs,
+                                        sample_states=False)
+
+        reached_goals = simulation['model']['s_embedding'][-1]
+        reached_goals_rs = reached_goals.reshape(Tm1, B, s_embed_t1_to_T_rs.shape[-1])
+        reached_goals_rs = torch.concat([s_embed_t0_to_Tm1[0:1], reached_goals_rs])
+
+        # penalize chunks that have goals reachable in fewer steps than chunk_size
+        goal_terminals = torch.stack(simulation['agent']['terminal'])
+        goal_terminals = goal_terminals[1:]  # remove first time step which is start state
+        # each steps after a terminal transition is masked, i.e. the mask tells us how many steps the gsa needed
+        # to get to the goal
+        step_budget_left = compute_mask(goal_terminals, first_step_mask=mask_t0_to_Tm1_rs)
+        step_budget_left = step_budget_left.sum(dim=0)
+        # the needed steps are the max steps available (i.e. the chunk length) minus the masked steps
+        steps_needed = self.strides[level] - step_budget_left
+        # filter out trajectories that were invalid from the beginning
+        steps_needed = torch.where(steps_needed == 0, self.strides[level], steps_needed)
+        # normalize the steps needed
+        steps_needed = steps_needed / self.strides[level]
+        # penalty can at most be 1 - 1/self.strides[level] if steps needed is 1
+        steps_needed_penalty = 1 - steps_needed
+        # unfold batch and time dimensions, remember that we omitted first time step
+        steps_needed_penalty_rs = steps_needed_penalty.reshape(Tm1, B, 1)
+        # add zero penalty for first chunk to match shapes
+        penalty_mock_first_step = torch.zeros_like(steps_needed_penalty_rs[0:1])
+        steps_needed_penalty_rs = torch.concat([penalty_mock_first_step, steps_needed_penalty_rs])
+
+        return reached_goals_rs
+
+    def reachability_simple(self,
+                            s_embed_start: torch.Tensor,
+                            s_embed_end: torch.Tensor,
+                            level: int):
+        model_below = self.rssm_modules[level - 1]
+        start_state = model_below.rssm_state_from_embedding(s_embed_start)
+
+        # do simulation
+        gsa = self.goal_seeking_agents[level - 1][0]
+        with FreezeParameters([gsa]):  # model parameters are frozen inside act_in_sim() method
+            simulation = gsa.act_in_sim(env_start_state=start_state, sim_env=self,
+                                        n_steps=self.strides[level], goal=s_embed_end)
+
+        # penalize chunks that have goals reachable in fewer steps than chunk_size
+        goal_terminals = torch.stack(simulation['agent']['terminal'])
+        goal_terminals = goal_terminals[1:]  # remove first time step which is start state
+        goal_terminals = goal_terminals[:-1]  # if last step is terminal, that's ok so we don't penalize it
+        # penalty should be largest the earlier the goal was reached
+        n_steps_after_terminal = torch.cumprod(goal_terminals, dim=0).sum(dim=0)
+        return n_steps_after_terminal
+
     def reachability(self,
                      rnn_states: torch.Tensor,
                      z: torch.Tensor,
                      s_embedding: torch.Tensor,
+                     mask: torch.Tensor,
                      level: int):
         # Let GSA start in final state of one chunk and navigate to final state of next chunk to see how easy the chunk
         # is traversable for the GSA.
@@ -344,6 +473,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         z_t0_to_Tm1 = z[:-1]
         s_embed_t0_to_Tm1 = s_embedding[:-1]
         s_embed_t1_to_T = s_embedding[1:]
+        mask_t0_to_Tm1 = mask[:-1]
         # create aliases for time and batch dimension sizes
         T, B = s_embedding.shape[:2]
         Tm1 = T - 1
@@ -353,6 +483,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         z_t0_to_Tm1_rs = z_t0_to_Tm1.reshape(Tm1 * B, *z_t0_to_Tm1.shape[2:])
         s_embed_t0_to_Tm1_rs = s_embed_t0_to_Tm1.reshape(Tm1 * B, *s_embed_t0_to_Tm1.shape[2:])
         s_embed_t1_to_T_rs = s_embed_t1_to_T.reshape(Tm1 * B, *s_embed_t1_to_T.shape[2:])
+        mask_t0_to_Tm1_rs = mask_t0_to_Tm1.reshape(Tm1 * B, 1)
 
         # we only need the rnn_state, z and s_embed fields in RSSM state to start simulation, rest can be zeros
         start_state_t0_to_Tm1 = self.rssm_modules[level - 1].init_state(Tm1 * B, z.device)
@@ -361,6 +492,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                                  start_state_t0_to_Tm1[2],
                                  start_state_t0_to_Tm1[3],
                                  states_t0_to_Tm1_rs,
+                                 s_embed_t0_to_Tm1_rs,
                                  s_embed_t0_to_Tm1_rs)
 
         # do simulation
@@ -374,16 +506,59 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         goal_terminals = goal_terminals[1:]  # remove first time step which is start state
         # each steps after a terminal transition is masked, i.e. the mask tells us how many steps the gsa needed
         # to get to the goal
-        is_beyond_terminal = compute_mask(goal_terminals)
+        step_budget_left = compute_mask(goal_terminals, first_step_mask=mask_t0_to_Tm1_rs)
+        step_budget_left = step_budget_left.sum(dim=0)
         # the needed steps are the max steps available (i.e. the chunk length) minus the masked steps
-        steps_needed = self.strides[level] - is_beyond_terminal.sum(dim=0)
-        # normalize the penalty
-        steps_needed_penalty = steps_needed / self.strides[level]
+        steps_needed = self.strides[level] - step_budget_left
+        # filter out trajectories that were invalid from the beginning
+        steps_needed = torch.where(steps_needed == 0, self.strides[level], steps_needed)
+        # normalize the steps needed
+        steps_needed = steps_needed / self.strides[level]
+        # penalty can at most be 1 - 1/self.strides[level] if steps needed is 1
+        steps_needed_penalty = 1 - steps_needed
         # unfold batch and time dimensions, remember that we omitted first time step
         steps_needed_penalty_rs = steps_needed_penalty.reshape(Tm1, B, 1)
         # add zero penalty for first chunk to match shapes
         penalty_mock_first_step = torch.zeros_like(steps_needed_penalty_rs[0:1])
         steps_needed_penalty_rs = torch.concat([penalty_mock_first_step, steps_needed_penalty_rs])
+
+        if GlobalLogger.can_log('reachability_penalty', self._current_train_step):
+            with TempFigure(figsize=(5, 5)) as fig:
+                agent_step_obs = torch.stack(simulation['model']['o'])
+                agent_step_terms = torch.stack(simulation['agent']['terminal'])
+                s_obs = self.rssm_modules[level - 1].decode(s_embed_t0_to_Tm1_rs, sample=False,
+                                                            reconstruct_observation=True)['o']
+                g_obs = self.rssm_modules[level - 1].decode(s_embed_t1_to_T_rs, sample=False,
+                                                            reconstruct_observation=True)['o']
+                agent_step_terms = agent_step_terms.detach().cpu().numpy()
+                agent_step_obs = agent_step_obs.detach().cpu().numpy()
+                s_obs = s_obs.detach().cpu().numpy()
+                g_obs = g_obs.detach().cpu().numpy()
+                steps_needed_penalty = steps_needed_penalty.detach().cpu().numpy()
+                n_trajectories = 1
+                d_batch = s_obs.shape[0]
+                # 4th and 5th coordinates in observation are x/y coordinates of green ball
+                indices = [random.randint(0, d_batch - 1) for _ in range(n_trajectories)]
+                cmap = plt.get_cmap("tab10")
+                colors = [cmap(i) for i in range(n_trajectories)]
+                for col, idx in zip(colors, indices):
+                    if agent_step_obs.shape[-1] == 5:
+                        c_x, c_y = 0, 1
+                    else:
+                        c_x, c_y = 4, 5
+                    # plt.scatter(s_obs[idx, 0], s_obs[idx, 1], color=col, label='start states')
+                    plt.plot(agent_step_obs[:, idx, c_x], agent_step_obs[:, idx, c_y], color=col, marker='.',
+                             linewidth=0.5, markersize=2, linestyle='--')
+                    for t in range(agent_step_obs.shape[0]):
+                        term_prob = np.round(agent_step_terms[t, idx, 0], decimals=3)
+                        plt.text(agent_step_obs[t, idx, c_x], agent_step_obs[t, idx, c_y], str(term_prob))
+                    # plot goal obs, line from start to goal obs and penalty
+                    plt.scatter(g_obs[idx, c_x], g_obs[idx, c_y], color=col, label='goal states', marker='X')
+                    plt.plot([s_obs[idx, c_x], g_obs[idx, c_x]], [s_obs[idx, c_y], g_obs[idx, c_y]], color=col)
+                    plt.text(g_obs[idx, c_x], g_obs[idx, c_y], steps_needed_penalty[idx, 0], color=col)
+                # plt.show()
+                GlobalLogger.logger.log_plot(fig_to_img(fig), Scope.TRAIN() / f'model/{level}/reach_penalty',
+                                             time_step=self._current_train_step)
 
         return steps_needed_penalty_rs
 
@@ -415,16 +590,85 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                                                  r=targets[l - 1]['r'], terminal=targets[l - 1]['terminal'],
                                                  mask=targets[l - 1]['mask'], rnn_states=memory[l - 1]['rnn_state'],
                                                  z=memory[l - 1]['z'], s_embedding=memory[l - 1]['s_embedding'],
-                                                 level=l, respect_mask=True, sample_action_autoencoder=False)
+                                                 level=l, respect_mask=True, sample_action_autoencoder=True)
             memory[l], model_state[l] = self.forward_static(filtered_trajectory,
                                                             start_state=model_state[l], level=l,
-                                                            n_steps=-1, n_warmup=warmup_steps[l],
+                                                            n_steps=model_steps[l], n_warmup=warmup_steps[l],
                                                             sample_state=sample_state,
                                                             sample_output=sample_output,
                                                             reconstruct=reconstruct)
             targets[l] = filtered_trajectory
 
         return memory, targets, model_state
+
+    def harden_model(self, memory, targets, level, rollout_length):
+        assert level > 0, 'Only possible for levels above 0'
+
+        # 1) Get groundtruth data
+        # 2) Start rollouts with abstract RMA
+        # 3) Take goals, use GSA in model below to follow goals
+        # 4) Compare upfiltered trajectories of GSA to abstract RMA trajectories
+        # 5) Use the upfiltered lower level model data as training data for the abstract model
+
+        rma_state, _ = filter_mem_state_seq_to_batch(memory[level], targets[level]['mask'])
+        rma_state = rssm_detach_state(*rma_state)
+        rma, _ = self.r_max_agents[level]
+        rma_world = self.rssm_modules[level]
+        mem_rma = {}
+
+        # filter every k-th step from lower level RSSM states and mask
+        flt = PickOneUpwardsFilter(window_size=self.strides[level], offset=-1)
+        # extract rssm state related keys and filter them
+        gsa_state = {k: stack_if_list(v) for k, v in memory[level - 1].items() if k in rssm_state_keys()}
+        gsa_state = {k: flt(v) for k, v in gsa_state.items()}
+        gsa_start_mask = flt(targets[level - 1]['mask'])
+        # fold time into batch dimension for states and mask
+        gsa_state = {k: v.reshape(v.shape[0] * v.shape[1], *v.shape[2:]) for k, v in gsa_state.items()}
+        gsa_start_mask = gsa_start_mask.reshape(gsa_start_mask.shape[0] * gsa_start_mask.shape[1], 1)
+        gsa_state = rssm_detach_state(*rssm_remove_labels(gsa_state))
+        gsa, _ = self.goal_seeking_agents[level - 1]
+        gsa_world = self.rssm_modules[level - 1]
+        mem_gsa = {}
+
+        # do rollout from ground truth states, freeze agent parameters as we want to only update the model
+        with FreezeParameters([rma, gsa, gsa_world]):
+            for t in range(rollout_length):
+                # simulate one step ahead in higher level
+                _, a = rma(rma.o_from_state(rma_state), sample=True)
+                rma_state = rma_world(a=a, last_state=rma_state, use_posterior=False)
+                rma_pred = rma_world.decode(rma_state[-1], sample=False, reconstruct_observation=True)
+                append_memory(mem_rma, **rssm_add_labels(rma_state), **rma_pred, a=a)
+                # catch up on lower level, i.e. simulate the whole chunk with the upper level goal
+                gsa_sim = gsa.act_in_sim(env_start_state=gsa_state, sim_env=self, n_steps=self.strides[level],
+                                         goal=rma_pred['o'][0])
+                gsa_world_mem = {k: v[1:] for k, v in gsa_sim['model'].items()}  # remove first padding step
+                extend_memory(mem_gsa, gsa_world_mem)
+                gsa_state = gsa_sim['model_state']
+
+        # we trust lower level more than upper level, so compute mask using lower level initial mask and rollout
+        mask = compute_mask(mem_gsa['terminal'], first_step_mask=gsa_start_mask)
+        simulated_ground_truth = self.filter_up(o=mem_gsa['s_embedding'], a=mem_gsa['a'],
+                                                r=mem_gsa['r'], terminal=mem_gsa['terminal'],
+                                                mask=mask, rnn_states=mem_gsa['rnn_state'],
+                                                z=mem_gsa['z'], s_embedding=mem_gsa['s_embedding'],
+                                                level=level, respect_mask=True, sample_action_autoencoder=True)
+        # some outputs of bernoulli distribution can be close to 0 or 1 but not exactly, so we have to round again
+        simulated_ground_truth['terminal'] = torch.round(simulated_ground_truth['terminal'])
+        mask = flt(mask)
+        o_dist = self.rssm_modules[level].o_decoder.dist(torch.stack(mem_rma['o_dist']))
+        r_dist = self.rssm_modules[level].r_decoder.dist(torch.stack(mem_rma['r_dist']))
+        term_dist = self.rssm_modules[level].term_decoder.dist(torch.stack(mem_rma['terminal_dist']))
+        rec_o = self._neg_log_prob(o_dist, simulated_ground_truth['o'], 1 - mask)
+        rec_r = self._neg_log_prob(r_dist, simulated_ground_truth['r'], 1 - mask)
+        rec_term = self._neg_log_prob(term_dist, simulated_ground_truth['terminal'], 1 - mask)
+        # harden_loss = self.rssm_loss(mem_rma, simulated_ground_truth, mask, self.kl_betas[level],
+        #                             self.kl_reg_betas[level], level)
+        rec_o = 0 * rec_o
+        rec_r = 2 * rec_r
+        rec_term = 2 * rec_term
+
+        harden_loss = {'total': rec_o + rec_r + rec_term, 'rec_o': rec_o, 'rec_r': rec_r, 'rec_term': rec_term}
+        return harden_loss
 
     def pessimistic_loss(self, memory, targets, level):
         rollout_lengths = [10, 5]
@@ -441,7 +685,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 agent_o = rma.o_from_state(current_state)
                 _, a = rma(agent_o, sample=True)
                 current_state = world(a=a, last_state=current_state, use_posterior=False)
-                pred = world.decode(current_state[-1], sample=True, reconstruct_observation=True)
+                pred = world.decode(current_state[-1], sample=False, reconstruct_observation=True)
                 append_memory(mem, **rssm_add_labels(current_state), **pred, a=a)
 
             # compute eqn (4) from https://arxiv.org/abs/2204.12581
@@ -454,7 +698,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             r = torch.stack(mem['r'])
             r_dist_params = torch.stack(mem['r_dist'])
             r_dist = self.rssm_modules[level].r_decoder.dist(r_dist_params)
-            o = torch.stack(mem['s_embedding'])
+            o = torch.stack(mem['s_embedding'])  # focus on the s_embeddings the agent sees, which are sampled
             # calc state values
             v = rma.critic_net(o)
 
@@ -463,9 +707,9 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
 
             z_log_prob = z_dist.log_prob(z.detach()).unsqueeze(-1)
             r_log_prob = r_dist.log_prob(r.detach()).unsqueeze(-1)
-            #pessimistic_loss = (r.detach() + 0.99 * v) * z_log_prob * r_log_prob
+            # pessimistic_loss = (r.detach() + 0.99 * v) * z_log_prob * r_log_prob
             pessimistic_loss = (r + 0.99 * v)
-            #pessimistic_loss = (r + 0.99 * v).detach() * z_log_prob * r_log_prob
+            # pessimistic_loss = (r + 0.99 * v).detach() * z_log_prob * r_log_prob
             # pessimistic_loss = (r[:-1] + 0.99 * v[1:])
             # pessimistic_loss = calc_lambda_returns(r[1:], terminal[1:], v[:-1], v[-1], 0.99, 0.95)
             pessimistic_loss = self.pessimism_coeff * masked_mean(pessimistic_loss, mask)
@@ -585,11 +829,12 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             # markov_loss = self.markovianity_loss(targets[level], level=level, delta_max=5)#len(targets[level]['o']))
             # loss_level.update(markov_loss)
 
-            #if level == 0:
-                #markov_loss = self.markov_goal_embedding(targets[level], level=level, delta_max=5)
-                #loss_level.update(markov_loss)
+            # if level == 0:
+            # markov_loss = self.markov_goal_embedding(targets[level], level=level, delta_max=5)
+            # loss_level.update(markov_loss)
 
             if level == 0:
+                # for greater variation, we use the sample s_embeddings to train the goal autoencoder
                 s_embeddings = torch.stack(pred[level]['s_embedding'])
                 pred_o = torch.stack(pred[level]['o'])
                 o_rec_flat = torch.flatten(pred_o, start_dim=s_embeddings.ndim - 1)
@@ -599,11 +844,26 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
                 goal_loss = {f'{k}_goal_autoenc': v for k, v in goal_loss.items()}
                 loss_level.update(goal_loss)
 
+            if level > 0:
+                goals_predicted = torch.stack(pred[level]['o'])
+                goal_obs_decoded = self.rssm_modules[level - 1].decode(goals_predicted, sample=False,
+                                                                       reconstruct_observation=True)['o']
+                dist = (goal_obs_decoded[:-1] - goal_obs_decoded[1:]).abs()
+                dist = masked_mean(dist, targets[level]['mask'][:-1])
+                loss_level['monitoring_average_goal_distance'] = dist
+
+            # model hardening against exploitation
+            if level > 0:
+                # harden_loss = self.harden_model(pred, targets, level, rollout_length=1)
+                # harden_loss = {f'{k}_harden_loss': v for k, v in harden_loss.items()}
+                # loss_level.update(harden_loss)
+                pass
+
             if level < self.levels - 1:
-                # action autoencoder with static upfiltered trajectory data
                 a = targets[level]['a']
                 z = torch.stack(pred[level]['z'])
                 rnn_state = torch.stack(pred[level]['rnn_state'])
+                # we need s_embed for simulating trajectories, so use sampled version for better train stability
                 s_embed = torch.stack(pred[level]['s_embedding'])
                 mask = targets[level]['mask']
                 loss_act_autoenc = self.action_autoencoder_loss(a, z, rnn_state, s_embed, mask, level + 1)
@@ -696,16 +956,18 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
     def embed_goal(self,
                    s_embedding: torch.Tensor,
                    level: int,
-                   allow_grad_flow: bool):
+                   allow_grad_flow: bool,
+                   sample: bool):
         model = self.rssm_modules[level]
         o_rec = model.decode(s_embedding, sample=False, reconstruct_observation=True)['o']
         o_rec_flat = torch.flatten(o_rec, start_dim=s_embedding.ndim - 1)  # in case we have multi-dim observations
         # use the goal autoencoder to produce a goal embedding
+        # o_rec_flat = torch.zeros_like(o_rec_flat)  # test: disable observation and only encode RSSM state
         goal_autoenc_in = torch.concat([s_embedding, o_rec_flat], dim=-1)
         if not allow_grad_flow:
             goal_autoenc_in = goal_autoenc_in.detach()
-        #latent_goal = self.goal_embedder(goal_autoenc_in)
-        _, latent_goal = self.goal_autoencoder.encode(goal_autoenc_in, sample=False)
+        # latent_goal = self.goal_embedder(goal_autoenc_in)
+        _, latent_goal = self.goal_autoencoder.encode(goal_autoenc_in, sample=sample)
         return latent_goal
 
     def markov_goal_embedding(self,
@@ -743,9 +1005,9 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             a = batch['a']
             states = model.scan(a=a, o_enc=o_enc, start_state=None, posterior_steps=a.shape[0], sample_state=True)
             states = list_of_tuples_to_tuple_of_lists(states)
-            s_embed = torch.stack(states[-1])
+            s_embed = torch.stack(states[5])  # use sampled version of s_embedding
             # make sure we don't modify weights of the RSSM but only the goal embedder
-            latent_goal = self.embed_goal(s_embed, level, allow_grad_flow=False)
+            latent_goal = self.embed_goal(s_embed, level, allow_grad_flow=False, sample=True)
             # store only last step for similarity term of contrastive loss
             predictions_final_step.append(latent_goal[-1])
             predictions.append(latent_goal)
@@ -821,10 +1083,10 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         #                                                              n_rep, target_lvl - 1)
         if self.action_bin_size is not None:
             a = self.bin_actions(a, self.action_bin_size)
-        a_reordered, perm_invariant = self.sort_actions(a, z, rnn_state, s_embedding, mask, ws, n_perm,
-                                                        n_rep, target_lvl - 1)
-        #a_reordered = a
-        #perm_invariant = torch.tensor(0.0).to(a)
+        # a_reordered, perm_invariant = self.sort_actions(a, z, rnn_state, s_embedding, mask, ws, n_perm,
+        #                                                n_rep, target_lvl - 1)
+        a_reordered = a
+        perm_invariant = torch.tensor(0.0).to(a)
 
         losses = self.upwards_filters[target_lvl]['a'].eval_step(a_reordered, mask=mask)
         losses = {f'{k}_act_autoencoder': v for k, v in losses.items()}
@@ -1032,6 +1294,13 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         rssm_cell = self.rssm_modules[level]
         valid = 1 - mask  # use mask to multiply irrelevant steps with zero
 
+        # calculate loss weights based on return
+        # ep_return = torch.sum(targets['r'], dim=0)
+        # ep_return_affine = ep_return - ep_return.min()
+        # ep_return_norm = ep_return_affine / (ep_return_affine.max() - ep_return_affine.min())
+        # weights = (1 + ep_return_norm) / 2
+        # valid = valid * weights.unsqueeze(0)
+
         assert (valid >= 0.0).all(), 'Negative valid values detected!'
 
         o_dist = rssm_cell.o_decoder.dist(torch.stack(pred['o_dist']))
@@ -1056,7 +1325,7 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
             kl_z = self._kl_div(z_post, z_prior, valid, free_nats=1.0)
         kl_reg_z = torch.tensor(0.0).to(rec_r)  # self.kl_reg(z_post, valid)
 
-        # minimize difference of reconstructions given slightly perturbed z
+        # minimiz difference of reconstructions given slightly perturbed z
         # factor = states_stacked['z'].std(dim=[0, 1]) * 0.01
         # z_pert = states_stacked['z'] + factor.reshape(1, 1, -1) * torch.rand_like(states_stacked['z'])
         # h = states_stacked['h']
@@ -1250,3 +1519,20 @@ class HierarchicalRSSM(DynamicsModel, FuzzyDeviceMixin):
         diff = torch.abs(ys - y_hats) ** 2
         x = masked_mean(diff, 1 - valid)
         return x
+
+    def decode_to_obs(self,
+                      goals: torch.Tensor,
+                      level: int):
+        if level == 0:  # provided 'goals' are actually reconctructed ground truth observations already
+            return goals
+
+        # if level > 0, the provided goals should have the same shape as the rssm state on level below
+        assert goals.shape[-1] == self.rssm_modules[level - 1].d_s_embedding, \
+            'Mismatch of goal and below level\'s rssm state dimension'
+
+        # repeatedly decode goals from goals using the rssm one level lower until we arrive at levle 0
+        decoded = goals
+        for decoding_lvl in reversed(range(level)):
+            decoded = self.rssm_modules[decoding_lvl].decode(decoded, sample=False, reconstruct_observation=True)['o']
+
+        return decoded

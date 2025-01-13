@@ -54,7 +54,7 @@ mdm:
       # RSSM no. 2
       -  d_z: 30
          d_h: 300
-         d_a: 8
+         d_a: 4
          d_s_embedding: null
          s_embedding_lws: [ 200, 200 ]
          n_hidden_layers: 1

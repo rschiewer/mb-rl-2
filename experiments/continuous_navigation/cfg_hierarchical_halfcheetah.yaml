@@ -149,7 +149,7 @@ trainer:
    collect_interval: 50
    n_collect_trajectories: 10
    agent_train_interval: 1
-   model_train_steps: [ -1, 15 ]
+   model_train_steps: [ -1, -1 ]
    agent_model_steps: [ 15, 5 ]
    checkpoint_interval: 150
    sample_model_during_agent_training: True
